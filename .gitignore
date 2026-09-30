@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.env
+out/
+.cache/
+
+# Assistant meta files stay local
+CLAUDE.md
+AGENTS.md
+.claude/

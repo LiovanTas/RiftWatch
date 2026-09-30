@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: riftwatch
+          POSTGRES_PASSWORD: riftwatch
+          POSTGRES_DB: riftwatch_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U riftwatch"
+          --health-interval 2s
+          --health-retries 15
+    env:
+      RIFTWATCH_TEST_DATABASE_URL: postgresql://riftwatch:riftwatch@localhost:5432/riftwatch_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]"
+      - run: pytest -q

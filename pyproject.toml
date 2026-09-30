@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "riftwatch"
+version = "0.1.0"
+description = "League of Legends coaching: per-minute timeline metrics scored against rank-matched baselines, explained by an LLM that only sees computed evidence"
+requires-python = ">=3.11"
+dependencies = [
+    "psycopg[binary]>=3.2",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+riftwatch = "riftwatch.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"riftwatch.db" = ["migrations/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
