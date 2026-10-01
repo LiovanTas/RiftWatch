@@ -75,6 +75,18 @@ def test_final_frame_just_before_a_minute_mark_is_not_that_minute():
     assert len(game.participants[1].minutes) == 22  # minutes 0..21
 
 
+def test_non_ward_ward_events_are_ignored():
+    # Real case: 352 "UNDEFINED" WARD_PLACED events for one Warwick; mushrooms likewise.
+    from tests.fixtures import DEFAULT_EVENTS, ward, ward_kill
+
+    junk = [ward(100_000 + i * 1000, 5, "UNDEFINED") for i in range(50)]
+    junk += [ward(200_000, 5, "TEEMO_MUSHROOM"), ward_kill(210_000, 10, "UNDEFINED")]
+    match, timeline = build_game("NA1_10", events=DEFAULT_EVENTS + junk)
+    game = extract(match, timeline)
+    assert game.participants[5].at(26).wards_placed == 2
+    assert game.participants[10].at(26).wards_killed == 1
+
+
 def test_missing_frame_is_filled_from_previous_minute():
     tl = copy.deepcopy(TIMELINE)
     del tl["info"]["frames"][5]

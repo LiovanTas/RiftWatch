@@ -20,10 +20,15 @@ from riftwatch.features.map import readable, zone
 from riftwatch.riot.ddragon import patch_of
 
 # Bump when extraction logic changes; stored rows with an older version get re-extracted.
-EXTRACTOR_VERSION = 2
+EXTRACTOR_VERSION = 3
 
 ROLES = ("TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY")
 EPIC_MONSTERS = ("DRAGON", "BARON_NASHOR", "RIFTHERALD", "HORDE", "ATAKHAN", "ELDER_DRAGON")
+# WARD_PLACED / WARD_KILL also fire for things that aren't wards: Teemo mushrooms, and an
+# "UNDEFINED" type that some champions' abilities emit by the hundred (352 in one Warwick
+# game). Counting only these agrees with the match summary's wardsPlaced for 598 of 600
+# players checked.
+REAL_WARDS = frozenset({"YELLOW_TRINKET", "SIGHT_WARD", "CONTROL_WARD", "BLUE_TRINKET"})
 EARLY_GAME_END_MIN = 14     # when turret plates fall; "early" deaths are before this
 AHEAD_GOLD = 500            # gold lead over the lane opponent that counts as "ahead"
 # Minute frames land on or just after each minute mark, never before it. The tolerance is
@@ -202,9 +207,9 @@ def extract(match: dict[str, Any], timeline: dict[str, Any]) -> GameFeatures:
             stamps[e.get("victimId"), "deaths"].append(ts)
             for a in e.get("assistingParticipantIds") or []:
                 stamps[a, "assists"].append(ts)
-        elif etype == "WARD_PLACED":
+        elif etype == "WARD_PLACED" and e.get("wardType") in REAL_WARDS:
             stamps[e.get("creatorId"), "wards_placed"].append(ts)
-        elif etype == "WARD_KILL":
+        elif etype == "WARD_KILL" and e.get("wardType") in REAL_WARDS:
             stamps[e.get("killerId"), "wards_killed"].append(ts)
     frame_times = [f["timestamp"] for f in minute_frames]
     for (pid, attr), times in stamps.items():
