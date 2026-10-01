@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -17,6 +18,7 @@ import psycopg
 
 from riftwatch.db import repo
 from riftwatch.riot.api import RANKED_SOLO, RiotApi
+from riftwatch.riot.client import RiotApiError
 from riftwatch.riot.routing import RiotId, platform_for
 
 log = logging.getLogger(__name__)
@@ -36,6 +38,14 @@ class SyncResult:
     rank: dict[str, Any] | None
     new_matches: list[str] = field(default_factory=list)
     already_cached: int = 0
+    failed: list[tuple[str, str]] = field(default_factory=list)
+
+
+@dataclass
+class FetchResult:
+    downloaded: list[str] = field(default_factory=list)
+    cached: list[str] = field(default_factory=list)
+    failed: list[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -48,10 +58,62 @@ class BackfillResult:
 
 
 class Ingestor:
-    def __init__(self, conn: psycopg.Connection, api: RiotApi, page_size: int = 100) -> None:
+    def __init__(
+        self, conn: psycopg.Connection, api: RiotApi, page_size: int = 100, workers: int = 8,
+    ) -> None:
         self.conn = conn
         self.api = api
         self.page_size = page_size  # match ids per request; 100 is Riot's maximum
+        # Download threads. They only wait on the network (the shared rate limiter decides
+        # when each may send); every database write stays on the calling thread.
+        self.workers = workers
+
+    # -- many matches at once ------------------------------------------------------------
+
+    def _download(self, match_id: str, need_match: bool, need_timeline: bool):
+        match = self.api.match(match_id) if need_match else None
+        timeline = self.api.timeline(match_id) if need_timeline else None
+        return match, timeline
+
+    def fetch_many(
+        self, match_ids: list[str], with_timeline: bool = True, progress: Progress | None = None,
+    ) -> FetchResult:
+        """Make sure every match (and timeline) is cached, downloading the missing ones in
+        parallel. One failed match is recorded, not raised, so a long run keeps going."""
+        ids = list(dict.fromkeys(match_ids))
+        have_match = repo.known_match_ids(self.conn, ids)
+        have_tl = repo.known_timeline_ids(self.conn, ids) if with_timeline else set(ids)
+        todo = [m for m in ids if m not in have_match or m not in have_tl]
+        result = FetchResult(cached=[m for m in ids if m in have_match and m in have_tl])
+        repo.bump_cache_many(self.conn, "match", len(have_match), len(ids) - len(have_match))
+        if with_timeline:
+            repo.bump_cache_many(self.conn, "timeline", len(have_tl), len(ids) - len(have_tl))
+        if not todo:
+            return result
+
+        with ThreadPoolExecutor(max_workers=self.workers) as pool:
+            futures = {
+                pool.submit(self._download, m, m not in have_match, m not in have_tl): m
+                for m in todo
+            }
+            for done, future in enumerate(as_completed(futures), 1):
+                match_id = futures[future]
+                try:
+                    match, timeline = future.result()
+                except RiotApiError as exc:
+                    result.failed.append((match_id, str(exc)))
+                    continue
+                if match is not None:
+                    repo.insert_match(self.conn, match)
+                if match is None and match_id not in have_match:
+                    result.failed.append((match_id, "match not found"))
+                    continue
+                if timeline is not None:
+                    repo.insert_timeline(self.conn, match_id, timeline)
+                result.downloaded.append(match_id)
+                if progress and (done % 10 == 0 or done == len(todo)):
+                    progress(f"downloaded {done}/{len(todo)}")
+        return result
 
     # -- cache-first single objects -----------------------------------------------------
 
@@ -129,18 +191,19 @@ class Ingestor:
         result = SyncResult(puuid, f"{account['gameName']}#{account['tagLine']}", platform, rank)
 
         ids = self.api.match_ids(platform, puuid, count=min(count, 100), queue=queue)
-        for i, match_id in enumerate(ids, 1):
-            have_all = repo.get_match(self.conn, match_id) is not None and (
-                not with_timeline or repo.get_timeline(self.conn, match_id) is not None
-            )
-            if have_all:
-                result.already_cached = len(ids) - i + 1
-                break
-            if progress:
-                progress(f"[{i}/{len(ids)}] {match_id}")
-            self.ensure(match_id, with_timeline)
-            result.new_matches.append(match_id)
-            if bucket:
+        # Newest first: everything from the first fully cached game on was cached by an
+        # earlier sync.
+        have = repo.known_match_ids(self.conn, ids)
+        if with_timeline:
+            have &= repo.known_timeline_ids(self.conn, ids)
+        first_cached = next((n for n, m in enumerate(ids) if m in have), len(ids))
+        fetched = self.fetch_many(ids[:first_cached], with_timeline, progress)
+        downloaded = set(fetched.downloaded)
+        result.new_matches = [m for m in ids[:first_cached] if m in downloaded]
+        result.already_cached = len(ids) - first_cached
+        result.failed = fetched.failed
+        if bucket:
+            for match_id in result.new_matches:
                 repo.mark_sample(self.conn, match_id, bucket, "player")
         return result
 
@@ -202,13 +265,10 @@ class Ingestor:
                 platform, puuid, start=offset, count=self.page_size, queue=queue,
                 start_time=int(start_time.timestamp()) if start_time else None,
             )
-            fetched = cached = 0
-            for match_id in ids:
-                if self.ensure(match_id, with_timeline):
-                    fetched += 1
-                else:
-                    cached += 1
-                if bucket:
+            page = self.fetch_many(ids, with_timeline)
+            fetched, cached = len(page.downloaded), len(page.cached)
+            if bucket:
+                for match_id in page.downloaded + page.cached:
                     repo.mark_sample(self.conn, match_id, bucket, "player")
             offset += len(ids)
             pages += 1

@@ -22,6 +22,7 @@ The API key is sent as the ``X-Riot-Token`` header and appears in no message or 
 from __future__ import annotations
 
 import random
+import threading
 from collections import Counter
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -75,6 +76,7 @@ class RiotClient:
         )
         # requests, retries, 429:application / 429:method / 429:service, 5xx, network_errors
         self.stats: Counter[str] = Counter()
+        self._stats_lock = threading.Lock()  # get() runs on several threads at once
 
     def __repr__(self) -> str:
         return f"RiotClient(requests={self.stats['requests']})"
@@ -87,6 +89,10 @@ class RiotClient:
 
     def close(self) -> None:
         self._http.close()
+
+    def _count(self, key: str) -> None:
+        with self._stats_lock:
+            self.stats[key] += 1
 
     def _backoff(self, attempt: int) -> float:
         """Full jitter: uniform in [0, min(cap, base * 2**attempt)]."""
@@ -111,13 +117,13 @@ class RiotClient:
 
         for attempt in range(self._max_retries + 1):
             if attempt:
-                self.stats["retries"] += 1
+                self._count("retries")
             self._limiter.acquire(routing, method)
-            self.stats["requests"] += 1
+            self._count("requests")
             try:
                 response = self._http.get(url, params=params)
             except httpx.TransportError as exc:
-                self.stats["network_errors"] += 1
+                self._count("network_errors")
                 last_error = f"{where}: {type(exc).__name__}"
                 self._limiter.block(routing, self._backoff(attempt), method=method)
                 continue
@@ -131,7 +137,7 @@ class RiotClient:
                 return None
             if status == 429:
                 kind = response.headers.get("x-rate-limit-type", "service").lower()
-                self.stats[f"429:{kind}"] += 1
+                self._count(f"429:{kind}")
                 wait = _retry_after(response.headers)
                 if wait is None:
                     wait = self._backoff(attempt)
@@ -142,7 +148,7 @@ class RiotClient:
                 last_error = f"{where}: 429 ({kind})"
                 continue
             if status in RETRYABLE_STATUS:
-                self.stats["5xx"] += 1
+                self._count("5xx")
                 self._limiter.block(routing, self._backoff(attempt), method=method)
                 last_error = f"{where}: {status}"
                 continue

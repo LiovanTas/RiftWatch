@@ -91,6 +91,13 @@ def known_match_ids(conn: psycopg.Connection, ids: list[str]) -> set[str]:
     return {r[0] for r in rows}
 
 
+def known_timeline_ids(conn: psycopg.Connection, ids: list[str]) -> set[str]:
+    if not ids:
+        return set()
+    rows = conn.execute("SELECT match_id FROM match_timelines WHERE match_id = ANY(%s)", (ids,))
+    return {r[0] for r in rows}
+
+
 def get_match(conn: psycopg.Connection, match_id: str) -> dict[str, Any] | None:
     row = conn.execute("SELECT raw FROM matches WHERE match_id = %s", (match_id,)).fetchone()
     return row[0] if row else None
@@ -205,6 +212,12 @@ def player_match_ids(
 # -- cache counters -----------------------------------------------------------------------
 
 def bump_cache(conn: psycopg.Connection, kind: str, hit: bool) -> None:
+    bump_cache_many(conn, kind, int(hit), int(not hit))
+
+
+def bump_cache_many(conn: psycopg.Connection, kind: str, hits: int, misses: int) -> None:
+    if not hits and not misses:
+        return
     conn.execute(
         """
         INSERT INTO cache_counters (kind, hits, misses) VALUES (%s, %s, %s)
@@ -212,7 +225,7 @@ def bump_cache(conn: psycopg.Connection, kind: str, hit: bool) -> None:
            SET hits = cache_counters.hits + EXCLUDED.hits,
                misses = cache_counters.misses + EXCLUDED.misses
         """,
-        (kind, int(hit), int(not hit)),
+        (kind, hits, misses),
     )
 
 

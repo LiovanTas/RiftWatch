@@ -160,3 +160,26 @@ def test_player_match_ids_newest_first(conn):
 def test_tier_bucket():
     assert repo.tier_bucket("grandmaster") == "MASTER_PLUS"
     assert repo.tier_bucket("GOLD") == "GOLD"
+
+
+def test_fetch_many_parallel_records_failures(conn):
+    from riftwatch.riot.client import RiotApiError
+
+    api = FakeApi(6)
+    bad = api.ids[2]
+    real_match = api.match
+
+    def flaky(match_id):
+        if match_id == bad:
+            raise RiotApiError("gave up after 5 attempts; last: 503")
+        return real_match(match_id)
+
+    api.match = flaky
+    ing = Ingestor(conn, api, workers=4)
+    result = ing.fetch_many(api.ids)
+    assert sorted(result.downloaded) == sorted(m for m in api.ids if m != bad)
+    assert result.failed == [(bad, "gave up after 5 attempts; last: 503")]
+    assert repo.known_timeline_ids(conn, api.ids) == set(api.ids) - {bad}
+
+    again = ing.fetch_many(api.ids)
+    assert again.downloaded == [] and len(again.cached) == 5 and len(again.failed) == 1

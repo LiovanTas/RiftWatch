@@ -21,7 +21,7 @@ jobs:
           --health-interval 2s
           --health-retries 15
     env:
-      RIFTWATCH_TEST_DATABASE_URL: postgresql://riftwatch:riftwatch@localhost:5432/riftwatch_test
+      RIFTWATCH_TEST_DATABASE_URL: postgresql://riftwatch:riftwatch@127.0.0.1:5432/riftwatch_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

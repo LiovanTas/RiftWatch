@@ -1,6 +1,6 @@
 """Migration tests. The database ones need a disposable Postgres:
 
-    RIFTWATCH_TEST_DATABASE_URL=postgresql://riftwatch:riftwatch@localhost:5432/riftwatch_test
+    RIFTWATCH_TEST_DATABASE_URL=postgresql://riftwatch:riftwatch@127.0.0.1:5432/riftwatch_test
 
 CI provides one; locally they are skipped unless the variable is set.
 WARNING: the test database is wiped.
