@@ -45,7 +45,7 @@ Win32 watchdog (separate process): hang detection on the game window + global ho
 - [x] CI (pytest + a real Postgres service), commit-identity hook
 
 ### M1 — Riot API layer
-- [ ] **Day 2 — token-bucket rate limiter.** Parse `X-App-Rate-Limit` / `X-Method-Rate-Limit`
+- [x] **Day 2 — token-bucket rate limiter.** Parse `X-App-Rate-Limit` / `X-Method-Rate-Limit`
       (`"20:1,100:120"` = several windows at once), one limiter per routing value (each region
       has its own quota), per-method buckets. Update limits from response headers instead of
       hardcoding dev-key numbers. Fake-clock unit tests.
