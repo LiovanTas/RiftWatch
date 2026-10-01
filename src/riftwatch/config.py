@@ -12,6 +12,7 @@ DEFAULT_DATABASE_URL = "postgresql://riftwatch:riftwatch@127.0.0.1:5432/riftwatc
 DEFAULT_COACH_MODEL = "claude-sonnet-5-5"
 DEFAULT_COACH_EFFORT = "low"
 DEFAULT_COACH_THINKING = "adaptive"
+DEFAULT_KILL_HOTKEY = "ctrl+alt+k"
 
 
 class ConfigError(RuntimeError):
@@ -27,6 +28,7 @@ class Settings:
     coach_model: str
     coach_effort: str = DEFAULT_COACH_EFFORT
     coach_thinking: str = DEFAULT_COACH_THINKING
+    kill_hotkey: str = DEFAULT_KILL_HOTKEY
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -39,6 +41,7 @@ class Settings:
             coach_model=env.get("RIFTWATCH_COACH_MODEL") or DEFAULT_COACH_MODEL,
             coach_effort=env.get("RIFTWATCH_COACH_EFFORT") or DEFAULT_COACH_EFFORT,
             coach_thinking=env.get("RIFTWATCH_COACH_THINKING") or DEFAULT_COACH_THINKING,
+            kill_hotkey=env.get("RIFTWATCH_KILL_HOTKEY") or DEFAULT_KILL_HOTKEY,
         )
 
     def require_riot_key(self) -> str:

@@ -253,6 +253,35 @@ def cmd_coach(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_watchdog(settings: Settings, args: argparse.Namespace) -> int:
+    from riftwatch.watchdog import win32
+    from riftwatch.watchdog.core import parse_hotkey
+
+    if not win32.IS_WINDOWS:
+        print("error: the watchdog only runs on Windows", file=sys.stderr)
+        return 2
+    if args.status:
+        from riftwatch.watchdog.run import observe
+
+        obs, windows = observe(0.0)
+        if not obs.running:
+            print("League game is not running")
+        else:
+            print(f"League game running (pid {sorted({w.pid for w in windows})}): "
+                  f"foreground={obs.foreground} fullscreen={obs.fullscreen} "
+                  f"responding={obs.responding}")
+        return 0
+    from pathlib import Path
+
+    from riftwatch.watchdog.run import run
+
+    spec = parse_hotkey(args.hotkey or settings.kill_hotkey)
+    log_file = Path(args.log) if args.log else None
+    run(spec, auto_kill_after=args.auto_kill_after, hang_threshold=args.hang_seconds,
+        log_file=log_file)
+    return 0
+
+
 def _add_region(p: argparse.ArgumentParser) -> None:
     p.add_argument("--region", "-r", help="na, euw, eune, kr, ... (default: RIFTWATCH_DEFAULT_REGION)")
 
@@ -318,6 +347,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--html", metavar="FILE", help="also write a self-contained HTML report")
     p.set_defaults(func=cmd_coach)
 
+    p = sub.add_parser("watchdog", help="kill switch for League's black-screen hang (Windows)")
+    p.add_argument("--hotkey", help="e.g. ctrl+alt+k (default: RIFTWATCH_KILL_HOTKEY or ctrl+alt+k)")
+    p.add_argument("--hang-seconds", type=float, default=5.0,
+                   help="unresponsive this long while fullscreen = hang (default 5)")
+    p.add_argument("--auto-kill-after", type=float, metavar="SECONDS",
+                   help="kill a confirmed hang automatically after this long (off by default)")
+    p.add_argument("--log", help="append triggers to this file")
+    p.add_argument("--status", action="store_true", help="show what the watchdog sees, then exit")
+    p.set_defaults(func=cmd_watchdog)
+
     p = sub.add_parser("features", help="extract per-minute features from cached timelines")
     p.add_argument("--limit", type=int, help="at most N matches this run")
     p.add_argument("--rebuild", action="store_true", help="re-extract every match")
@@ -338,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(Settings.from_env(), args)
-    except (ConfigError, NotFound, RiotApiError, ReportError, CoachError, ValueError) as exc:
+    except (ConfigError, NotFound, RiotApiError, ReportError, CoachError, ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
