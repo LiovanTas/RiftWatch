@@ -1,0 +1,162 @@
+"""Cache and ingest tests against a real Postgres (see test_migrate.py for the env var)."""
+
+import os
+from datetime import UTC, datetime
+
+import pytest
+
+from riftwatch.db import migrate, repo
+from riftwatch.ingest import Ingestor, NotFound
+from riftwatch.riot.routing import RiotId
+from tests.fixtures import build_game
+
+TEST_DB = os.environ.get("RIFTWATCH_TEST_DATABASE_URL")
+
+
+@pytest.fixture
+def conn():
+    if not TEST_DB:
+        pytest.skip("RIFTWATCH_TEST_DATABASE_URL not set")
+    from riftwatch.db.connection import connect
+
+    with connect(TEST_DB) as c:
+        c.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
+        migrate.migrate(c)
+        yield c
+
+
+class FakeApi:
+    """Stands in for RiotApi: serves fixture games and counts every call."""
+
+    def __init__(self, n_games: int = 5, puuid: str = "me") -> None:
+        self.puuid = puuid
+        self.games = {}
+        for i in range(n_games):
+            mid = f"NA1_{5000000000 + i}"
+            puuids = [puuid] + [f"other-{i}-{p}" for p in range(2, 11)]
+            self.games[mid] = build_game(mid, puuids=puuids, start_ms=1_790_000_000_000 + i * 3_600_000)
+        # newest first, like Riot
+        self.ids = sorted(self.games, reverse=True)
+        self.calls = []
+        self.tier = "EMERALD"
+
+    def account_by_riot_id(self, platform, riot_id):
+        self.calls.append("account")
+        if riot_id.game_name == "Nobody":
+            return None
+        return {"puuid": self.puuid, "gameName": riot_id.game_name, "tagLine": riot_id.tag_line}
+
+    def league_entries_by_puuid(self, platform, puuid):
+        self.calls.append("league")
+        return [{"queueType": "RANKED_SOLO_5x5", "tier": self.tier, "rank": "II",
+                 "leaguePoints": 40, "wins": 50, "losses": 45}]
+
+    def match_ids(self, platform, puuid, *, start=0, count=20, queue=None, start_time=None,
+                  end_time=None):
+        self.calls.append("ids")
+        return self.ids[start:start + count]
+
+    def match(self, match_id):
+        self.calls.append("match")
+        return self.games[match_id][0]
+
+    def timeline(self, match_id):
+        self.calls.append("timeline")
+        return self.games[match_id][1]
+
+
+def test_insert_match_extracts_participants(conn):
+    match, _ = build_game("NA1_42")
+    repo.insert_match(conn, match)
+    repo.insert_match(conn, match)  # idempotent
+    row = conn.execute(
+        "SELECT platform, queue_id, patch, duration_s FROM matches WHERE match_id = 'NA1_42'"
+    ).fetchone()
+    assert row == ("na1", 420, "16.19", 26 * 60 + 34)
+    parts = conn.execute(
+        "SELECT participant_id, team_position, champion_id, win FROM match_participants "
+        "WHERE match_id = 'NA1_42' ORDER BY participant_id"
+    ).fetchall()
+    assert len(parts) == 10
+    assert parts[0] == (1, "TOP", 266, True)
+    assert parts[9] == (10, "UTILITY", 117, False)
+
+
+def test_cache_first_never_refetches(conn):
+    api = FakeApi(1)
+    ing = Ingestor(conn, api)
+    mid = api.ids[0]
+    ing.match(mid)
+    ing.timeline(mid)
+    ing.match(mid)
+    ing.timeline(mid)
+    assert api.calls.count("match") == 1 and api.calls.count("timeline") == 1
+    stats = repo.cache_stats(conn)["counters"]
+    assert stats["match"] == {"hits": 1, "misses": 1}
+    assert stats["timeline"] == {"hits": 1, "misses": 1}
+
+
+def test_timeline_fetches_its_match_first(conn):
+    api = FakeApi(1)
+    Ingestor(conn, api).timeline(api.ids[0])
+    assert api.calls == ["match", "timeline"]
+    assert repo.get_match(conn, api.ids[0]) is not None
+
+
+def test_sync_then_resync_stops_at_first_cached(conn):
+    api = FakeApi(5)
+    ing = Ingestor(conn, api)
+    first = ing.sync(RiotId("Me", "NA1"), "na", count=3)
+    assert first.new_matches == api.ids[:3]
+    assert first.rank["tier"] == "EMERALD"
+    assert repo.find_account(conn, "me", "na1")["puuid"] == "me"
+
+    api.calls.clear()
+    second = ing.sync(RiotId("Me", "NA1"), "na", count=5)
+    assert second.new_matches == []
+    assert second.already_cached == 5
+    assert "match" not in api.calls
+
+    buckets = {r[0] for r in conn.execute("SELECT tier_bucket FROM match_samples")}
+    assert buckets == {"EMERALD"}
+    assert repo.latest_rank(conn, "me")["division"] == "II"
+
+
+def test_sync_unknown_player(conn):
+    with pytest.raises(NotFound):
+        Ingestor(conn, FakeApi(1)).sync(RiotId("Nobody", "NA1"), "na")
+
+
+def test_backfill_pages_and_resumes(conn):
+    api = FakeApi(5)
+    ing = Ingestor(conn, api, page_size=2)  # 5 games -> pages of 2, 2, 1
+
+    partial = ing.backfill(RiotId("Me", "NA1"), "na", max_pages=1)
+    assert not partial.finished and partial.ids_seen == 2
+
+    # "Crash" and rerun: resumes from offset 2 in the same job.
+    done = ing.backfill(RiotId("Me", "NA1"), "na")
+    assert done.job_id == partial.job_id
+    assert done.finished
+    assert done.ids_seen == 5 and done.fetched == 5 and done.cached == 0
+    assert api.calls.count("match") == 5
+
+
+def test_backfill_counts_cached_games(conn):
+    api = FakeApi(3)
+    ing = Ingestor(conn, api)
+    ing.sync(RiotId("Me", "NA1"), "na", count=2)
+    result = ing.backfill(RiotId("Me", "NA1"), "na",
+                          start_time=datetime(2026, 1, 1, tzinfo=UTC))
+    assert (result.fetched, result.cached) == (1, 2)
+
+
+def test_player_match_ids_newest_first(conn):
+    api = FakeApi(4)
+    Ingestor(conn, api).sync(RiotId("Me", "NA1"), "na", count=4)
+    assert repo.player_match_ids(conn, "me", limit=2) == api.ids[:2]
+
+
+def test_tier_bucket():
+    assert repo.tier_bucket("grandmaster") == "MASTER_PLUS"
+    assert repo.tier_bucket("GOLD") == "GOLD"
