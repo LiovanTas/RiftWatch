@@ -13,6 +13,7 @@ rerunning it samples new players and skips cached games.
 from __future__ import annotations
 
 import random
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
@@ -24,6 +25,10 @@ from riftwatch.riot.api import APEX_TIERS, DIVISIONS, RANKED_SOLO_QUEUE_ID, TIER
 from riftwatch.riot.routing import platform_for
 
 Progress = Callable[[str], None]
+
+# Only games this recent are sampled. Many ladder players play rarely, and their "last 5
+# games" can reach back months -- patches whose numbers no longer describe the game.
+DEFAULT_MAX_AGE_DAYS = 14
 
 DEFAULT_TIERS = ("IRON", "BRONZE", "SILVER", "GOLD", "PLATINUM", "EMERALD", "DIAMOND", "MASTER")
 
@@ -57,10 +62,13 @@ def crawl(
     players_per_division: int = 2,
     matches_per_player: int = 5,
     with_timeline: bool = True,
+    max_age_days: float = DEFAULT_MAX_AGE_DAYS,
     rng: random.Random | None = None,
     progress: Progress | None = None,
+    now: float | None = None,
 ) -> CrawlReport:
     platform = platform_for(platform)
+    since = int((now or time.time()) - max_age_days * 86_400)
     rng = rng or random.Random()
     api = ingestor.api
     report = CrawlReport()
@@ -76,19 +84,23 @@ def crawl(
             seen = _already_crawled(conn, (e["puuid"] for e in entries))
             fresh = [e for e in entries if e["puuid"] not in seen]
             picks = rng.sample(fresh, min(players_per_division, len(fresh)))
-            for entry in picks:
-                puuid = entry["puuid"]
-                ids = api.match_ids(platform, puuid, count=matches_per_player,
-                                    queue=RANKED_SOLO_QUEUE_ID)
+            per_player = {
+                e["puuid"]: api.match_ids(platform, e["puuid"], count=matches_per_player,
+                                          queue=RANKED_SOLO_QUEUE_ID, start_time=since)
+                for e in picks
+            }
+            # One parallel download for the whole division.
+            fetched = ingestor.fetch_many([m for ids in per_player.values() for m in ids],
+                                          with_timeline)
+            report.matches_new += len(fetched.downloaded)
+            report.matches_cached += len(fetched.cached)
+            ok = set(fetched.downloaded) | set(fetched.cached)
+            for puuid, ids in per_player.items():
                 found = 0
                 for match_id in ids:
-                    downloaded = ingestor.ensure(match_id, with_timeline)
-                    if downloaded:
-                        report.matches_new += 1
-                    else:
-                        report.matches_cached += 1
-                    repo.mark_sample(conn, match_id, bucket, "crawl")
-                    found += 1
+                    if match_id in ok:
+                        repo.mark_sample(conn, match_id, bucket, "crawl")
+                        found += 1
                 conn.execute(
                     """
                     INSERT INTO crawl_players (puuid, platform, tier, division, tier_bucket, matches_found)
@@ -98,19 +110,22 @@ def crawl(
                 )
                 report.players += 1
                 report.by_bucket[bucket] = report.by_bucket.get(bucket, 0) + found
-                if progress:
-                    progress(f"{tier} {division}: player {report.players}, +{found} games "
-                             f"({report.matches_new} downloaded so far)")
+            if progress:
+                progress(f"{tier} {division}: {len(per_player)} players, "
+                         f"{len(fetched.downloaded)} games downloaded "
+                         f"({report.matches_new} so far)")
     return report
 
 
-def sample_counts(conn: psycopg.Connection) -> dict[str, int]:
-    """Matches available per tier bucket (with timelines, i.e. usable for baselines)."""
+def sample_counts(conn: psycopg.Connection, source: str = "crawl") -> dict[str, int]:
+    """Crawled matches per tier bucket that have timelines (i.e. can feed baselines)."""
     rows = conn.execute(
         """
         SELECT s.tier_bucket, count(*) FROM match_samples s
           JOIN match_timelines t USING (match_id)
+         WHERE s.source = %s
          GROUP BY s.tier_bucket
-        """
+        """,
+        (source,),
     )
     return dict(rows.fetchall())

@@ -125,6 +125,12 @@ def test_build_respects_min_n_and_excludes_player_games(conn):
                   metric="cs_at_10", minute=None)[0] == 25
 
 
+def test_patch_window_ignores_player_only_patches(conn):
+    load_games(conn, 21, version="16.18.1.1")
+    load_games(conn, 5, start=21, source="player", version="16.19.1.1")
+    assert bl.build(conn).patches == ["16.18"]
+
+
 def test_patch_window_takes_newest_patches(conn):
     load_games(conn, 21, version="16.17.1.1")
     load_games(conn, 21, start=21, version="16.19.1.1")
@@ -171,6 +177,7 @@ def test_score_and_trend_end_to_end(conn):
 class CrawlApi:
     def __init__(self):
         self.ladder_calls = []
+        self.start_times = []
         self.games = {}
 
     def league_entries(self, platform, tier, division, queue="RANKED_SOLO_5x5", page=1):
@@ -178,7 +185,8 @@ class CrawlApi:
         return [{"puuid": f"{tier}-{division}-{i}", "tier": tier, "rank": division}
                 for i in range(5)]
 
-    def match_ids(self, platform, puuid, *, count=20, queue=None, **_):
+    def match_ids(self, platform, puuid, *, count=20, queue=None, start_time=None, **_):
+        self.start_times.append(start_time)
         ids = [f"NA1_{abs(hash((puuid, k))) % 10**9}" for k in range(count)]
         for mid in ids:
             self.games.setdefault(mid, build_game(mid))
@@ -197,9 +205,10 @@ def test_crawl_samples_each_division_and_tags_buckets(conn):
     api = CrawlApi()
     ing = Ingestor(conn, api)
     report = crawl(conn, ing, "na", tiers=["GOLD", "GRANDMASTER"], players_per_division=2,
-                   matches_per_player=3, rng=random.Random(1))
+                   matches_per_player=3, rng=random.Random(1), now=1_800_000_000)
     assert api.ladder_calls == [("GOLD", d) for d in ("I", "II", "III", "IV")] + [("GRANDMASTER", "I")]
     assert report.players == 10
+    assert set(api.start_times) == {1_800_000_000 - 14 * 86_400}   # recent games only
     assert set(sample_counts(conn)) == {"GOLD", "MASTER_PLUS"}
 
     # A rerun picks players not sampled before.

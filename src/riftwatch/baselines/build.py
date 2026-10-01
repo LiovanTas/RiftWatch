@@ -10,6 +10,7 @@ would otherwise be part of the yardstick they are measured against.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 import psycopg
@@ -77,9 +78,14 @@ def _patch_key(patch: str) -> tuple[int, int]:
     return int(major), int(minor)
 
 
-def recent_patches(conn: psycopg.Connection, count: int) -> list[str]:
+def recent_patches(conn: psycopg.Connection, count: int, include_player: bool = False) -> list[str]:
+    """Newest patches among the games that can feed baselines."""
     rows = conn.execute(
-        "SELECT DISTINCT m.patch FROM matches m JOIN match_samples USING (match_id)"
+        """
+        SELECT DISTINCT m.patch FROM matches m JOIN match_samples ms USING (match_id)
+         WHERE %s OR ms.source = 'crawl'
+        """,
+        (include_player,),
     ).fetchall()
     patches = sorted((r[0] for r in rows), key=_patch_key, reverse=True)
     return patches[:count]
@@ -93,7 +99,7 @@ def build(
     include_player_games: bool = False,
 ) -> BuildReport:
     """Rebuild every baseline from scratch, atomically."""
-    patches = recent_patches(conn, patch_count)
+    patches = recent_patches(conn, patch_count, include_player_games)
     if not patches:
         return BuildReport([], "", 0, 0)
     ordered = sorted(patches, key=_patch_key)
@@ -121,6 +127,11 @@ def build(
             """,
             params,
         ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO baseline_builds (patch_window, games, rows) VALUES (%s, %s, %s)",
+            (window, games, rows),
+        )
+    invalidate_cache()  # this process rebuilt: don't wait for the staleness check
     return BuildReport(patches, window, rows, games)
 
 
@@ -204,3 +215,49 @@ class BaselineSet:
             if b is not None and b.n >= self.min_n:
                 return b
         return None
+
+
+# -- in-process cache ------------------------------------------------------------------------
+# Baselines only change when `build` runs, which records a new baseline_builds row. Readers
+# keep loaded sets in memory and re-check that one primary-key value per call, so a web
+# request scoring a game costs one tiny query instead of a scan of the baselines table.
+
+_cache: dict[tuple, BaselineSet] = {}
+_cache_generation: tuple | None = None
+_checked_at = float("-inf")
+# A rebuild is picked up within this many seconds; in between, cache hits cost no query.
+STALENESS_CHECK_S = 5.0
+
+
+def current_generation(conn: psycopg.Connection) -> tuple:
+    """(id, built_at) of the latest build. The timestamp guards against a recreated
+    database reusing build id 1."""
+    row = conn.execute(
+        "SELECT id, built_at FROM baseline_builds ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    return tuple(row) if row else (0, None)
+
+
+def baselines_for(
+    conn: psycopg.Connection, tier_bucket: str, role: str, champion_id: int,
+    min_n: int = 20, max_tier_distance: int = 1,
+) -> BaselineSet:
+    global _cache_generation, _checked_at
+    now = time.monotonic()
+    if now - _checked_at >= STALENESS_CHECK_S:
+        generation = current_generation(conn)
+        _checked_at = now
+        if generation != _cache_generation:
+            _cache.clear()
+            _cache_generation = generation
+    key = (tier_bucket, role, champion_id, min_n, max_tier_distance)
+    if key not in _cache:
+        _cache[key] = BaselineSet(conn, tier_bucket, role, champion_id, min_n, max_tier_distance)
+    return _cache[key]
+
+
+def invalidate_cache() -> None:
+    global _cache_generation, _checked_at
+    _cache.clear()
+    _cache_generation = None
+    _checked_at = float("-inf")

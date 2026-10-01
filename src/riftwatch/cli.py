@@ -11,12 +11,15 @@ from dotenv import load_dotenv
 from riftwatch import __version__
 from riftwatch.baselines import build as baseline_build
 from riftwatch.baselines import crawl as baseline_crawl
+from riftwatch.coach.llm import Coach, CoachError
+from riftwatch.coach.pipeline import ReportError, game_report, recent_report
 from riftwatch.config import ConfigError, Settings
 from riftwatch.db import migrate as migrations
 from riftwatch.db import repo
 from riftwatch.db.connection import connect
 from riftwatch.features import store as feature_store
 from riftwatch.ingest import Ingestor, NotFound
+from riftwatch.report.terminal import render
 from riftwatch.riot.api import RiotApi
 from riftwatch.riot.client import RiotApiError, RiotClient
 from riftwatch.riot.routing import account_region, match_region, parse_riot_id
@@ -173,14 +176,15 @@ def cmd_crawl(settings: Settings, args: argparse.Namespace) -> int:
     with connect(settings.database_url) as conn:
         report = baseline_crawl.crawl(
             conn, Ingestor(conn, api), _platform(settings, args), tiers=tiers,
-            players_per_division=args.players, matches_per_player=args.matches, progress=print,
+            players_per_division=args.players, matches_per_player=args.matches,
+            max_age_days=args.days, progress=print,
         )
         feature_store.extract_pending(conn)
         counts = baseline_crawl.sample_counts(conn)
     print(f"sampled {report.players} players: {report.matches_new} games downloaded, "
           f"{report.matches_cached} already cached")
     print(f"  {_client_stats(api)}")
-    print("games per tier bucket (all crawls so far):")
+    print("crawled games per tier bucket (all crawls so far):")
     for bucket in baseline_build.TIER_ORDER:
         if bucket in counts:
             print(f"  {bucket:<12} {counts[bucket]}")
@@ -211,6 +215,33 @@ def cmd_baselines(settings: Settings, args: argparse.Namespace) -> int:
     for bucket in baseline_build.TIER_ORDER:
         if bucket in table:
             print(f"  {bucket:<14}" + "".join(f"{table[bucket].get(r, 0):>8}" for r in roles))
+    return 0
+
+
+def cmd_coach(settings: Settings, args: argparse.Namespace) -> int:
+    riot_id = parse_riot_id(args.riot_id)
+    coach = None
+    if not args.offline and settings.anthropic_api_key:
+        coach = Coach(settings.coach_model, api_key=settings.anthropic_api_key,
+                      effort=settings.coach_effort)
+    with connect(settings.database_url) as conn:
+        account = repo.find_account(conn, riot_id.game_name, riot_id.tag_line)
+        if account is None or args.sync:
+            api = _api(settings)
+            Ingestor(conn, api).sync(riot_id, _platform(settings, args), count=args.games)
+            feature_store.extract_pending(conn)
+            account = repo.find_account(conn, riot_id.game_name, riot_id.tag_line)
+        puuid = account["puuid"]
+        if args.match or args.last:
+            match_id = args.match or (repo.player_match_ids(conn, puuid, limit=1) or [None])[0]
+            if match_id is None:
+                raise ReportError("no cached games for this player -- run sync first")
+            result = game_report(conn, puuid, match_id, coach=coach, tier=args.tier,
+                                 refresh=args.refresh)
+        else:
+            result = recent_report(conn, puuid, games=args.games, coach=coach, tier=args.tier,
+                                   refresh=args.refresh)
+    print(render(result, show_evidence=args.evidence))
     return 0
 
 
@@ -255,12 +286,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tiers", help="comma list, e.g. GOLD,PLATINUM (default: Iron..Master)")
     p.add_argument("--players", type=int, default=2, help="players per division (default 2)")
     p.add_argument("--matches", type=int, default=5, help="ranked games per player (default 5)")
+    p.add_argument("--days", type=float, default=baseline_crawl.DEFAULT_MAX_AGE_DAYS,
+                   help="only games from the last N days (default 14)")
     p.set_defaults(func=cmd_crawl)
 
     p = sub.add_parser("baselines", help="rebuild rank-matched baselines from crawled games")
     p.add_argument("--patches", type=int, default=3, help="newest N patches (default 3)")
     p.add_argument("--min-n", type=int, default=20, help="min players per group (default 20)")
     p.set_defaults(func=cmd_baselines)
+
+    p = sub.add_parser("coach", help="coaching for a player's recent games or one game")
+    p.add_argument("riot_id", help="Name#TAG")
+    _add_region(p)
+    which = p.add_mutually_exclusive_group()
+    which.add_argument("--match", help="coach one game by match id")
+    which.add_argument("--last", action="store_true", help="coach the most recent game")
+    p.add_argument("--games", type=int, default=20, help="recent games to analyse (default 20)")
+    p.add_argument("--tier", help="compare against this tier instead of the player's rank")
+    p.add_argument("--sync", action="store_true", help="download new games first")
+    p.add_argument("--offline", action="store_true", help="template coach, no LLM call")
+    p.add_argument("--refresh", action="store_true", help="ignore the cached coaching")
+    p.add_argument("--evidence", action="store_true", help="also print every evidence item")
+    p.set_defaults(func=cmd_coach)
 
     p = sub.add_parser("features", help="extract per-minute features from cached timelines")
     p.add_argument("--limit", type=int, help="at most N matches this run")
@@ -282,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(Settings.from_env(), args)
-    except (ConfigError, NotFound, RiotApiError, ValueError) as exc:
+    except (ConfigError, NotFound, RiotApiError, ReportError, CoachError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:

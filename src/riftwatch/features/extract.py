@@ -11,6 +11,8 @@ are cumulative (total gold, total CS...).
 
 from __future__ import annotations
 
+from bisect import bisect_right
+from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -18,7 +20,7 @@ from riftwatch.features.map import readable, zone
 from riftwatch.riot.ddragon import patch_of
 
 # Bump when extraction logic changes; stored rows with an older version get re-extracted.
-EXTRACTOR_VERSION = 1
+EXTRACTOR_VERSION = 2
 
 ROLES = ("TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY")
 EPIC_MONSTERS = ("DRAGON", "BARON_NASHOR", "RIFTHERALD", "HORDE", "ATAKHAN", "ELDER_DRAGON")
@@ -188,25 +190,28 @@ def extract(match: dict[str, Any], timeline: dict[str, Any]) -> GameFeatures:
             ))
 
     # -- cumulative event counters per minute -----------------------------------------------
-    def bump(pid: int | None, ts: int, attr: str) -> None:
-        if pid not in players:
-            return
-        for row in players[pid].minutes:
-            if minute_frames[row.minute]["timestamp"] >= ts:
-                setattr(row, attr, getattr(row, attr) + 1)
-
+    # One pass over the (already sorted) events collects each player's timestamps per
+    # counter; a minute's count is then a binary search for its frame time. Linear in
+    # events, instead of touching every later minute for every event.
+    stamps: dict[tuple[int, str], list[int]] = defaultdict(list)
     for e in events:
         ts = e["timestamp"]
         etype = e["type"]
         if etype == "CHAMPION_KILL":
-            bump(e.get("killerId"), ts, "kills")
-            bump(e.get("victimId"), ts, "deaths")
+            stamps[e.get("killerId"), "kills"].append(ts)
+            stamps[e.get("victimId"), "deaths"].append(ts)
             for a in e.get("assistingParticipantIds") or []:
-                bump(a, ts, "assists")
+                stamps[a, "assists"].append(ts)
         elif etype == "WARD_PLACED":
-            bump(e.get("creatorId"), ts, "wards_placed")
+            stamps[e.get("creatorId"), "wards_placed"].append(ts)
         elif etype == "WARD_KILL":
-            bump(e.get("killerId"), ts, "wards_killed")
+            stamps[e.get("killerId"), "wards_killed"].append(ts)
+    frame_times = [f["timestamp"] for f in minute_frames]
+    for (pid, attr), times in stamps.items():
+        if pid not in players:
+            continue
+        for row in players[pid].minutes:
+            setattr(row, attr, bisect_right(times, frame_times[row.minute]))
 
     # -- lane-opponent diffs ------------------------------------------------------------------
     for p in players.values():
