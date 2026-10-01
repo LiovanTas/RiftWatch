@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "League of Legends coaching: per-minute timeline metrics scored against rank-matched baselines, explained by an LLM that only sees computed evidence"
 requires-python = ">=3.11"
 dependencies = [
+    "httpx>=0.27",
     "psycopg[binary]>=3.2",
     "python-dotenv>=1.0",
 ]

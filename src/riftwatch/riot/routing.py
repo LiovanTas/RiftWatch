@@ -77,6 +77,10 @@ def account_region(platform: str) -> str:
     return _PLATFORMS[platform_for(platform)][1]
 
 
+# Every host label the API answers on: platforms plus the regional clusters.
+ROUTING_VALUES = frozenset(_PLATFORMS) | {r for pair in _PLATFORMS.values() for r in pair}
+
+
 def platform_host(platform: str) -> str:
     return f"https://{platform_for(platform)}.api.riotgames.com"
 

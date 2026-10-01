@@ -49,7 +49,7 @@ Win32 watchdog (separate process): hang detection on the game window + global ho
       (`"20:1,100:120"` = several windows at once), one limiter per routing value (each region
       has its own quota), per-method buckets. Update limits from response headers instead of
       hardcoding dev-key numbers. Fake-clock unit tests.
-- [ ] **Day 3 — HTTP client.** httpx; on 429 read `Retry-After` and `X-Rate-Limit-Type`
+- [x] **Day 3 — HTTP client.** httpx; on 429 read `Retry-After` and `X-Rate-Limit-Type`
       (application / method / service — a *service* 429 has no Retry-After, so back off
       exponentially); retry 5xx with jitter; 404 → `None`; key never logged. Tests on
       `httpx.MockTransport`.
