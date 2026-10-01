@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from dotenv import load_dotenv
 
 from riftwatch import __version__
+from riftwatch.baselines import build as baseline_build
+from riftwatch.baselines import crawl as baseline_crawl
 from riftwatch.config import ConfigError, Settings
 from riftwatch.db import migrate as migrations
 from riftwatch.db import repo
@@ -165,6 +167,53 @@ def cmd_features(settings: Settings, args: argparse.Namespace) -> int:
     return 0 if not failures else 1
 
 
+def cmd_crawl(settings: Settings, args: argparse.Namespace) -> int:
+    api = _api(settings)
+    tiers = [t.strip().upper() for t in args.tiers.split(",")] if args.tiers else baseline_crawl.DEFAULT_TIERS
+    with connect(settings.database_url) as conn:
+        report = baseline_crawl.crawl(
+            conn, Ingestor(conn, api), _platform(settings, args), tiers=tiers,
+            players_per_division=args.players, matches_per_player=args.matches, progress=print,
+        )
+        feature_store.extract_pending(conn)
+        counts = baseline_crawl.sample_counts(conn)
+    print(f"sampled {report.players} players: {report.matches_new} games downloaded, "
+          f"{report.matches_cached} already cached")
+    print(f"  {_client_stats(api)}")
+    print("games per tier bucket (all crawls so far):")
+    for bucket in baseline_build.TIER_ORDER:
+        if bucket in counts:
+            print(f"  {bucket:<12} {counts[bucket]}")
+    return 0
+
+
+def cmd_baselines(settings: Settings, args: argparse.Namespace) -> int:
+    with connect(settings.database_url) as conn:
+        feature_store.extract_pending(conn)
+        report = baseline_build.build(conn, patch_count=args.patches, min_n=args.min_n)
+        coverage = conn.execute(
+            """
+            SELECT tier_bucket, role, max(n) FROM baselines
+             WHERE champion_id = 0 AND minute IS NULL GROUP BY tier_bucket, role
+            """
+        ).fetchall()
+    if not report.games:
+        print("no crawled games yet -- run `riftwatch crawl` first "
+              "(your own synced games are left out so you aren't compared against yourself)")
+        return 1
+    print(f"built {report.rows} baseline rows from {report.games} games "
+          f"(patches {report.patch_window})")
+    table: dict[str, dict[str, int]] = {}
+    for bucket, role, n in coverage:
+        table.setdefault(bucket, {})[role] = n
+    roles = ("TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY")
+    print(f"  {'players per group':<14}" + "".join(f"{r[:6]:>8}" for r in roles))
+    for bucket in baseline_build.TIER_ORDER:
+        if bucket in table:
+            print(f"  {bucket:<14}" + "".join(f"{table[bucket].get(r, 0):>8}" for r in roles))
+    return 0
+
+
 def _add_region(p: argparse.ArgumentParser) -> None:
     p.add_argument("--region", "-r", help="na, euw, eune, kr, ... (default: RIFTWATCH_DEFAULT_REGION)")
 
@@ -200,6 +249,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_backfill)
 
     sub.add_parser("cache", help="cache size and hit rate").set_defaults(func=cmd_cache)
+
+    p = sub.add_parser("crawl", help="sample ladder games from each tier for baselines")
+    _add_region(p)
+    p.add_argument("--tiers", help="comma list, e.g. GOLD,PLATINUM (default: Iron..Master)")
+    p.add_argument("--players", type=int, default=2, help="players per division (default 2)")
+    p.add_argument("--matches", type=int, default=5, help="ranked games per player (default 5)")
+    p.set_defaults(func=cmd_crawl)
+
+    p = sub.add_parser("baselines", help="rebuild rank-matched baselines from crawled games")
+    p.add_argument("--patches", type=int, default=3, help="newest N patches (default 3)")
+    p.add_argument("--min-n", type=int, default=20, help="min players per group (default 20)")
+    p.set_defaults(func=cmd_baselines)
 
     p = sub.add_parser("features", help="extract per-minute features from cached timelines")
     p.add_argument("--limit", type=int, help="at most N matches this run")

@@ -115,7 +115,10 @@ def build_game(
     version: str = "16.19.712.3456",
     start_ms: int = 1_790_000_000_000,
     blue_wins: bool = True,
+    cs_bonus: float = 0.0,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    """``cs_bonus`` adds that many lane CS per minute to every laner, so tests can build
+    many games whose numbers differ."""
     puuids = puuids or [f"puuid-{match_id}-{p}" for p in range(1, 11)]
     events = copy.deepcopy(DEFAULT_EVENTS if events is None else events)
     duration_s = minutes * 60 + extra_seconds
@@ -145,7 +148,7 @@ def build_game(
             "currentGold": 150,
             "xp": int(300 * m * XP_MULT[pid]),
             "level": min(18, 1 + int(m * 0.7)),
-            "minionsKilled": int(CS_RATE[pid] * m),
+            "minionsKilled": int((CS_RATE[pid] + (cs_bonus if CS_RATE[pid] else 0)) * m),
             "jungleMinionsKilled": int(4 * m) if role_of(pid) == "JUNGLE" else 0,
             "position": {"x": 7000 + pid * 50, "y": 7000 + pid * 40},
             "damageStats": {"totalDamageDoneToChampions": int(500 * m * (1 + pid % 3))},
