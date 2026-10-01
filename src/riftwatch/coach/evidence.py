@@ -64,8 +64,21 @@ def clock(minutes: float) -> str:
     return f"{total // 60}:{total % 60:02d}"
 
 
-def _scope(s: Score) -> str:
-    return f"{s.baseline.scope} (n={s.baseline.n})"
+class _Group:
+    """The default comparison group, named once in the context item. Lines whose baseline
+    matches it say nothing more; the rest name their own group -- that repetition was a
+    large share of the prompt."""
+
+    def __init__(self, scores: list[Score]) -> None:
+        common = Counter((s.baseline.scope, s.baseline.n) for s in scores).most_common(1)
+        self.scope, self.n = common[0][0] if common else ("", 0)
+
+    def suffix(self, s: Score) -> str:
+        if (s.baseline.scope, s.baseline.n) == (self.scope, self.n):
+            return ""
+        if s.baseline.scope == self.scope:
+            return f" (n={s.baseline.n})"
+        return f" (vs {s.baseline.scope}, n={s.baseline.n})"
 
 
 def _vs_median(m: Metric, value: float, median: float) -> str:
@@ -95,10 +108,10 @@ class _Builder:
         return e
 
 
-def _metric_text(s: Score) -> str:
+def _metric_text(s: Score, group: _Group) -> str:
     m = s.metric
-    return (f"{m.label}: {m.show(s.value)}, which is the {ordinal(s.percentile)} percentile "
-            f"of {_scope(s)}; {_vs_median(m, s.value, s.baseline.p50)}.")
+    return (f"{m.label}: {m.show(s.value)}; {ordinal(s.percentile)} percentile"
+            f"{group.suffix(s)}; {_vs_median(m, s.value, s.baseline.p50)}.")
 
 
 def _runs(scores: list[Score], test) -> list[list[Score]]:
@@ -138,9 +151,10 @@ def game_evidence(
 ) -> EvidenceSet:
     p = score.participant
     b = _Builder()
+    group = _Group(list(score.game.values()) + [s for c in score.curves.values() for s in c])
     any_baseline = next(iter(score.game.values()), None)
-    compared = (f" Compared against {any_baseline.baseline.scope}, patches "
-                f"{any_baseline.baseline.patch_window}." if any_baseline else
+    compared = (f" Comparison group unless a line says otherwise: {group.scope}, n={group.n} "
+                f"games, patches {any_baseline.baseline.patch_window}." if any_baseline else
                 " No rank baseline was available, so no percentile comparisons.")
     b.add("context", "context", "neutral",
           f"Game {game.match_id}: {p.champion_name} {p.role.lower()}, "
@@ -163,7 +177,7 @@ def game_evidence(
     for severity, pol, s in candidates:
         if taken >= max_metric_findings or per_area[s.metric.area] >= max_per_area:
             continue
-        b.add("metric", s.metric.area, pol, _metric_text(s), severity, metric=s.metric.name,
+        b.add("metric", s.metric.area, pol, _metric_text(s, group), severity, metric=s.metric.name,
               value=s.value, percentile=round(s.percentile, 1), n=s.baseline.n)
         per_area[s.metric.area] += 1
         taken += 1
@@ -178,9 +192,9 @@ def game_evidence(
                 last = run[-1]
                 b.add("curve", m.area, pol,
                       f"From minute {run[0].minute} to minute {last.minute}, {m.label} stayed "
-                      f"{'below the 25th' if pol == 'weakness' else 'above the 75th'} percentile of "
-                      f"{_scope(last)}; at minute {last.minute} it was {m.show(last.value)} "
-                      f"({_vs_median(m, last.value, last.baseline.p50)}).",
+                      f"{'below the 25th' if pol == 'weakness' else 'above the 75th'} percentile"
+                      f"{group.suffix(last)}; at minute {last.minute} it was "
+                      f"{m.show(last.value)} ({_vs_median(m, last.value, last.baseline.p50)}).",
                       severity=sum(abs(s.goodness - 50) for s in run) / len(run) + len(run),
                       metric=name, start=run[0].minute, end=last.minute)
 
@@ -212,7 +226,8 @@ def trend_evidence(
           f"Last {len(recent_games)} ranked games: {wins} wins, {len(recent_games) - wins} losses. "
           f"Roles: {', '.join(f'{r.lower()} {n}' for r, n in roles.most_common())}. "
           f"Most played: {', '.join(f'{c} {n}' for c, n in champs.most_common(3))}. "
-          f"Each game is compared against {tier_label} players in the role played.")
+          f"Each game is compared against {tier_label} players in the role played; "
+          f"percentiles below are for that group.")
 
     found = []
     for t in trends:
@@ -229,9 +244,8 @@ def trend_evidence(
             change = (f" In the {t.older_games} games before that it was the "
                       f"{ordinal(t.older_goodness)} percentile.")
         b.add("trend", m.area, pol,
-              f"Across {t.games} recent games, typical {m.label} was {m.show(t.median_value)}, "
-              f"around the {ordinal(t.median_goodness)} percentile for {tier_label} players in "
-              f"the same role.{change}", severity, metric=m.name)
+              f"{m.label}: typical {m.show(t.median_value)} over {t.games} games, around the "
+              f"{ordinal(t.median_goodness)} percentile.{change}", severity, metric=m.name)
 
     # Where deaths happen, across games.
     zones: Counter[str] = Counter()

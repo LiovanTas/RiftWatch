@@ -223,7 +223,7 @@ def cmd_coach(settings: Settings, args: argparse.Namespace) -> int:
     coach = None
     if not args.offline and settings.anthropic_api_key:
         coach = Coach(settings.coach_model, api_key=settings.anthropic_api_key,
-                      effort=settings.coach_effort)
+                      effort=settings.coach_effort, thinking=settings.coach_thinking)
     with connect(settings.database_url) as conn:
         account = repo.find_account(conn, riot_id.game_name, riot_id.tag_line)
         if account is None or args.sync:
@@ -242,6 +242,14 @@ def cmd_coach(settings: Settings, args: argparse.Namespace) -> int:
             result = recent_report(conn, puuid, games=args.games, coach=coach, tier=args.tier,
                                    refresh=args.refresh)
     print(render(result, show_evidence=args.evidence))
+    if args.html:
+        from pathlib import Path
+
+        from riftwatch.report.html import game_html, recent_html
+
+        page = game_html(result) if result.scope == "game" else recent_html(result)
+        Path(args.html).write_text(page, encoding="utf-8")
+        print(f"\nHTML report written to {args.html}")
     return 0
 
 
@@ -307,6 +315,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--offline", action="store_true", help="template coach, no LLM call")
     p.add_argument("--refresh", action="store_true", help="ignore the cached coaching")
     p.add_argument("--evidence", action="store_true", help="also print every evidence item")
+    p.add_argument("--html", metavar="FILE", help="also write a self-contained HTML report")
     p.set_defaults(func=cmd_coach)
 
     p = sub.add_parser("features", help="extract per-minute features from cached timelines")

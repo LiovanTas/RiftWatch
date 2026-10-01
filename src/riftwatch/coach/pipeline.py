@@ -148,15 +148,15 @@ def _coach(conn, coach: Coach | None, puuid, scope, match_id, evidence, task, re
         return offline_coach(evidence, role=role), "offline", False, [], {}
     fingerprint = evidence.fingerprint()
     if not refresh:
-        hit = _cached(conn, puuid, scope, match_id, fingerprint, coach.model)
+        hit = _cached(conn, puuid, scope, match_id, fingerprint, coach.label)
         if hit:
             output, dropped, usage = hit
-            return output, coach.model, True, dropped, usage
+            return output, coach.label, True, dropped, usage
     run = coach.write(evidence, task)
-    _store(conn, puuid, scope, match_id, evidence, coach.model, run.output, run.dropped,
-           {**run.usage, "attempts": run.attempts, "served_by": run.model,
-            "first_violations": [str(v) for v in run.first_violations]})
-    return run.output, coach.model, False, run.dropped, run.usage
+    usage = {**run.usage, "attempts": run.attempts, "served_by": run.model,
+             "first_violations": [str(v) for v in run.first_violations]}
+    _store(conn, puuid, scope, match_id, evidence, coach.label, run.output, run.dropped, usage)
+    return run.output, coach.label, False, run.dropped, usage
 
 
 # -- reports ---------------------------------------------------------------------------------

@@ -168,7 +168,7 @@ class FakeMessages:
 def fake_coach(*outputs):
     messages = FakeMessages(outputs)
     client = SimpleNamespace(beta=SimpleNamespace(messages=messages))
-    return Coach("claude-opus-5-5", client=client), messages
+    return Coach("claude-sonnet-5-5", client=client), messages
 
 
 GOOD = CoachOutput(headline="CS at 10 was low.", points=[
@@ -181,9 +181,12 @@ def test_clean_answer_needs_one_call():
     coach, messages = fake_coach(GOOD)
     run = coach.write(EV, "this game")
     assert run.attempts == 1 and run.output == GOOD and run.dropped == []
+    assert run.usage["cost_usd"] == pytest.approx((100 * 2 + 50 * 10) / 1e6)
     call = messages.calls[0]
     assert call["fallbacks"] == "default" and call["output_format"] is CoachOutput
     assert call["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in call   # no per-game breakpoint; see llm.py
+    assert call["thinking"] == {"type": "adaptive"} and call["output_config"] == {"effort": "low"}
     assert "[E2]" in call["messages"][0]["content"]
 
 
@@ -202,6 +205,17 @@ def test_persistent_violation_is_dropped():
     coach, _ = fake_coach(BAD, BAD)
     run = coach.write(EV, "this game")
     assert run.output.points == [] and len(run.dropped) == 1
+
+
+def test_point_cap_is_enforced():
+    many = CoachOutput(headline="x", points=[point(explanation="52 CS") for _ in range(7)])
+    coach, _ = fake_coach(many)
+    assert len(coach.write(EV, "this game").output.points) == 5
+
+
+def test_between_tools_only_on_sonnet_5_5():
+    assert Coach("claude-opus-5-5", thinking="between_tools", client=object()).thinking == "adaptive"
+    assert Coach("claude-sonnet-5-5", thinking="between_tools", client=object()).thinking == "between_tools"
 
 
 def test_refusal_is_an_error():

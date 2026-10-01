@@ -9,8 +9,9 @@ from dataclasses import dataclass
 from riftwatch.riot.routing import platform_for
 
 DEFAULT_DATABASE_URL = "postgresql://riftwatch:riftwatch@127.0.0.1:5432/riftwatch"
-DEFAULT_COACH_MODEL = "claude-opus-5-5"
-DEFAULT_COACH_EFFORT = "medium"
+DEFAULT_COACH_MODEL = "claude-sonnet-5-5"
+DEFAULT_COACH_EFFORT = "low"
+DEFAULT_COACH_THINKING = "adaptive"
 
 
 class ConfigError(RuntimeError):
@@ -25,6 +26,7 @@ class Settings:
     anthropic_api_key: str | None
     coach_model: str
     coach_effort: str = DEFAULT_COACH_EFFORT
+    coach_thinking: str = DEFAULT_COACH_THINKING
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -36,6 +38,7 @@ class Settings:
             anthropic_api_key=env.get("ANTHROPIC_API_KEY") or None,
             coach_model=env.get("RIFTWATCH_COACH_MODEL") or DEFAULT_COACH_MODEL,
             coach_effort=env.get("RIFTWATCH_COACH_EFFORT") or DEFAULT_COACH_EFFORT,
+            coach_thinking=env.get("RIFTWATCH_COACH_THINKING") or DEFAULT_COACH_THINKING,
         )
 
     def require_riot_key(self) -> str:

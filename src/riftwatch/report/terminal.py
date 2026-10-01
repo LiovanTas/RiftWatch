@@ -68,6 +68,14 @@ def render(result: CoachResult, *, show_scores: bool = True, show_evidence: bool
         out.append(f"     -> {point.advice}")
         cited = "; ".join(by_id[e].text for e in point.evidence_ids if e in by_id)
         out.append(f"     evidence {', '.join(point.evidence_ids)}: {cited}")
+    u = result.usage or {}
+    if result.model != "offline" and not result.cached and u:
+        cost = f", about ${u['cost_usd']:.4f}" if u.get("cost_usd") is not None else ""
+        out.append("")
+        out.append(f"  tokens: {u.get('input_tokens', 0)} in + "
+                   f"{u.get('cache_read_input_tokens', 0)} read from cache + "
+                   f"{u.get('cache_creation_input_tokens', 0)} written to cache, "
+                   f"{u.get('output_tokens', 0)} out, {u.get('attempts', 1)} attempt(s){cost}")
     if result.dropped:
         out.append("")
         out.append(f"  ({len(result.dropped)} point(s) removed by the grounding check)")

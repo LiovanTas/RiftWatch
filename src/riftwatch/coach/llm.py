@@ -7,9 +7,19 @@ Flow per request:
   3. If anything fails, Claude sees the exact violations once and answers again.
   4. Points that still fail are dropped, never shown.
 
-Speed: the system prompt is identical for every request and marked for prompt caching;
-callers cache finished answers in Postgres (see coach.pipeline), so this runs once per
-distinct evidence set.
+Token economy (default model: Claude Sonnet 5.5):
+  * The system prompt is byte-identical for every player and game, and long enough to
+    clear the model's 512-token caching minimum (853 tokens; 1,513 with the output
+    schema), so after the first request it is read from cache at a tenth of the input
+    price. Measured across different games: 1,513 cache-read tokens on every call.
+  * There is deliberately no second, conversation-level breakpoint. It would write each
+    game's evidence to cache at 1.25x the input price, which only pays off if a grounding
+    retry re-reads it -- break-even is a ~28% retry rate, and measured retries were 0 of
+    10. (IncidentPilot's agent does want one: it re-sends a growing history every turn.)
+  * Answers are short by instruction (at most five points, one or two sentences each) and
+    advice carries no numbers, which removes the most common cause of a retry.
+  * Thinking mode and effort are configurable; see the measurements in the README.
+  * Finished answers are cached in Postgres by the caller, so a repeat view costs nothing.
 """
 
 from __future__ import annotations
@@ -27,28 +37,53 @@ from riftwatch.coach.grounding import (
 )
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+MAX_POINTS = 5  # the prompt asks for at most five; enforced here because "high" effort wrote six
+
+# USD per million tokens: input, output, cache read, cache write (5-minute TTL).
+PRICES = {
+    "claude-sonnet-5-5": (2.00, 10.00, 0.20, 2.50),
+    "claude-opus-5-5": (4.00, 20.00, 0.20, 5.00),
+}
 
 SYSTEM_PROMPT = """\
-You are a League of Legends coach reviewing a ranked player's performance.
+You are a League of Legends coach reviewing a ranked solo/duo player.
 
-You will receive a numbered list of evidence items. They are the only facts you know about
-the player and their games: measured values, percentiles against players of the same rank
-and role, and details of each death. Write coaching points from them.
+You receive a numbered list of evidence items. They are the only facts you know about the
+player and their games. Each comes from the player's match timeline and is compared with
+players of the same rank tier and role (the comparison group named in the first item).
+
+How to read the evidence:
+- "Nth percentile" ranks the player within the comparison group: 10th means 90% of those
+  players did better on that measure. For measures where lower is better (deaths, deaths
+  before 14 minutes, solo deaths, deaths while ahead), the percentile is already flipped so
+  a high percentile is always good.
+- "median" is the comparison group's typical value; "below"/"above" give the gap to it.
+- "lane opponent" means the enemy player in the same role. For a jungler that is the enemy
+  jungler; for a support, the enemy support.
+- Per-minute patterns ("from minute A to minute B ...") mean the gap persisted the whole
+  stretch, which matters more than a single moment.
+- Death items describe one death: time, map area relative to the player's team, who got
+  the kill, how many enemies helped, and the gold gap to the lane opponent at the time.
+- Measures: CS is minions plus jungle monsters killed. Kill participation is the share of
+  the team's kills the player had a kill or assist in. Damage share is the player's share
+  of the team's damage to champions. Vision score is Riot's measure of wards placed,
+  cleared and the value of the vision they gave. Objective participation is the share of
+  the team's dragons, grubs, heralds and barons the player helped take.
 
 Rules:
-- Every point cites the ids of the evidence it is based on in evidence_ids.
-- Every number you write must appear in the evidence you cite for that point. Do not
-  compute new numbers (differences, ratios, totals, averages) and do not round to new
-  values -- reuse the numbers exactly as written in the evidence. If you want to say
-  something that needs a number the evidence doesn't contain, say it without the number.
-- Do not invent facts about the game that the evidence doesn't contain (items, matchups,
-  enemy champions, teammates' play). General League knowledge is fine in advice, as long
-  as it is phrased as advice and not as a claim about this player's game.
-- Prefer the most important issues: sustained patterns and large gaps from the comparison
-  group over small ones. Weaknesses first, then at least one strength if the evidence has
-  any. Usually 3 to 6 points; fewer if the evidence is thin.
-- advice is concrete and actionable: what to do differently next game.
-- headline is one sentence summarising the overall picture.
+- Every point cites, in evidence_ids, the ids of the items it is based on.
+- Every number in title or explanation must appear in an item that point cites. Reuse
+  numbers exactly as written; never compute new ones (differences, totals, averages).
+- advice contains no numbers at all, not even minute marks or counts. Describe the habit
+  to build in words.
+- Never state facts the evidence doesn't contain (items, runes, matchups, teammates'
+  play). General League knowledge belongs in advice, phrased as advice.
+- At most five points, most important first: sustained patterns and large gaps before
+  small ones, weaknesses before strengths, and include one strength if the evidence has
+  any. Fewer points if the evidence is thin.
+- title: a short phrase. explanation: one or two sentences. advice: one or two sentences
+  of concrete things to do next game.
+- headline: one sentence on the overall picture, with no numbers.
 - Plain, direct language. Address the player as "you".
 """
 
@@ -68,14 +103,27 @@ class CoachRun:
     usage: dict[str, Any] = field(default_factory=dict)
 
 
-def _usage(resp: Any) -> dict[str, int]:
+def cost_usd(model: str, usage: dict[str, Any]) -> float | None:
+    price = PRICES.get(model)
+    if price is None:
+        return None
+    inp, out, read, write = price
+    return round((usage.get("input_tokens", 0) * inp + usage.get("output_tokens", 0) * out
+                  + usage.get("cache_read_input_tokens", 0) * read
+                  + usage.get("cache_creation_input_tokens", 0) * write) / 1e6, 5)
+
+
+def _accumulate(usage: dict[str, Any], resp: Any) -> None:
     u = resp.usage
-    return {
-        "input_tokens": u.input_tokens or 0,
-        "output_tokens": u.output_tokens or 0,
-        "cache_read_input_tokens": getattr(u, "cache_read_input_tokens", 0) or 0,
-        "cache_creation_input_tokens": getattr(u, "cache_creation_input_tokens", 0) or 0,
-    }
+    for name in ("input_tokens", "output_tokens", "cache_read_input_tokens",
+                 "cache_creation_input_tokens"):
+        usage[name] = usage.get(name, 0) + (getattr(u, name, 0) or 0)
+    # From IncidentPilot: once the system prompt has been cached, every request should read
+    # it. One that reads nothing means the prefix changed (or the cache expired) -- a silent
+    # cost leak a run total would hide.
+    usage["requests"] = usage.get("requests", 0) + 1
+    if usage["requests"] > 1 and not (getattr(u, "cache_read_input_tokens", 0) or 0):
+        usage["uncached_followups"] = usage.get("uncached_followups", 0) + 1
 
 
 def _echo(content: list[Any]) -> list[dict[str, Any]]:
@@ -93,39 +141,62 @@ def _echo(content: list[Any]) -> list[dict[str, Any]]:
 class Coach:
     def __init__(
         self,
-        model: str,
+        model: str = "claude-sonnet-5-5",
         *,
         api_key: str | None = None,
-        effort: str = "medium",
+        effort: str = "low",
+        thinking: str = "adaptive",
         max_retries: int = 1,
+        max_tokens: int | None = None,
         client: Any = None,
     ) -> None:
+        if thinking == "between_tools" and not model.startswith("claude-sonnet-5-5"):
+            thinking = "adaptive"   # between_tools exists only on Sonnet 5.5
         self.model = model
         self.effort = effort
+        self.thinking = thinking
         self.max_retries = max_retries
-        if client is None:
-            # Imported here, not at module load: the SDK takes ~3 s to import, and most
-            # commands (and the offline coach) never call the API.
+        # Thinking counts toward max_tokens; the answer itself is well under 2,000.
+        self.max_tokens = max_tokens or (4000 if thinking == "between_tools" else 12000)
+        self._api_key = api_key
+        self._client = client
+
+    @property
+    def client(self) -> Any:
+        # Created on first use, not in __init__: the SDK takes ~3 s to import, and a view
+        # served from the coach_reports cache never calls the API at all.
+        if self._client is None:
             import anthropic
 
-            client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
-        self.client = client
+            self._client = (anthropic.Anthropic(api_key=self._api_key) if self._api_key
+                            else anthropic.Anthropic())
+        return self._client
+
+    @property
+    def label(self) -> str:
+        """Identifies the configuration a cached answer came from."""
+        return f"{self.model}/{self.thinking}/{self.effort}"
+
+    def _request(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "betas": [FALLBACK_BETA],
+            "fallbacks": "default",
+            "thinking": {"type": self.thinking},
+            "output_config": {"effort": self.effort},
+            # One breakpoint, on the system prompt shared by every player and game.
+            "system": [{"type": "text", "text": SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"}}],
+            "output_format": CoachOutput,
+            "messages": messages,
+        }
 
     def _call(self, messages: list[dict[str, Any]]) -> Any:
         import anthropic
 
         try:
-            resp = self.client.beta.messages.parse(
-                model=self.model,
-                max_tokens=16000,
-                betas=[FALLBACK_BETA],
-                fallbacks="default",
-                system=[{"type": "text", "text": SYSTEM_PROMPT,
-                         "cache_control": {"type": "ephemeral"}}],
-                output_config={"effort": self.effort},
-                output_format=CoachOutput,
-                messages=messages,
-            )
+            resp = self.client.beta.messages.parse(**self._request(messages))
         except anthropic.AuthenticationError as exc:
             raise CoachError("Anthropic API key rejected -- check ANTHROPIC_API_KEY in .env") from exc
         except anthropic.RateLimitError as exc:
@@ -147,14 +218,13 @@ class Coach:
 
     def write(self, evidence: EvidenceSet, task: str) -> CoachRun:
         """``task`` says what to coach, e.g. "this single game" or "the recent games"."""
-        user = (f"Coach the player on {task}.\n\nEvidence:\n{evidence.to_prompt()}")
+        user = f"Coach the player on {task}.\n\nEvidence:\n{evidence.to_prompt()}"
         messages: list[dict[str, Any]] = [{"role": "user", "content": user}]
-        usage: dict[str, int] = {}
+        usage: dict[str, Any] = {}
 
         resp = self._call(messages)
+        _accumulate(usage, resp)
         attempts = 1
-        for k, v in _usage(resp).items():
-            usage[k] = usage.get(k, 0) + v
         output: CoachOutput = resp.parsed_output
         first = problems = validate(output, evidence)
 
@@ -167,11 +237,12 @@ class Coach:
                   "than guess one, and cite the evidence that contains each number you keep."
             )})
             resp = self._call(messages)
+            _accumulate(usage, resp)
             attempts += 1
-            for k, v in _usage(resp).items():
-                usage[k] = usage.get(k, 0) + v
             output = resp.parsed_output
             problems = validate(output, evidence)
 
+        usage["cost_usd"] = cost_usd(self.model, usage)
         clean, dropped = without_violations(output, problems)
+        clean.points = clean.points[:MAX_POINTS]
         return CoachRun(clean, dropped, first, problems, attempts, resp.model, usage)
