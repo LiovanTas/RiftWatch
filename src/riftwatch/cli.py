@@ -282,6 +282,19 @@ def cmd_watchdog(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(settings: Settings, args: argparse.Namespace) -> int:
+    try:
+        import uvicorn
+    except ImportError:
+        print("error: the web server needs the web extras: pip install -e \".[web]\"",
+              file=sys.stderr)
+        return 2
+    from riftwatch.web.app import create_app
+
+    uvicorn.run(create_app(settings), host=args.host, port=args.port, log_level="info")
+    return 0
+
+
 def _add_region(p: argparse.ArgumentParser) -> None:
     p.add_argument("--region", "-r", help="na, euw, eune, kr, ... (default: RIFTWATCH_DEFAULT_REGION)")
 
@@ -356,6 +369,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--log", help="append triggers to this file")
     p.add_argument("--status", action="store_true", help="show what the watchdog sees, then exit")
     p.set_defaults(func=cmd_watchdog)
+
+    p = sub.add_parser("serve", help="run the web API")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8000)
+    p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("features", help="extract per-minute features from cached timelines")
     p.add_argument("--limit", type=int, help="at most N matches this run")

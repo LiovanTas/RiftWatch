@@ -100,6 +100,13 @@ ol.deathlist { margin: 10px 0 0; padding-left: 20px; color: var(--ink-2); font-s
 .point .advice { font-weight: 500; }
 .point .ev { color: var(--muted); font-size: 12px; margin-top: 6px; }
 .meta { color: var(--muted); font-size: 12px; margin-top: 8px; }
+nav.top { display: flex; gap: 16px; align-items: center; margin-bottom: 18px; font-size: 14px; }
+nav.top a, a.plain { color: var(--you); text-decoration: none; }
+nav.top a:hover, a.plain:hover { text-decoration: underline; }
+button.action { font: inherit; font-weight: 600; color: #fff; background: var(--you); border: 0;
+  border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+button.action:disabled { opacity: .6; cursor: progress; }
+.status { color: var(--ink-2); font-size: 13px; margin-left: 10px; }
 details { margin-top: 24px; }
 details table { border-collapse: collapse; font-size: 12px; margin: 10px 0 18px; }
 details th, details td { border-top: 1px solid var(--grid); padding: 3px 10px; text-align: right;
@@ -259,7 +266,7 @@ def _curve_kind(name: str) -> str:
     return "signed" if name.endswith("_diff") else "int"
 
 
-def _curves(score: GameScore) -> list[dict[str, Any]]:
+def curve_series(score: GameScore) -> list[dict[str, Any]]:
     out = []
     p = score.participant
     for name in CHART_CURVES:
@@ -309,7 +316,7 @@ def _scorecard_html(score: GameScore) -> str:
     return f'<div class="scroll"><table class="score">{"".join(rows)}</table></div>'
 
 
-def _coach_html(result: CoachResult) -> str:
+def coach_html(result: CoachResult, coach_url: str | None = None) -> str:
     by_id = result.evidence.by_id()
     source = ("offline template coach" if result.model == "offline"
               else f"{result.model}{' · cached' if result.cached else ''}")
@@ -326,6 +333,9 @@ def _coach_html(result: CoachResult) -> str:
         parts.append(f'<p class="meta">{len(result.dropped)} point(s) removed by the grounding check.</p>')
     parts.append(f'<p class="meta">Coach: {_esc(source)}. Every number above appears in the cited '
                  "evidence; points that failed that check are not shown.</p>")
+    if result.coach_pending and coach_url:
+        parts.append(f'<p><button class="action" data-post="{_esc(coach_url)}">Get AI coaching</button>'
+                     '<span class="status"></span></p>')
     return "".join(parts)
 
 
@@ -345,25 +355,55 @@ def _table_view(curves: list[dict[str, Any]], group: str) -> str:
     return "".join(blocks)
 
 
-def _page(title: str, description: str, body: str, data: dict[str, Any]) -> str:
-    payload = json.dumps(data).replace("</", "<\\/")
+# Buttons with data-post="url" POST there and reload the page when it answers. Used for
+# "Get AI coaching"; sync has its own progress loop on the player page.
+ACTION_JS = r"""
+for (const b of document.querySelectorAll('button[data-post]')) {
+  b.addEventListener('click', async () => {
+    const status = b.parentElement.querySelector('.status');
+    b.disabled = true; if (status) status.textContent = 'Working... this takes a few seconds.';
+    try {
+      const r = await fetch(b.dataset.post, {method: 'POST'});
+      if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+      location.reload();
+    } catch (e) { b.disabled = false; if (status) status.textContent = 'Failed: ' + e.message; }
+  });
+}
+"""
+
+
+def nav(links: list[tuple[str, str]]) -> str:
+    return ('<nav class="top">'
+            + "".join(f'<a href="{_esc(u)}">{_esc(t)}</a>' for t, u in links) + "</nav>")
+
+
+def page(title: str, description: str, body: str, data: dict[str, Any] | None = None,
+         extra_js: str = "") -> str:
+    payload = json.dumps(data or {"group": "", "curves": [], "deaths": [], "duration_min": 1})
+    payload = payload.replace("</", "<\\/")
     return (
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        # Inline icon: saves the browser a /favicon.ico request on every page.
+        '<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 '
+        'viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 rx=%224%22 '
+        'fill=%22%232a78d6%22/%3E%3C/svg%3E">'
         f"<title>{_esc(title)}</title><meta name=\"description\" content=\"{_esc(description)}\">"
         f"<style>{_CSS}</style></head><body><main>{body}</main>"
         f'<script type="application/json" id="data">{payload}</script>'
-        f"<script>{_JS}</script></body></html>"
+        f"<script>{_JS}{ACTION_JS}{extra_js}</script></body></html>"
     )
 
 
-def game_html(result: CoachResult) -> str:
+
+def game_html(result: CoachResult, *, coach_url: str | None = None,
+              links: list[tuple[str, str]] | None = None) -> str:
     game, p = result.games[0]
     score = result.scores[0]
     first = next(iter(score.game.values()), None)
     group = (first.baseline.scope.split(",")[0] if first else
              result.tier_bucket.replace("_", " ").title())
-    curves = _curves(score)
+    curves = curve_series(score)
     m = p.metrics
 
     def tile(label: str, key: str) -> str:
@@ -392,11 +432,12 @@ def game_html(result: CoachResult) -> str:
               f'<span class="key"><i style="background:var(--group)"></i>{_esc(group)} median</span>'
               f'<span class="key"><b style="background:var(--wash)"></b>Middle 50% of {_esc(group)}</span></div>')
     body = (
-        f"<h1>{_esc(p.champion_name)} {_esc(p.role.lower())} · {'Win' if p.win else 'Loss'}</h1>"
+        (nav(links) if links else "")
+        + f"<h1>{_esc(p.champion_name)} {_esc(p.role.lower())} · {'Win' if p.win else 'Loss'}</h1>"
         f'<p class="sub">{_esc(game.match_id)} · patch {_esc(game.patch)} · compared against '
         f"{_esc(group)} players{', patches ' + _esc(first.baseline.patch_window) if first else ''}</p>"
         f'<div class="tiles">{tiles}</div>'
-        f'<h2>Coaching</h2><div class="card coach">{_coach_html(result)}</div>'
+        f'<h2>Coaching</h2><div class="card coach">{coach_html(result, coach_url)}</div>'
         f'<h2>Minute by minute</h2>{legend}<div class="charts" id="charts"></div>'
         f'<h2>Deaths</h2><div class="card"><div class="deaths" id="deaths"></div>'
         f'<ol class="deathlist">{death_list or "<li>No deaths.</li>"}</ol></div>'
@@ -404,7 +445,7 @@ def game_html(result: CoachResult) -> str:
         f"<details><summary>Table view of every chart</summary>{_table_view(curves, group)}</details>"
     )
     data = {"group": group, "curves": curves, "deaths": deaths, "duration_min": game.duration_min}
-    return _page(title, f"RiftWatch review of {game.match_id}", body, data)
+    return page(title, f"RiftWatch review of {game.match_id}", body, data)
 
 
 def recent_html(result: CoachResult) -> str:
@@ -424,10 +465,10 @@ def recent_html(result: CoachResult) -> str:
         f"<h1>Last {len(result.games)} ranked games</h1>"
         f'<p class="sub">{wins} wins, {len(result.games) - wins} losses · each game compared against '
         f"{_esc(group)} players in the role played</p>"
-        f'<h2>Coaching</h2><div class="card coach">{_coach_html(result)}</div>'
+        f'<h2>Coaching</h2><div class="card coach">{coach_html(result)}</div>'
         f'<h2>Games</h2><div class="card scroll"><div><table class="score"><tr class="area"><td>champion</td>'
         f"<td>role</td><td>result</td><td>K/D/A</td><td>CS/min</td><td>length</td><td>match</td></tr>"
         f'{"".join(rows)}</table></div></div>'
     )
     data = {"group": group, "curves": [], "deaths": [], "duration_min": 1}
-    return _page("Recent games review", "RiftWatch review of recent ranked games", body, data)
+    return page("Recent games review", "RiftWatch review of recent ranked games", body, data)

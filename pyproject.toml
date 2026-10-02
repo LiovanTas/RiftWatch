@@ -16,7 +16,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+web = ["fastapi>=0.140", "uvicorn>=0.30", "psycopg_pool>=3.2"]
+dev = ["pytest>=8.0", "riftwatch[web]"]
 
 [project.scripts]
 riftwatch = "riftwatch.cli:main"

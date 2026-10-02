@@ -42,6 +42,9 @@ class CoachResult:
     match_id: str | None = None
     scores: list[GameScore] = field(default_factory=list)
     games: list[tuple[GameFeatures, ParticipantFeatures]] = field(default_factory=list)
+    # True when an LLM coach is configured but its answer isn't cached yet and generation
+    # wasn't requested; the output is the offline coach meanwhile.
+    coach_pending: bool = False
 
 
 # -- offline coach -------------------------------------------------------------------------
@@ -143,20 +146,23 @@ def _store(conn, puuid, scope, match_id, evidence, model, output, dropped, usage
 
 
 def _coach(conn, coach: Coach | None, puuid, scope, match_id, evidence, task, refresh,
-           role: str = ""):
+           role: str = "", generate: bool = True):
+    """Returns (output, model, cached, dropped, usage, pending)."""
     if coach is None:
-        return offline_coach(evidence, role=role), "offline", False, [], {}
+        return offline_coach(evidence, role=role), "offline", False, [], {}, False
     fingerprint = evidence.fingerprint()
     if not refresh:
         hit = _cached(conn, puuid, scope, match_id, fingerprint, coach.label)
         if hit:
             output, dropped, usage = hit
-            return output, coach.label, True, dropped, usage
+            return output, coach.label, True, dropped, usage, False
+    if not generate:
+        return offline_coach(evidence, role=role), "offline", False, [], {}, True
     run = coach.write(evidence, task)
     usage = {**run.usage, "attempts": run.attempts, "served_by": run.model,
              "first_violations": [str(v) for v in run.first_violations]}
     _store(conn, puuid, scope, match_id, evidence, coach.label, run.output, run.dropped, usage)
-    return run.output, coach.label, False, run.dropped, usage
+    return run.output, coach.label, False, run.dropped, usage, False
 
 
 # -- reports ---------------------------------------------------------------------------------
@@ -195,6 +201,7 @@ def game_report(
     tier: str | None = None,
     refresh: bool = False,
     min_n: int = 20,
+    generate: bool = True,
 ) -> CoachResult:
     game = _game(conn, match_id)
     p = game.by_puuid(puuid)
@@ -203,10 +210,11 @@ def game_report(
     bucket = player_bucket(conn, puuid, tier)
     score = _score(conn, p, bucket, min_n)
     evidence = game_evidence(game, score)
-    output, model, cached, dropped, usage = _coach(
-        conn, coach, puuid, "game", match_id, evidence, "this single game", refresh, p.role)
+    output, model, cached, dropped, usage, pending = _coach(
+        conn, coach, puuid, "game", match_id, evidence, "this single game", refresh, p.role,
+        generate)
     return CoachResult("game", puuid, bucket, evidence, output, model, cached, dropped, usage,
-                       match_id, [score], [(game, p)])
+                       match_id, [score], [(game, p)], pending)
 
 
 def recent_report(
@@ -219,6 +227,7 @@ def recent_report(
     refresh: bool = False,
     min_n: int = 20,
     queue_id: int = 420,
+    generate: bool = True,
 ) -> CoachResult:
     bucket = player_bucket(conn, puuid, tier)
     # Fetch older games too, for the "before" side of each trend.
@@ -242,7 +251,8 @@ def recent_report(
         raise ReportError("no analysable games cached for this player -- run sync first")
     tier_label = bucket.replace("_", " ").title()
     evidence = trend_evidence(trends(scores, recent=games), loaded[:games], tier_label)
-    output, model, cached, dropped, usage = _coach(
-        conn, coach, puuid, "recent", None, evidence, "their recent ranked games", refresh)
+    output, model, cached, dropped, usage, pending = _coach(
+        conn, coach, puuid, "recent", None, evidence, "their recent ranked games", refresh,
+        generate=generate)
     return CoachResult("recent", puuid, bucket, evidence, output, model, cached, dropped,
-                       usage, None, scores[:games], loaded[:games])
+                       usage, None, scores[:games], loaded[:games], pending)
