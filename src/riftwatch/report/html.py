@@ -333,7 +333,9 @@ def _scorecard_html(score: GameScore) -> str:
             flag = "work on" if s.goodness <= 25 else "strength" if s.goodness >= 75 else ""
             rows.append(
                 f"<tr><td>{_esc(s.metric.label)}<div class=\"small\">median "
-                f"{_esc(s.metric.show(s.baseline.p50))} · n={s.baseline.n}</div></td>"
+                f"{_esc(s.metric.show(s.baseline.p50))} · n={s.baseline.n}"
+                f"{' · Master+ ' + _esc(s.metric.show(score.reference[s.metric.name].p50)) if s.metric.name in score.reference else ''}"
+                "</div></td>"
                 f'<td class="num">{_esc(s.metric.show(s.value))}</td>'
                 f'<td class="bar"><div class="track" role="img" aria-label="better than {round(s.goodness)}%">'
                 f'<div class="line"></div><div class="typ"></div>'

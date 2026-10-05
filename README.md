@@ -107,6 +107,8 @@ killer, helpers and gold state.
 the last 14 days. Postgres computes n, mean, sd and the 10th-90th percentiles of every metric
 per tier x role x champion, and per minute for each curve. Your own games are left out of the
 yardstick. Lookups fall back from same champion to same role to the neighbouring tier.
+Every stat also shows the Master+ median for the role -- from about 10,000 high-elo players per
+role -- as a reference for where high elo sits.
 
 **Coach.** Scores become numbered evidence items. Claude (Sonnet 5.5) answers in a fixed JSON
 schema, citing evidence ids. The grounding check rejects any number that isn't in the evidence

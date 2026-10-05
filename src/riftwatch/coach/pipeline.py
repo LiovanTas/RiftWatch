@@ -193,6 +193,22 @@ def _game(conn: psycopg.Connection, match_id: str) -> GameFeatures:
     return game
 
 
+HIGH_ELO_BUCKET = "MASTER_PLUS"
+
+
+def _add_reference(conn, score: GameScore, bucket: str, min_n: int) -> None:
+    """Attach Master+ medians for the same role (not champion: that's too thin) so each stat
+    can show where high elo sits. Skipped for Master+ players themselves."""
+    if bucket == HIGH_ELO_BUCKET:
+        return
+    p = score.participant
+    ref = baselines_for(conn, HIGH_ELO_BUCKET, p.role, 0, min_n, max_tier_distance=0)
+    for name in score.game:
+        b = ref.get(name)
+        if b is not None:
+            score.reference[name] = b
+
+
 def _score(conn, p: ParticipantFeatures, bucket: str, min_n: int) -> GameScore:
     return score_participant(p, baselines_for(conn, bucket, p.role, p.champion_id, min_n))
 
@@ -215,6 +231,7 @@ def game_report(
         raise ReportError(f"this player is not in {match_id}")
     bucket = player_bucket(conn, puuid, tier)
     score = _score(conn, p, bucket, min_n)
+    _add_reference(conn, score, bucket, min_n)
     from riftwatch.live.store import for_match
 
     live = for_match(conn, match_id)

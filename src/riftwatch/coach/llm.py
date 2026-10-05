@@ -58,6 +58,8 @@ How to read the evidence:
   of those players. Higher is always better. "Bottom quarter" / "top quarter" mean worse
   than 75% / better than 75% of them.
 - "median" is the comparison group's typical value; "below"/"above" give the gap to it.
+  "Master+ median" is the typical value among Master, Grandmaster and Challenger players in
+  the same role -- a reference for where high elo sits, not the player's comparison group.
 - "lane opponent" means the enemy player in the same role. For a jungler that is the enemy
   jungler; for a support, the enemy support.
 - Per-minute patterns ("from minute A to minute B ...") mean the gap persisted the whole

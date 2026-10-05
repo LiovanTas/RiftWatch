@@ -34,7 +34,8 @@ def scorecard(score: GameScore) -> list[str]:
             mark = "!" if s.goodness <= 25 else "+" if s.goodness >= 75 else " "
             lines.append(
                 f"   {mark} {s.metric.label[:44]:<44} {s.metric.show(s.value):>8}  "
-                f"{bar(s.goodness)} better than {round(s.goodness):>3}%  (median {s.metric.show(s.baseline.p50)}, n={s.baseline.n})"
+                f"{bar(s.goodness)} better than {round(s.goodness):>3}%  (median {s.metric.show(s.baseline.p50)}, n={s.baseline.n}"
+                f"{', M+ ' + s.metric.show(score.reference[s.metric.name].p50) if s.metric.name in score.reference else ''})"
             )
     return lines
 

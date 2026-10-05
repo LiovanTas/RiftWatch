@@ -108,12 +108,15 @@ class _Builder:
         return e
 
 
-def _metric_text(s: Score, group: _Group) -> str:
+def _metric_text(s: Score, group: _Group, reference=None, reference_label: str = "") -> str:
     m = s.metric
     # "better than N%" reads the same way for every metric: for deaths it already accounts
     # for lower being better, so it can't be misread the way a raw percentile can.
-    return (f"{m.label}: {m.show(s.value)}; better than {round(s.goodness)}% of comparable "
+    text = (f"{m.label}: {m.show(s.value)}; better than {round(s.goodness)}% of comparable "
             f"players{group.suffix(s)}; {_vs_median(m, s.value, s.baseline.p50)}.")
+    if reference is not None:
+        text += f" {reference_label} median: {m.show(reference.p50)}."
+    return text
 
 
 def _runs(scores: list[Score], test) -> list[list[Score]]:
@@ -181,7 +184,9 @@ def game_evidence(
     for severity, pol, s in candidates:
         if taken >= max_metric_findings or per_area[s.metric.area] >= max_per_area:
             continue
-        b.add("metric", s.metric.area, pol, _metric_text(s, group), severity, metric=s.metric.name,
+        b.add("metric", s.metric.area, pol,
+              _metric_text(s, group, score.reference.get(s.metric.name), score.reference_label),
+              severity, metric=s.metric.name,
               value=s.value, better_than=round(s.goodness, 1), n=s.baseline.n)
         per_area[s.metric.area] += 1
         taken += 1

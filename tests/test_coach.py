@@ -278,3 +278,28 @@ def test_game_report_caches_llm_answer(conn):
 
     recent = recent_report(conn, puuid, tier="gold")
     assert recent.scope == "recent" and len(recent.games) == 1
+
+
+def test_master_plus_reference(conn):
+    from riftwatch.baselines import build as bl
+    from riftwatch.coach.pipeline import game_report
+    from riftwatch.db import repo
+    from riftwatch.features import store
+
+    for i, bucket in enumerate(["GOLD"] * 25 + ["MASTER_PLUS"] * 25):
+        mid = f"NA1_{4000 + i}"
+        match, timeline = build_game(mid, cs_bonus=i * 0.1)
+        repo.insert_match(conn, match)
+        repo.insert_timeline(conn, mid, timeline)
+        repo.mark_sample(conn, mid, bucket, "crawl")
+    store.extract_pending(conn)
+    bl.build(conn)
+    bl.invalidate_cache()
+
+    gold = game_report(conn, "puuid-NA1_4000-1", "NA1_4000", tier="gold")
+    ref = gold.scores[0].reference["cs_at_10"]
+    assert ref.tier_bucket == "MASTER_PLUS" and ref.p50 > gold.scores[0].game["cs_at_10"].baseline.p50
+    assert any("Master+ median:" in e.text for e in gold.evidence.items if e.kind == "metric")
+
+    master = game_report(conn, "puuid-NA1_4030-1", "NA1_4030", tier="master")
+    assert master.scores[0].reference == {}

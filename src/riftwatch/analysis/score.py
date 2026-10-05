@@ -68,6 +68,10 @@ class GameScore:
     game: dict[str, Score] = field(default_factory=dict)
     curves: dict[str, list[Score]] = field(default_factory=dict)   # metric -> by minute
     missing: list[str] = field(default_factory=list)                # metrics with no baseline
+    # Master+ baselines for the same role, as a "where high elo sits" reference. Empty when
+    # the player is Master+ themselves, or there's no high-elo data for the role.
+    reference: dict[str, Baseline] = field(default_factory=dict)
+    reference_label: str = "Master+"
 
     def curve_at(self, metric: str, minute: int) -> Score | None:
         return next((s for s in self.curves.get(metric, []) if s.minute == minute), None)

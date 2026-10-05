@@ -33,6 +33,8 @@ def scorecard(score: GameScore) -> list[dict[str, Any]]:
             "better_than": round(s.goodness, 1),
             "median": s.baseline.p50, "median_display": s.metric.show(s.baseline.p50),
             "n": s.baseline.n, "scope": s.baseline.scope,
+            "high_elo_median": (score.reference[s.metric.name].p50
+                                if s.metric.name in score.reference else None),
             "flag": "weakness" if s.goodness <= 25 else "strength" if s.goodness >= 75 else None,
         })
     return rows
