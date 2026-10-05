@@ -2,36 +2,186 @@
 
 League of Legends coaching that doesn't make things up.
 
-RiftWatch pulls your match timelines from the Riot API, computes per-minute metrics (gold,
-CS, XP and their diffs against your lane opponent, deaths, vision, objectives), and scores
-each one against players **at your rank, in your role, on the current patch**. Only those
-computed comparisons go to an LLM, and its answer is checked against them, so every piece of
-feedback traces back to a number that was actually measured.
+RiftWatch pulls your match timelines from the Riot API, measures how you played minute by
+minute (CS, gold, XP and the gaps to your lane opponent, deaths, vision, objectives), and
+compares every measurement with players **at your rank, in your role, on recent patches**.
+Only those comparisons go to Claude, and its answer is checked number by number against
+them before you see it.
 
-It also ships a small Windows watchdog for the client's black-screen hang: when the game
-keeps fullscreen focus and swallows Alt-Tab, a hotkey you choose kills the game and gives you
-your desktop back.
+It also ships a Windows watchdog for the game's black-screen hang: one hotkey kills the
+frozen game and gives you your desktop back.
 
-> **Status:** early development, one feature a day. See [ROADMAP.md](ROADMAP.md) for the full
-> plan and what's done.
+```
+$ riftwatch coach "Liovan#G2EU" --last
 
-## Stack
-Python 3.11+ · PostgreSQL · Riot API (account-v1, match-v5, league-v4) · Anthropic API · Win32 via ctypes
+Warwick jungle -- LOSS -- NA1_5649639519 (patch 16.19)
 
-## Setup
+  vs Platinum jungle, same role, patches 16.17-16.19
+  farming
+   ! CS at 15 min                         72  [....................]   1st  (median 100, n=110)
+   ! CS per minute                       4.5  [....................]   1st  (median 6.4, n=110)
+  ...
+  fighting
+   + kill participation                  67%  [##################..]  89th  (median 50%, n=110)
+
+COACH  [claude-sonnet-5-5/adaptive/low]
+  1. Farm stayed far below your rank  (work on, farming)
+     You had 72 CS at 15 minutes against a median of 100, and your CS per minute was 4.5
+     against a median of 6.4. From minute 9 to minute 19 you stayed below the 25th
+     percentile, ending at 87 CS.
+     -> Between ganks, always go back to clear your camps rather than waiting around.
+     evidence E2, E3, E10: ...
+```
+
+`--html report.html` writes the same review as a self-contained page with per-minute charts
+of you against the comparison group, and `riftwatch serve` runs it as a website.
+
+## Quick start
 
 ```bash
 py -3.13 -m venv .venv
 .venv\Scripts\activate
-pip install -e ".[dev]"
-copy .env.example .env        # then paste your Riot dev key into .env
+pip install -e ".[dev]"            # ".[web]" for just the website extras
+copy .env.example .env          # add RIOT_API_KEY (and ANTHROPIC_API_KEY for the LLM coach)
 docker compose up -d db
 riftwatch db migrate
 riftwatch doctor
 ```
 
-Riot **development keys expire every 24 hours** — regenerate one at
+Riot **development keys expire every 24 hours**; regenerate one at
 <https://developer.riotgames.com> before each session.
+
+Then:
+
+```bash
+riftwatch sync "Name#TAG"               # your newest 20 ranked games
+riftwatch crawl --tiers GOLD,PLATINUM   # games from the ladder to compare against
+riftwatch baselines                     # build the rank-matched comparisons
+riftwatch coach "Name#TAG" --last --html last-game.html
+```
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `lookup Name#TAG` | Resolves a Riot ID and shows its current rank |
+| `sync Name#TAG` | Downloads the newest games, stopping at the first one already cached |
+| `backfill Name#TAG --since 2026-01-01` | Downloads a whole match history; rerun the same command to resume |
+| `crawl --tiers ...` | Samples recent ranked games from each tier's ladder for baselines |
+| `baselines` | Rebuilds the per-tier, per-role, per-champion comparison tables |
+| `features` | Extracts per-minute features from any cached games that still need it |
+| `coach Name#TAG` | Coaching on the last 20 games; `--last` or `--match ID` for one game |
+| `cache` | Cache size and hit rate |
+| `watchdog` | Arms the black-screen kill switch (Windows) |
+| `serve` | Runs the website and JSON API on http://127.0.0.1:8000 |
+| `doctor`, `db migrate`, `db status` | Setup checks and schema migrations |
+
+`coach` options: `--html FILE`, `--evidence` (print every fact the coach was given),
+`--offline` (template coach, no LLM), `--tier gold` (compare against another tier),
+`--refresh` (ignore the cached answer).
+
+## How it works
+
+```
+Riot API -> rate limiter -> client -> Postgres cache -> features -> scores vs baselines -> evidence -> Claude -> grounding check -> report
+```
+
+**Riot API.** A token-bucket limiter per region and per endpoint learns the real limits from
+response headers and adopts Riot's own request count when it's ahead of ours. Each token comes
+back one full window after it was spent (a continuously refilling bucket would send ~199
+requests in the first 120 s of a 100-per-120 s limit). 429s are waited out using `Retry-After`;
+5xx and network errors back off with jitter. Downloads run on 8 threads behind the shared
+limiter.
+
+**Cache.** Finished matches never change, so a match or timeline is downloaded once and served
+from Postgres forever. Ranks are stored as snapshots.
+
+**Features.** Per player per minute: gold, XP, CS, damage, kills/deaths/assists, real wards
+(Riot also logs mushrooms and hundreds of "UNDEFINED" wards for some champions), and the gap
+to the lane opponent. Per game: about 40 metrics, plus every death with its time, map zone,
+killer, helpers and gold state.
+
+**Baselines.** `crawl` samples players from each tier's ladder and keeps only their games from
+the last 14 days. Postgres computes n, mean, sd and the 10th-90th percentiles of every metric
+per tier x role x champion, and per minute for each curve. Your own games are left out of the
+yardstick. Lookups fall back from same champion to same role to the neighbouring tier.
+
+**Coach.** Scores become numbered evidence items. Claude (Sonnet 5.5) answers in a fixed JSON
+schema, citing evidence ids. The grounding check rejects any number that isn't in the evidence
+a point cites; Claude gets one retry with the exact violations, then failing points are
+dropped. Finished answers are cached in Postgres, so a repeat view costs nothing.
+
+## Measured on real data
+
+All numbers from a Windows laptop with Postgres in Docker, a Riot development key, and the
+author's Platinum II NA account.
+
+| | |
+|---|---|
+| Sync 20 new games (43 requests) | 4.9 s, 0 rate-limited |
+| Full-season backfill (515 games) | 20 min, 999 requests, 1 rate-limited and retried |
+| Coach one game (Sonnet 5.5) | ~8 s, ~$0.012, 0 grounding retries in 13 calls |
+| Coach a game again | 1.2 s, $0 (cached answer) |
+| Report for 20 games, from cache | 47 ms |
+| Report for one game, from cache | 10 ms |
+| Save one game's features | 22 ms |
+
+Things measurement changed along the way:
+
+- `localhost` resolved to IPv6, which Docker Desktop on Windows forwards with a ~50 ms stall on
+  mid-sized writes. Using `127.0.0.1` cut saving a game's features from 134 ms to 22 ms.
+- Importing the Anthropic SDK took ~3 s; it now loads only when the LLM is actually called.
+- Adaptive thinking at low effort beat both higher effort and no thinking on cost and speed.
+  The 853-token system prompt clears Sonnet 5.5's 512-token caching minimum and is read from
+  cache on every call. There is no per-game cache breakpoint: writing each game's evidence to
+  cache only pays off above a ~28% retry rate, and retries measured 0 of 13.
+
+## Website
+
+`riftwatch serve` starts the site. Search a Riot ID, press **Update** to pull the newest games
+(a background job; the page shows its progress), open any game for the full review, and ask
+for AI coaching on a game or on your recent games.
+
+Pages never wait on Riot or the LLM: they read Postgres only. Downloads are background jobs
+behind one shared rate limiter, repeat Update presses within a minute reuse the same job, and
+coaching is generated only when asked for, then served from cache.
+
+| Endpoint | Median on real data |
+|---|---|
+| `GET /api/players/{region}/{Name-TAG}` | 9 ms |
+| `GET /api/players/.../matches?limit=100` | 7 ms |
+| `GET /api/players/.../matches/{match_id}` (scores, curves, evidence) | 18 ms |
+| `GET /api/players/.../recent` (trends over 40 games) | 85 ms |
+| `POST /api/players/.../sync` | returns a job; `GET /api/jobs/{id}` for progress |
+| `POST /api/players/.../matches/{match_id}/coach` | generates and caches coaching |
+
+Interactive API docs are at `/docs`.
+
+## Black-screen watchdog (Windows)
+
+```bash
+riftwatch watchdog                      # kill switch on Ctrl+Alt+K
+riftwatch watchdog --hotkey ctrl+shift+f12 --auto-kill-after 20
+riftwatch watchdog --status             # what it sees right now
+```
+
+It watches the game window with Windows' own "is this window responding" checks, warns when
+the game has held the screen without responding for 5 seconds, and kills it on the hotkey (or
+automatically, if you ask). It never reads or writes game memory or injects input.
+
+## Configuration
+
+`.env` (see `.env.example`):
+
+| Variable | Default |
+|---|---|
+| `RIOT_API_KEY` | required for anything that calls Riot |
+| `RIFTWATCH_DATABASE_URL` | `postgresql://riftwatch:riftwatch@127.0.0.1:5432/riftwatch` |
+| `RIFTWATCH_DEFAULT_REGION` | `na` |
+| `ANTHROPIC_API_KEY` | optional; without it `coach` uses the offline template coach |
+| `RIFTWATCH_COACH_MODEL` | `claude-sonnet-5-5` |
+| `RIFTWATCH_COACH_EFFORT` / `RIFTWATCH_COACH_THINKING` | `low` / `adaptive` |
+| `RIFTWATCH_KILL_HOTKEY` | `ctrl+alt+k` |
 
 ## Tests
 
@@ -40,17 +190,15 @@ pytest
 ```
 
 Database tests need a disposable Postgres (they wipe it) and are skipped unless
-`RIFTWATCH_TEST_DATABASE_URL` is set. CI always runs them.
+`RIFTWATCH_TEST_DATABASE_URL` is set; CI always runs them. Watchdog tests that use real
+windows run on Windows only.
 
-## Repository hygiene
 Commits are checked by `.githooks/pre-commit`, which refuses a commit whose author or
-committer doesn't match the repo's configured `user.email`. Enable it once per clone:
-
-```bash
-git config core.hooksPath .githooks
-```
+committer doesn't match the repo's `user.email`. Enable it once per clone with
+`git config core.hooksPath .githooks`.
 
 ## Legal
+
 RiftWatch isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot
 Games or anyone officially involved in producing or managing Riot Games properties. Riot
 Games, and all associated properties are trademarks or registered trademarks of Riot Games,
