@@ -43,7 +43,8 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
 - [x] **Pages**: search, player page, match page
 - [ ] **Fair queue across users.** Jobs run first-come first-served on two workers today; with
       many users, one player's sync should not wait behind another's.
-- [ ] **Stream coaching to the page** instead of waiting ~8 s for the whole answer.
+- [x] **Coaching streams to the page**: each point appears once it is written and passes the
+      grounding check; the validated final answer replaces the preview
 - [ ] **Jobs in Postgres** so more than one server process can run.
 - [ ] **Scheduled baseline refresh.** Re-crawl and rebuild baselines when a new patch lands.
 - [ ] **Production key.** A public site needs a registered Riot product and a production API

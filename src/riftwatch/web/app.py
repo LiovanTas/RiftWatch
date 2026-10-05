@@ -9,17 +9,18 @@ background job or an explicit POST, so opening a page never waits on Riot or the
 
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from psycopg_pool import ConnectionPool
 
 import riftwatch.db.connection  # noqa: F401  (installs the orjson jsonb codecs)
 from riftwatch import __version__
 from riftwatch.coach.llm import Coach, CoachError
-from riftwatch.coach.pipeline import ReportError, game_report, recent_report
+from riftwatch.coach.pipeline import ReportError, game_report, recent_report, stream_coaching
 from riftwatch.config import ConfigError, Settings
 from riftwatch.db import repo
 from riftwatch.features import store as feature_store
@@ -229,6 +230,28 @@ def create_app(
             raise HTTPException(503, "LLM coach not configured on the server")
         return review(region, riot_id, match_id, generate=True)
 
+    @app.post("/api/players/{region}/{riot_id}/matches/{match_id}/coach/stream")
+    def match_coach_stream(region: str, riot_id: str, match_id: str) -> StreamingResponse:
+        """Coaching as server-sent events: each point once it is complete and grounded, then
+        the validated final answer. A POST, because generating coaching costs money."""
+        if coach is None:
+            raise HTTPException(503, "LLM coach not configured on the server")
+        with pool.connection() as conn:     # fail fast (404s) before the stream starts
+            account = account_or_404(conn, region, riot_id)
+
+        def events():
+            try:
+                with pool.connection() as conn:
+                    result = game_report(conn, account["puuid"], match_id, coach=coach,
+                                         generate=False, advisor=advisor)
+                    for event in stream_coaching(conn, result, coach, "this single game"):
+                        yield f"data: {json.dumps(event)}\n\n"
+            except (CoachError, ReportError) as exc:
+                yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+
+        return StreamingResponse(events(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-store"})
+
     def recent(region: str, riot_id: str, games: int, generate: bool) -> dict[str, Any]:
         with pool.connection() as conn:
             account = account_or_404(conn, region, riot_id)
@@ -254,7 +277,7 @@ def create_app(
             account = account_or_404(conn, region, riot_id)
             result = game_report(conn, account["puuid"], match_id, coach=coach, generate=False,
                                  advisor=advisor)
-        coach_url = (f"/api/players/{region}/{riot_id}/matches/{match_id}/coach"
+        coach_url = (f"/api/players/{region}/{riot_id}/matches/{match_id}/coach/stream"
                      if coach is not None else None)
         links = [("RiftWatch", "/"),
                  (f"{account['game_name']}#{account['tag_line']}", f"/players/{region}/{riot_id}")]

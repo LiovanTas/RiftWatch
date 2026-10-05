@@ -8,6 +8,7 @@ evidence fingerprint + model, so only the first view of a given game pays for th
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Iterator
 from typing import Any
 
 import psycopg
@@ -287,3 +288,26 @@ def recent_report(
         generate=generate)
     return CoachResult("recent", puuid, bucket, evidence, output, model, cached, dropped,
                        usage, None, scores[:games], loaded[:games], pending)
+
+
+def stream_coaching(conn: psycopg.Connection, result: CoachResult, coach: Coach,
+                    task: str) -> Iterator[dict[str, Any]]:
+    """Coaching for an already-built report, streamed. A cached answer comes back as one
+    "final" event; otherwise grounded points stream as they complete, the finished answer is
+    stored, and "final" carries it."""
+    from riftwatch.coach.llm import write_stream
+
+    if not result.coach_pending:            # already cached (or no LLM): nothing to stream
+        yield {"type": "final", "output": result.output.model_dump(), "cached": True}
+        return
+    for event in write_stream(coach, result.evidence, task):
+        if event["type"] != "done":
+            yield event
+            continue
+        run = event["run"]
+        usage = {**run.usage, "attempts": run.attempts, "served_by": run.model,
+                 "first_violations": [str(v) for v in run.first_violations]}
+        _store(conn, result.puuid, result.scope, result.match_id, result.evidence, coach.label,
+               run.output, run.dropped, usage)
+        yield {"type": "final", "output": run.output.model_dump(), "cached": False,
+               "dropped": len(run.dropped)}

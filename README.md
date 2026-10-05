@@ -158,6 +158,7 @@ coaching is generated only when asked for, then served from cache.
 | `GET /api/players/.../recent` (trends over 40 games) | 85 ms |
 | `POST /api/players/.../sync` | returns a job; `GET /api/jobs/{id}` for progress |
 | `POST /api/players/.../matches/{match_id}/coach` | generates and caches coaching |
+| `POST /api/players/.../matches/{match_id}/coach/stream` | the same, as server-sent events: each point once it passes the grounding check, then the final answer |
 
 Interactive API docs are at `/docs`.
 

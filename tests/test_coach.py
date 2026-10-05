@@ -1,3 +1,4 @@
+import json
 import os
 from types import SimpleNamespace
 
@@ -164,6 +165,25 @@ class FakeMessages:
                                   cache_read_input_tokens=0, cache_creation_input_tokens=0),
         )
 
+    def stream(self, **kwargs):
+        """Same scripted answer as parse(), delivered in 17-character chunks."""
+        resp = self.parse(**kwargs)
+        text = resp.content[0].text
+
+        class _Stream:
+            text_stream = (text[i:i + 17] for i in range(0, len(text), 17))
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def get_final_message(self):
+                return resp
+
+        return _Stream()
+
 
 def fake_coach(*outputs):
     messages = FakeMessages(outputs)
@@ -303,3 +323,72 @@ def test_master_plus_reference(conn):
 
     master = game_report(conn, "puuid-NA1_4030-1", "NA1_4030", tier="master")
     assert master.scores[0].reference == {}
+
+
+
+# -- streaming ------------------------------------------------------------------------------------
+
+def test_completed_points_only_returns_finished_objects():
+    from riftwatch.coach.llm import completed_points
+
+    full = GOOD.model_dump_json()
+    assert completed_points(full) == [GOOD.points[0].model_dump()]
+    cut = full[: full.index('"evidence_ids"')]          # mid-point
+    assert completed_points(cut) == []
+    tricky = '{"headline": "x", "points": [{"title": "a } b", "explanation": "q\\"}", '              '"advice": "", "area": "farming", "kind": "weakness", "evidence_ids": ["E2"]}'
+    assert completed_points(tricky)[0]["title"] == "a } b"
+
+
+def test_stream_emits_only_grounded_points_then_final():
+    from riftwatch.coach.llm import write_stream
+
+    mixed = CoachOutput(headline="x", points=[
+        point(explanation="52 CS at 10 against a median of 64."),     # grounded
+        point(explanation="You lost 30 CS to your opponent.")])       # invented number
+    coach, messages = fake_coach(mixed, GOOD)
+    events = list(write_stream(coach, EV, "this game"))
+    kinds = [e["type"] for e in events]
+    assert kinds == ["point", "retrying", "done"]
+    assert "52 CS" in events[0]["point"]["explanation"]
+    run = events[-1]["run"]
+    assert run.attempts == 2 and run.output == GOOD
+
+
+def test_stream_endpoint_streams_then_caches(conn):
+    from fastapi.testclient import TestClient
+    from psycopg_pool import ConnectionPool
+
+    from riftwatch.baselines import build as bl
+    from riftwatch.config import Settings
+    from riftwatch.db import repo
+    from riftwatch.features import store
+    from riftwatch.web.app import create_app
+    from riftwatch.web.jobs import JobManager
+
+    for i in range(25):
+        mid = f"NA1_{5000 + i}"
+        match, timeline = build_game(mid, cs_bonus=i * 0.1)
+        repo.insert_match(conn, match)
+        repo.insert_timeline(conn, mid, timeline)
+        repo.mark_sample(conn, mid, "GOLD", "crawl")
+    store.extract_pending(conn)
+    bl.build(conn)
+    bl.invalidate_cache()
+    repo.upsert_account(conn, {"puuid": "puuid-NA1_5000-1", "gameName": "Me", "tagLine": "NA1"}, "na1")
+    repo.insert_rank_snapshots(conn, "puuid-NA1_5000-1", [{"queueType": "RANKED_SOLO_5x5", "tier": "GOLD",
+                                                          "rank": "II", "leaguePoints": 1, "wins": 1, "losses": 1}])
+    ok = CoachOutput(headline="Review.", points=[point(evidence_ids=["E1"], explanation="A game.")])
+    coach, messages = fake_coach(ok)
+    pool = ConnectionPool(TEST_DB, min_size=1, max_size=3, open=True, kwargs={"autocommit": True})
+    app = create_app(Settings.from_env({"RIFTWATCH_DATABASE_URL": TEST_DB}), api=None, coach=coach,
+                     pool=pool, jobs=JobManager())
+    with TestClient(app) as client:
+        r = client.post("/api/players/na/Me-NA1/matches/NA1_5000/coach/stream")
+        assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
+        events = [json.loads(line[6:]) for line in r.text.split("\n\n") if line.startswith("data: ")]
+        assert [e["type"] for e in events] == ["point", "final"]
+        again = client.post("/api/players/na/Me-NA1/matches/NA1_5000/coach/stream")
+        events = [json.loads(line[6:]) for line in again.text.split("\n\n") if line.startswith("data: ")]
+        assert events == [{"type": "final", "output": ok.model_dump(), "cached": True}]
+        assert len(messages.calls) == 1
+    pool.close()

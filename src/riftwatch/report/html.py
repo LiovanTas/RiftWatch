@@ -365,7 +365,8 @@ def coach_html(result: CoachResult, coach_url: str | None = None) -> str:
     parts.append(f'<p class="meta">Coach: {_esc(source)}. Every number above appears in the cited '
                  "evidence; points that failed that check are not shown.</p>")
     if result.coach_pending and coach_url:
-        parts.append(f'<p><button class="action" data-post="{_esc(coach_url)}">Get AI coaching</button>'
+        attr = "data-stream" if coach_url.endswith("/stream") else "data-post"
+        parts.append(f'<p><button class="action" {attr}="{_esc(coach_url)}">Get AI coaching</button>'
                      '<span class="status"></span></p>')
     return "".join(parts)
 
@@ -389,6 +390,49 @@ def _table_view(curves: list[dict[str, Any]], group: str) -> str:
 # Buttons with data-post="url" POST there and reload the page when it answers. Used for
 # "Get AI coaching"; sync has its own progress loop on the player page.
 ACTION_JS = r"""
+// Streaming coaching: points appear as soon as they're written and pass the grounding
+// check; the final answer replaces them via a reload (it's cached by then).
+for (const b of document.querySelectorAll('button[data-stream]')) {
+  b.addEventListener('click', async () => {
+    const status = b.parentElement.querySelector('.status');
+    const card = b.closest('.coach');
+    const live = document.createElement('div');
+    card.insertBefore(live, b.parentElement);
+    b.disabled = true; status.textContent = 'Writing coaching...';
+    try {
+      const r = await fetch(b.dataset.stream, {method: 'POST'});
+      if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+      const reader = r.body.getReader(), dec = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const {value, done} = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, {stream: true});
+        let cut;
+        while ((cut = buf.indexOf('\n\n')) >= 0) {
+          const line = buf.slice(0, cut); buf = buf.slice(cut + 2);
+          if (!line.startsWith('data: ')) continue;
+          const ev = JSON.parse(line.slice(6));
+          if (ev.type === 'point') {
+            const p = document.createElement('div'); p.className = 'point';
+            const k = document.createElement('div'); k.className = 'kind';
+            k.textContent = (ev.point.kind === 'weakness' ? 'work on' : 'strength') + ' · ' + ev.point.area;
+            const t = document.createElement('h4'); t.textContent = ev.point.title;
+            const e = document.createElement('p'); e.textContent = ev.point.explanation;
+            const a = document.createElement('p'); a.className = 'advice'; a.textContent = ev.point.advice;
+            p.append(k, t, e, a); live.append(p);
+          } else if (ev.type === 'retrying') {
+            status.textContent = 'Checking every number against the evidence...';
+          } else if (ev.type === 'error') {
+            throw new Error(ev.message);
+          } else if (ev.type === 'final') {
+            location.reload();
+          }
+        }
+      }
+    } catch (e) { b.disabled = false; status.textContent = 'Failed: ' + e.message; }
+  });
+}
 for (const b of document.querySelectorAll('button[data-post]')) {
   b.addEventListener('click', async () => {
     const status = b.parentElement.querySelector('.status');

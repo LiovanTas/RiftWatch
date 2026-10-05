@@ -24,6 +24,8 @@ Token economy (default model: Claude Sonnet 5.5):
 
 from __future__ import annotations
 
+import json
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -256,3 +258,114 @@ class Coach:
         clean, dropped = without_violations(output, problems)
         clean.points = clean.points[:MAX_POINTS]
         return CoachRun(clean, dropped, first, problems, attempts, resp.model, usage)
+
+
+# -- streaming ------------------------------------------------------------------------------------
+
+def completed_points(text: str) -> list[dict[str, Any]]:
+    """Point objects that are fully written in a partial JSON answer.
+
+    Scans the "points" array tracking brackets and strings, so a point is returned only once
+    its closing brace has arrived. Anything unparseable is skipped; the final answer is always
+    parsed and validated in full anyway.
+    """
+    start = text.find('"points"')
+    if start < 0:
+        return []
+    start = text.find("[", start)
+    if start < 0:
+        return []
+    out, depth, in_str, esc, obj_start = [], 0, False, False, -1
+    for i in range(start + 1, len(text)):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            if depth == 0:
+                obj_start = i
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0 and obj_start >= 0:
+                try:
+                    out.append(json.loads(text[obj_start:i + 1]))
+                except json.JSONDecodeError:
+                    pass
+        elif c == "]" and depth == 0:
+            break
+    return out
+
+
+def _stream_events(coach: "Coach", evidence: EvidenceSet, task: str) -> Iterator[dict[str, Any]]:
+    """First attempt, streamed: yields {"type": "point", ...} for each point the moment it is
+    complete *and* passes the grounding check on its own; returns the final response."""
+    import anthropic
+
+    user = f"Coach the player on {task}.\n\nEvidence:\n{evidence.to_prompt()}"
+    messages = [{"role": "user", "content": user}]
+    sent = 0
+    text = ""
+    try:
+        with coach.client.beta.messages.stream(**coach._request(messages)) as stream:
+            for chunk in stream.text_stream:
+                text += chunk
+                points = completed_points(text)
+                for raw in points[sent:]:
+                    sent += 1
+                    try:
+                        point = CoachPoint(**raw)
+                    except (TypeError, ValueError):
+                        continue
+                    if not validate(CoachOutput(headline="", points=[point]), evidence):
+                        yield {"type": "point", "point": point.model_dump()}
+            resp = stream.get_final_message()
+    except anthropic.APIStatusError as exc:
+        raise CoachError(f"Anthropic API error {exc.status_code}: {exc.message}") from exc
+    except anthropic.APIConnectionError as exc:
+        raise CoachError("could not reach the Anthropic API (network)") from exc
+    return messages, resp
+
+
+def write_stream(coach: "Coach", evidence: EvidenceSet, task: str) -> Iterator[dict[str, Any]]:
+    """Stream coaching: grounded points as they complete, then {"type": "done", "run": CoachRun}.
+
+    The final answer goes through exactly the same checks as Coach.write -- full validation,
+    one retry with the violations, failing points dropped -- so the "done" event is the
+    authority; points streamed before it are a preview that already passed on their own.
+    """
+    messages, resp = yield from _stream_events(coach, evidence, task)
+    if resp.stop_reason == "refusal":
+        raise CoachError("the model declined to write this coaching")
+    if resp.stop_reason == "max_tokens" or resp.parsed_output is None:
+        raise CoachError("the coaching answer was incomplete")
+    usage: dict[str, Any] = {}
+    _accumulate(usage, resp)
+    output: CoachOutput = resp.parsed_output
+    first = problems = validate(output, evidence)
+    attempts = 1
+    while problems and attempts <= coach.max_retries:
+        yield {"type": "retrying", "violations": [str(v) for v in problems]}
+        messages.append({"role": "assistant", "content": _echo(resp.content)})
+        messages.append({"role": "user", "content": (
+            "Your answer failed the grounding check:\n"
+            + "\n".join(f"- {p}" for p in problems)
+            + "\n\nReturn the full answer again with these fixed. Remove a number rather "
+              "than guess one, and cite the evidence that contains each number you keep."
+        )})
+        resp = coach._call(messages)
+        _accumulate(usage, resp)
+        attempts += 1
+        output = resp.parsed_output
+        problems = validate(output, evidence)
+    usage["cost_usd"] = cost_usd(coach.model, usage)
+    clean, dropped = without_violations(output, problems)
+    clean.points = clean.points[:MAX_POINTS]
+    yield {"type": "done", "run": CoachRun(clean, dropped, first, problems, attempts, resp.model, usage)}
