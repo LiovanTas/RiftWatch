@@ -148,7 +148,9 @@ for AI coaching on a game or on your recent games.
 
 Pages never wait on Riot or the LLM: they read Postgres only. Downloads are background jobs
 behind one shared rate limiter, repeat Update presses within a minute reuse the same job, and
-coaching is generated only when asked for, then served from cache.
+coaching is generated only when asked for, then served from cache. Jobs live in Postgres, so
+several server processes can share them; workers claim them with `FOR UPDATE SKIP LOCKED`,
+take the next one from whoever has the least work running, and retry a job whose worker died.
 
 | Endpoint | Median on real data |
 |---|---|

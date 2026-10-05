@@ -17,7 +17,7 @@ def web(request):
     from riftwatch.db.connection import connect
     from riftwatch.features import store
     from riftwatch.web.app import create_app
-    from riftwatch.web.jobs import JobManager
+    from riftwatch.web.jobs import JobQueue
     from tests.fixtures import build_game
     from riftwatch.coach.grounding import CoachOutput
     from tests.test_coach import fake_coach, point
@@ -38,12 +38,12 @@ def web(request):
         bl.build(conn)
         bl.invalidate_cache()
 
-    pool = ConnectionPool(TEST_DB, min_size=1, max_size=4, open=True, kwargs={"autocommit": True})
+    pool = ConnectionPool(TEST_DB, min_size=1, max_size=6, open=True, kwargs={"autocommit": True})
+    jobs = JobQueue(pool, workers=2, cooldown_s=60)
     api = FakeApi(5)
     # Cites only the context item and states no numbers, so it passes grounding for any game.
     ok = CoachOutput(headline="Review.", points=[point(evidence_ids=["E1"], explanation="A game.")])
     coach, coach_calls = fake_coach(ok, ok, ok)
-    jobs = JobManager(workers=2, cooldown_s=60)
     settings = Settings.from_env({"RIFTWATCH_DATABASE_URL": TEST_DB})
     app = create_app(settings, api=api, coach=coach, pool=pool, jobs=jobs)
     with TestClient(app) as client:

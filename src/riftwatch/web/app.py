@@ -30,7 +30,7 @@ from riftwatch.riot.api import RiotApi
 from riftwatch.riot.client import RiotApiError, RiotClient
 from riftwatch.riot.routing import RiotId, UnknownRegion, parse_riot_id, platform_for
 from riftwatch.web import pages, serialize
-from riftwatch.web.jobs import JobManager
+from riftwatch.web.jobs import JobQueue
 
 
 def parse_path_riot_id(text: str) -> RiotId:
@@ -45,7 +45,7 @@ class Services:
     """Everything a request handler needs, shared across requests."""
 
     def __init__(self, settings: Settings, pool: ConnectionPool, api: RiotApi | None,
-                 coach: Coach | None, jobs: JobManager) -> None:
+                 coach: Coach | None, jobs: JobQueue) -> None:
         self.settings, self.pool, self.api, self.coach, self.jobs = settings, pool, api, coach, jobs
 
     def require_api(self) -> RiotApi:
@@ -60,7 +60,7 @@ def create_app(
     api: RiotApi | None = None,
     coach: Coach | None = None,
     pool: ConnectionPool | None = None,
-    jobs: JobManager | None = None,
+    jobs: JobQueue | None = None,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     if api is None and settings.riot_api_key:
@@ -82,12 +82,31 @@ def create_app(
         settings.database_url, min_size=1, max_size=8, open=False,
         kwargs={"autocommit": True, "connect_timeout": 5},
     )
-    services = Services(settings, pool, api, coach, jobs or JobManager())
+    services = Services(settings, pool, api, coach, jobs or JobQueue(pool))
+
+    def sync_job(params: dict[str, Any], progress) -> dict[str, Any]:
+        """Runs in whichever server process claims the job, so it rebuilds what it needs
+        from its parameters."""
+        riot = services.require_api()
+        rid = RiotId(params["game_name"], params["tag_line"])
+        with pool.connection() as conn:
+            result = Ingestor(conn, riot).sync(rid, params["platform"], count=params["count"],
+                                               progress=progress)
+            for match_id in result.new_matches:
+                game = feature_store.load(conn, match_id)
+                if game is not None:
+                    feature_store.save(conn, game)
+            progress(f"analysed {len(result.new_matches)} new game(s)")
+            return {"riot_id": result.riot_id, "new_matches": len(result.new_matches),
+                    "already_cached": result.already_cached, "failed": len(result.failed)}
+
+    services.jobs.register("sync", sync_job)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if owns_pool:
             pool.open()
+        services.jobs.start()
         yield
         services.jobs.shutdown()
         if owns_pool:
@@ -183,29 +202,20 @@ def create_app(
                     "limit": limit, "offset": offset}
 
     @app.post("/api/players/{region}/{riot_id}/sync", status_code=202)
-    def sync(region: str, riot_id: str, count: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
+    def sync(request: Request, region: str, riot_id: str,
+             count: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
         platform = platform_for(region)
         rid = parse_path_riot_id(riot_id)
-        riot = services.require_api()
-
-        def work(progress) -> dict[str, Any]:
-            with pool.connection() as conn:
-                result = Ingestor(conn, riot).sync(rid, platform, count=count, progress=progress)
-                for match_id in result.new_matches:
-                    game = feature_store.load(conn, match_id)
-                    if game is not None:
-                        feature_store.save(conn, game)
-                progress(f"analysed {len(result.new_matches)} new game(s)")
-                return {"riot_id": result.riot_id, "new_matches": len(result.new_matches),
-                        "already_cached": result.already_cached,
-                        "failed": len(result.failed)}
-
+        services.require_api()
         key = f"sync:{platform}:{rid.game_name.lower()}#{rid.tag_line.lower()}"
-        job, created = services.jobs.submit(key, "sync", work)
+        owner = request.client.host if request.client else "anonymous"
+        job, created = services.jobs.submit(
+            key, "sync", {"platform": platform, "game_name": rid.game_name,
+                          "tag_line": rid.tag_line, "count": count}, owner=owner)
         return {"job": job.to_json(), "created": created}
 
     @app.get("/api/jobs/{job_id}")
-    def job_status(job_id: str) -> dict[str, Any]:
+    def job_status(job_id: int) -> dict[str, Any]:
         job = services.jobs.get(job_id)
         if job is None:
             raise HTTPException(404, "no such job")

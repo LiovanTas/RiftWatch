@@ -363,7 +363,7 @@ def test_stream_endpoint_streams_then_caches(conn):
     from riftwatch.db import repo
     from riftwatch.features import store
     from riftwatch.web.app import create_app
-    from riftwatch.web.jobs import JobManager
+    from riftwatch.web.jobs import JobQueue
 
     for i in range(25):
         mid = f"NA1_{5000 + i}"
@@ -381,7 +381,7 @@ def test_stream_endpoint_streams_then_caches(conn):
     coach, messages = fake_coach(ok)
     pool = ConnectionPool(TEST_DB, min_size=1, max_size=3, open=True, kwargs={"autocommit": True})
     app = create_app(Settings.from_env({"RIFTWATCH_DATABASE_URL": TEST_DB}), api=None, coach=coach,
-                     pool=pool, jobs=JobManager())
+                     pool=pool, jobs=JobQueue(pool))
     with TestClient(app) as client:
         r = client.post("/api/players/na/Me-NA1/matches/NA1_5000/coach/stream")
         assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
