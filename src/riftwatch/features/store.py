@@ -79,7 +79,20 @@ def load(conn: psycopg.Connection, match_id: str) -> GameFeatures | None:
     timeline = repo.get_timeline(conn, match_id)
     if match is None or timeline is None:
         return None
-    return extract(match, timeline)
+    return extract(match, timeline, items=_item_rules(match["info"]["gameVersion"]))
+
+
+_ddragon = None
+
+
+def _item_rules(game_version: str):
+    """Item rules for a patch, from Data Dragon (cached on disk per version)."""
+    global _ddragon
+    if _ddragon is None:
+        from riftwatch.riot.ddragon import DataDragon
+
+        _ddragon = DataDragon()
+    return _ddragon.item_rules(game_version)
 
 
 def load_stored(conn: psycopg.Connection, match_id: str) -> GameFeatures | None:

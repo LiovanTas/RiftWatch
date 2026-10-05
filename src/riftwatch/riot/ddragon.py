@@ -39,6 +39,7 @@ class DataDragon:
         self._versions: list[str] | None = None
         self._champions: dict[str, dict[int, str]] = {}
         self._items: dict[str, dict[int, str]] = {}
+        self._rules: dict[str, object] = {}
 
     def close(self) -> None:
         self._http.close()
@@ -80,6 +81,21 @@ class DataDragon:
                 int(c["key"]): c["name"] for c in data["data"].values()
             }
         return self._champions[version]
+
+    def item_data(self, version: str) -> dict:
+        return self._cached_json(version, "item.json", f"/cdn/{version}/data/en_US/item.json")["data"]
+
+    def item_rules(self, game_version: str):
+        """Legendary/boots rules for the patch a game was played on (None if offline)."""
+        from riftwatch.features.items import ItemRules
+
+        try:
+            version = self.version_for(game_version)
+            if version not in self._rules:
+                self._rules[version] = ItemRules.from_ddragon(self.item_data(version))
+            return self._rules[version]
+        except (httpx.HTTPError, OSError, KeyError, ValueError):
+            return None
 
     def items(self, version: str) -> dict[int, str]:
         if version not in self._items:

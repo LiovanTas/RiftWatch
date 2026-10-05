@@ -20,7 +20,7 @@ from riftwatch.features.map import readable, zone
 from riftwatch.riot.ddragon import patch_of
 
 # Bump when extraction logic changes; stored rows with an older version get re-extracted.
-EXTRACTOR_VERSION = 3
+EXTRACTOR_VERSION = 4
 
 ROLES = ("TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY")
 EPIC_MONSTERS = ("DRAGON", "BARON_NASHOR", "RIFTHERALD", "HORDE", "ATAKHAN", "ELDER_DRAGON")
@@ -149,7 +149,9 @@ def _cs(pf: dict[str, Any]) -> tuple[int, int]:
     return pf.get("minionsKilled", 0), pf.get("jungleMinionsKilled", 0)
 
 
-def extract(match: dict[str, Any], timeline: dict[str, Any]) -> GameFeatures:
+def extract(match: dict[str, Any], timeline: dict[str, Any], items=None) -> GameFeatures:
+    """``items`` (features.items.ItemRules for the game's patch) adds build timings; without
+    it -- e.g. offline -- those metrics are simply absent."""
     info = match["info"]
     match_id = match["metadata"]["matchId"]
     duration_s = int(info["gameDuration"]) if "gameEndTimestamp" in info else int(info["gameDuration"] // 1000)
@@ -321,6 +323,10 @@ def extract(match: dict[str, Any], timeline: dict[str, Any]) -> GameFeatures:
                 m[f"gold_diff_at_{checkpoint}"] = row.gold_diff
                 m[f"xp_diff_at_{checkpoint}"] = row.xp_diff
                 m[f"cs_diff_at_{checkpoint}"] = row.cs_diff
+        if items is not None:
+            from riftwatch.features.items import build_timings
+
+            m.update(build_timings(events, pid, items))
         f.metrics = {k: round(float(v), 4) for k, v in m.items()}
 
     return GameFeatures(

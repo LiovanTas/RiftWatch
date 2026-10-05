@@ -55,7 +55,9 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
 - [x] Situation / decision / outcome examples for all five roles, with player-known features only
 - [x] Decision and outcome models per role, evaluated by game against baselines
 - [x] Advisor: key moments in the player's games, fed to the coach and shown in the review
-- [ ] Camp respawn timers and lane states as features (the decision models' weak spot)
+- [x] Objective timers as features (dragon, grubs, herald; spawn rules measured from 16.19 games).
+      Measured gain was tiny (jungle 53.0% -> 53.4%): with one snapshot a minute the decision
+      models are at their ceiling, so further gains need finer-grained data, not more features
 - [ ] Champion-specific comparisons once there's enough data per champion
 
 ## In-game data
@@ -67,8 +69,7 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
 
 ## Later
 
-- [ ] Build timing: when the first and second legendary items were finished, against the
-      comparison group (from `ITEM_PURCHASED` events)
+- [x] Build timing: first and second legendary items and boots, against players at your rank
 - [ ] Live-game scouting via spectator-v5, using cached history for all ten players
 - [ ] Matchup-specific baselines (champion vs champion) once the crawl is large enough
 - [ ] Arena and ARAM support (different timelines, different metrics)
