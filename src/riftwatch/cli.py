@@ -6,6 +6,7 @@ import argparse
 import sys
 from datetime import UTC, datetime
 
+import psycopg
 from dotenv import load_dotenv
 
 from riftwatch import __version__
@@ -49,7 +50,12 @@ def _client_stats(api: RiotApi) -> str:
     parts.append(f"{rl} rate-limited (429)")
     if s["retries"]:
         parts.append(f"{s['retries']} retries")
-    return ", ".join(parts)
+    lines = [", ".join(parts)]
+    for hit in api.client.rate_limited:
+        lines.append(f"    429 from {hit['type']} limit on {hit['routing']} {hit['method']}: "
+                     f"retry-after {hit['retry_after']}, app count {hit['app_count']}, "
+                     f"method count {hit['method_count']}")
+    return "\n".join(lines)
 
 
 def cmd_doctor(settings: Settings, _args: argparse.Namespace) -> int:
@@ -172,23 +178,38 @@ def cmd_features(settings: Settings, args: argparse.Namespace) -> int:
 
 def cmd_crawl(settings: Settings, args: argparse.Namespace) -> int:
     api = _api(settings)
-    tiers = [t.strip().upper() for t in args.tiers.split(",")] if args.tiers else baseline_crawl.DEFAULT_TIERS
+    if args.high_elo:
+        tiers = baseline_crawl.HIGH_ELO_TIERS
+    elif args.tiers:
+        tiers = [t.strip().upper() for t in args.tiers.split(",")]
+    else:
+        tiers = baseline_crawl.DEFAULT_TIERS
+    regions = ([r.strip() for r in args.regions.split(",") if r.strip()] if args.regions
+               else [_platform(settings, args)])
+    reports = baseline_crawl.crawl_regions(
+        settings.database_url, api, regions, connect=connect, progress=print, tiers=tiers,
+        players_per_division=args.players, matches_per_player=args.matches,
+        max_age_days=args.days,
+    )
     with connect(settings.database_url) as conn:
-        report = baseline_crawl.crawl(
-            conn, Ingestor(conn, api), _platform(settings, args), tiers=tiers,
-            players_per_division=args.players, matches_per_player=args.matches,
-            max_age_days=args.days, progress=print,
-        )
         feature_store.extract_pending(conn)
         counts = baseline_crawl.sample_counts(conn)
-    print(f"sampled {report.players} players: {report.matches_new} games downloaded, "
-          f"{report.matches_cached} already cached")
+        apex = baseline_crawl.high_elo_counts(conn)
+    for r in reports:
+        state = f"stopped: {r.error}" if r.error else "done"
+        print(f"{r.platform}: sampled {r.players} players, {r.matches_new} games downloaded, "
+              f"{r.matches_cached} already cached ({state})")
     print(f"  {_client_stats(api)}")
     print("crawled games per tier bucket (all crawls so far):")
     for bucket in baseline_build.TIER_ORDER:
         if bucket in counts:
             print(f"  {bucket:<12} {counts[bucket]}")
-    return 0
+    if apex:
+        print("games found through each apex tier:")
+        for tier in baseline_crawl.HIGH_ELO_TIERS:
+            if tier in apex:
+                print(f"  {tier:<12} {apex[tier]}")
+    return 0 if not any(r.error for r in reports) else 1
 
 
 def cmd_baselines(settings: Settings, args: argparse.Namespace) -> int:
@@ -333,7 +354,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("crawl", help="sample ladder games from each tier for baselines")
     _add_region(p)
+    p.add_argument("--regions", help="crawl several regions at once, e.g. na,euw,kr")
     p.add_argument("--tiers", help="comma list, e.g. GOLD,PLATINUM (default: Iron..Master)")
+    p.add_argument("--high-elo", action="store_true", help="Challenger, Grandmaster and Master")
     p.add_argument("--players", type=int, default=2, help="players per division (default 2)")
     p.add_argument("--matches", type=int, default=5, help="ranked games per player (default 5)")
     p.add_argument("--days", type=float, default=baseline_crawl.DEFAULT_MAX_AGE_DAYS,
@@ -397,6 +420,10 @@ def main(argv: list[str] | None = None) -> int:
         return args.func(Settings.from_env(), args)
     except (ConfigError, NotFound, RiotApiError, ReportError, CoachError, ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except psycopg.OperationalError as exc:
+        print(f"error: database unreachable ({str(exc).splitlines()[0]}); "
+              "start it with: docker compose up -d db", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)

@@ -222,3 +222,66 @@ def test_crawl_rejects_unknown_tier(conn):
 
     with pytest.raises(ValueError):
         crawl(conn, Ingestor(conn, CrawlApi()), "na", tiers=["WOOD"])
+
+
+class PagedApi(CrawlApi):
+    """A ladder with distinct players on each page, ending after `pages` pages."""
+
+    def __init__(self, per_page=5, pages=3):
+        super().__init__()
+        self.per_page, self.pages = per_page, pages
+
+    def league_entries(self, platform, tier, division, queue="RANKED_SOLO_5x5", page=1):
+        self.ladder_calls.append((tier, division, page))
+        if page > self.pages:
+            return []
+        return [{"puuid": f"{platform}-{tier}-{page}-{i}"} for i in range(self.per_page)]
+
+
+def test_crawl_pages_the_ladder_and_records_exact_tier(conn):
+    from riftwatch.baselines import crawl as crawl_mod
+    from riftwatch.ingest import Ingestor
+
+    api = PagedApi(per_page=5, pages=3)
+    report = crawl(conn, Ingestor(conn, api), "kr", tiers=["CHALLENGER"],
+                   players_per_division=12, matches_per_player=2, rng=random.Random(3))
+    # Wants 24 candidates, so it reads every page (15 players) and samples 12 of them.
+    assert [c[2] for c in api.ladder_calls] == [1, 2, 3, 4]
+    assert report.players == 12
+    tiers = {r[0] for r in conn.execute("SELECT DISTINCT tier FROM crawl_player_matches")}
+    assert tiers == {"CHALLENGER"}
+    assert crawl_mod.high_elo_counts(conn)["CHALLENGER"] == report.matches_new + report.matches_cached
+    assert sample_counts(conn) == {"MASTER_PLUS": report.matches_new + report.matches_cached}
+
+
+def test_crawl_saves_each_chunk_before_the_next(conn):
+    from riftwatch.ingest import Ingestor
+
+    api = PagedApi(per_page=25, pages=1)
+    calls = {"n": 0}
+
+    def stop_after_first_chunk():
+        calls["n"] += 1
+        return calls["n"] > 1
+
+    crawl(conn, Ingestor(conn, api), "na", tiers=["GRANDMASTER"], players_per_division=25,
+          matches_per_player=1, rng=random.Random(1), should_stop=stop_after_first_chunk)
+    saved = conn.execute("SELECT count(*) FROM crawl_players").fetchone()[0]
+    assert saved == 10       # one chunk, kept even though the crawl stopped
+
+
+def test_crawl_regions_isolates_failures(conn):
+    from riftwatch.baselines.crawl import crawl_regions
+    from riftwatch.db.connection import connect
+
+    class Flaky(PagedApi):
+        def league_entries(self, platform, *a, **k):
+            if platform == "euw1":
+                raise RuntimeError("euw is down")
+            return super().league_entries(platform, *a, **k)
+
+    reports = crawl_regions(TEST_DB, Flaky(per_page=3, pages=1), ["na", "euw"], connect=connect,
+                            tiers=["CHALLENGER"], players_per_division=2, matches_per_player=1)
+    by = {r.platform: r for r in reports}
+    assert by["na1"].error is None and by["na1"].players == 2
+    assert by["euw1"].error == "RuntimeError: euw is down"

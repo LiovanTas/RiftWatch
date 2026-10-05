@@ -188,3 +188,12 @@ def test_key_never_appears_in_errors_or_repr():
         client.get("na1", "m", "/x")
     assert KEY not in str(exc.value)
     assert KEY not in repr(client)
+
+
+def test_429_details_are_recorded():
+    client, *_ = make([status(429, **h(Retry_After="2", X_Rate_Limit_Type="method",
+                                       X_Method_Rate_Limit_Count="2001:10")), ok()])
+    client.get("americas", "match-v5.timeline", "/x")
+    [hit] = client.rate_limited
+    assert (hit["type"], hit["method"], hit["retry_after"], hit["method_count"]) == \
+        ("method", "match-v5.timeline", 2.0, "2001:10")

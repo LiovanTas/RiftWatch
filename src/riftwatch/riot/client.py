@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import random
 import threading
+import time
 from collections import Counter
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -76,6 +77,8 @@ class RiotClient:
         )
         # requests, retries, 429:application / 429:method / 429:service, 5xx, network_errors
         self.stats: Counter[str] = Counter()
+        # Every 429, so a rate-limit hit can be traced to whose limit it was.
+        self.rate_limited: list[dict[str, Any]] = []
         self._stats_lock = threading.Lock()  # get() runs on several threads at once
 
     def __repr__(self) -> str:
@@ -139,6 +142,13 @@ class RiotClient:
                 kind = response.headers.get("x-rate-limit-type", "service").lower()
                 self._count(f"429:{kind}")
                 wait = _retry_after(response.headers)
+                with self._stats_lock:
+                    self.rate_limited.append({
+                        "type": kind, "routing": routing, "method": method,
+                        "retry_after": wait, "at": time.time(),
+                        "app_count": response.headers.get("x-app-rate-limit-count"),
+                        "method_count": response.headers.get("x-method-rate-limit-count"),
+                    })
                 if wait is None:
                     wait = self._backoff(attempt)
                 # An application 429 means every endpoint on this host is over quota.
