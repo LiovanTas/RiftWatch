@@ -24,6 +24,7 @@ recalls, rotations and the *results* of laning (CS, levels, kills), not individu
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -49,6 +50,10 @@ LAST_MINUTE = 15        # last minute whose *decision* is labelled (needs frame 
 OUTCOME_MINUTES = 3     # how far ahead outcomes look
 
 _EPIC = {"DRAGON", "ELDER_DRAGON", "HORDE", "RIFTHERALD", "BARON_NASHOR", "ATAKHAN"}
+# Spawn timings in minutes, measured on patch 16.19 (see _example).
+DRAGON_SPAWN, DRAGON_RESPAWN = 5.0, 5.0
+GRUBS_SPAWN = 8.0
+HERALD_SPAWN = 15.0
 
 # Lane centerlines in game units. "In lane" means within LANE_WIDTH of one: the coarse map
 # zones used elsewhere put blue's gromp inside "top lane", which made clearing a camp look
@@ -165,6 +170,21 @@ class _Game:
         self.by_team_role = {(self.team_of[pid], self.role_of[pid]): pid for pid in self.parts}
         self.frames = _minute_frames(timeline)
         self.events = _events(timeline)
+        # Events are sorted by time; per-type lists plus their timestamps let each example
+        # take "everything up to t" with a binary search instead of rescanning the game.
+        self.times = [e["timestamp"] for e in self.events]
+        self.by_type: dict[str, list[dict[str, Any]]] = {}
+        for e in self.events:
+            self.by_type.setdefault(e["type"], []).append(e)
+        self.type_times = {k: [e["timestamp"] for e in v] for k, v in self.by_type.items()}
+
+    def upto(self, etype: str, t: float) -> list[dict[str, Any]]:
+        """Events of ``etype`` with timestamp <= t."""
+        return self.by_type.get(etype, [])[:bisect_right(self.type_times.get(etype, []), t)]
+
+    def between(self, t_from: float, t_to: float) -> list[dict[str, Any]]:
+        """All events with t_from < timestamp <= t_to."""
+        return self.events[bisect_right(self.times, t_from):bisect_right(self.times, t_to)]
 
     def who(self, team: int, role: str) -> int | None:
         return self.by_team_role.get((team, role))
@@ -203,17 +223,16 @@ def _example(g: _Game, pid: int, role: str, m: int) -> Example:
             return 0.0
         return float((frame or g.frames[m])["participantFrames"][str(who)].get(key, 0))
 
-    past = [e for e in g.events if e["timestamp"] <= t0]
-    kills = [e for e in past if e["type"] == "CHAMPION_KILL"]
-    epics = [e for e in past if e["type"] == "ELITE_MONSTER_KILL" and e.get("monsterType") in _EPIC]
+    kills = g.upto("CHAMPION_KILL", t0)
+    epics = [e for e in g.upto("ELITE_MONSTER_KILL", t0) if e.get("monsterType") in _EPIC]
     team_of = g.team_of
 
     def team_count(evts, side, mtype=None) -> int:
         return sum(team_of.get(e.get("killerId")) == side
                    and (mtype is None or e.get("monsterType") == mtype) for e in evts)
 
-    plates = [e for e in past if e["type"] == "TURRET_PLATE_DESTROYED"]
-    towers = [e for e in past if e["type"] == "BUILDING_KILL"]
+    plates = g.upto("TURRET_PLATE_DESTROYED", t0)
+    towers = g.upto("BUILDING_KILL", t0)
     main_cs = "jungleMinionsKilled" if role == "JUNGLE" else "minionsKilled"
     f: dict[str, float] = {
         "minute": m,
@@ -242,6 +261,20 @@ def _example(g: _Game, pid: int, role: str, m: int) -> Example:
         "died_recently": float(any(e.get("victimId") == pid and t0 - e["timestamp"] < 60_000
                                    for e in kills)),
     }
+    # Objective timers everyone can see. Spawn rules measured from 600 patch 16.19 games
+    # (earliest kills and shortest respawn gaps), not taken from patch notes.
+    now = t0 / 60_000
+    dragons = sorted(e["timestamp"] / 60_000 for e in epics if e.get("monsterType") == "DRAGON")
+    next_dragon = (dragons[-1] + DRAGON_RESPAWN) if dragons else DRAGON_SPAWN
+    f["dragon_up_in"] = round(min(max(next_dragon - now, -5.0), 10.0), 2)
+    f["dragon_up"] = float(next_dragon <= now)
+    grubs_taken = any(e.get("monsterType") == "HORDE" for e in epics)
+    f["grubs_up_in"] = round(min(max(GRUBS_SPAWN - now, 0.0), 10.0), 2)
+    f["grubs_up"] = float(now >= GRUBS_SPAWN and not grubs_taken)
+    herald_taken = any(e.get("monsterType") == "RIFTHERALD" for e in epics)
+    f["herald_up_in"] = round(min(max(HERALD_SPAWN - now, 0.0), 15.0), 2)
+    f["herald_up"] = float(now >= HERALD_SPAWN and not herald_taken)
+
     cs_1 = stat(pid, main_cs, g.frames[m - 1])
     cs_2 = stat(pid, main_cs, g.frames[max(m - 2, 0)])
     f["cs_gain_1m"] = f["cs"] - cs_1
@@ -290,8 +323,8 @@ def _example(g: _Game, pid: int, role: str, m: int) -> Example:
         f["duo_dist"] = round(_dist(pos, _pos(g.frames[m], partner)) / 1000, 3)
         f["duo_level_diff"] = stat(partner, "level") - stat(g.who(enemy, g.role_of.get(partner, "")), "level")
     if role == "UTILITY":
-        f["wards_placed"] = float(sum(e["type"] == "WARD_PLACED" and e.get("creatorId") == pid
-                                      and e.get("wardType") in REAL_WARDS for e in past))
+        f["wards_placed"] = float(sum(e.get("creatorId") == pid and e.get("wardType") in REAL_WARDS
+                                      for e in g.upto("WARD_PLACED", t0)))
 
     # Where the enemy jungler was last *seen*: fights on the kill feed and minimap only.
     seen = [e for e in kills if enemy_jg is not None and (
@@ -318,7 +351,7 @@ def _example(g: _Game, pid: int, role: str, m: int) -> Example:
         f["minutes_since_farm"] = float(m - last_gain)
 
     npos = _pos(g.frames[m + 1], pid) or {"x": 0, "y": 0}
-    window = [e for e in g.events if t0 < e["timestamp"] <= t1]
+    window = g.between(t0, t1)
     cs_gain_next = stat(pid, main_cs, g.frames[m + 1]) - f["cs"]
     if role == "JUNGLE":
         decision = _jungle_decision(g, pid, npos, window, cs_gain_next, m)
@@ -326,7 +359,7 @@ def _example(g: _Game, pid: int, role: str, m: int) -> Example:
         decision = _laner_decision(g, pid, role, npos, window, m)
     # Outcomes start *after* the decision minute: an objective taken as the decision must
     # not count as its own outcome (that made "objective -> objective" a certainty).
-    ahead = [e for e in g.events if t1 < e["timestamp"] <= t1 + OUTCOME_MINUTES * 60_000]
+    ahead = g.between(t1, t1 + OUTCOME_MINUTES * 60_000)
     return Example(g.match_id, pid, g.parts[pid]["championId"], team, role, m, f, decision,
                    _outcome(g, pid, role, ahead, m))
 

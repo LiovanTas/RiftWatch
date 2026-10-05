@@ -203,3 +203,15 @@ def test_enemy_jungler_last_seen_comes_only_from_visible_fights():
     assert seen.features["enemy_jg_seen_minutes_ago"] == pytest.approx(2.0, abs=0.01)
     assert seen.features["enemy_jg_seen_on_our_half"] == 1.0
     assert seen.features["enemy_jg_seen_topside"] == 1.0
+
+
+def test_objective_timers():
+    ex = {e.minute: e for e in examples([monster(310_000, 2, assists=[4])]) if e.participant_id == 2}
+    assert ex[3].features["dragon_up_in"] == pytest.approx(2.0, abs=0.01)    # first spawn 5:00
+    assert ex[5].features["dragon_up"] == 1.0
+    # Taken at 5:10 -> back at 10:10.
+    assert ex[6].features["dragon_up"] == 0.0
+    assert ex[6].features["dragon_up_in"] == pytest.approx(10.1667 - 6.0, abs=0.01)
+    assert ex[7].features["grubs_up_in"] == pytest.approx(1.0, abs=0.01)
+    assert ex[9].features["grubs_up"] == 1.0
+    assert ex[14].features["herald_up_in"] == pytest.approx(1.0, abs=0.01)
