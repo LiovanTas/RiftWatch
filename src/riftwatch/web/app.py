@@ -69,6 +69,13 @@ def create_app(
     if coach is None and settings.anthropic_api_key:
         coach = Coach(settings.coach_model, api_key=settings.anthropic_api_key,
                       effort=settings.coach_effort, thinking=settings.coach_thinking)
+    from pathlib import Path
+
+    advisor = None
+    if any(Path(settings.models_dir).glob("*.joblib")):
+        from riftwatch.ml.advisor import Advisor
+
+        advisor = Advisor(Path(settings.models_dir))
     owns_pool = pool is None
     pool = pool or ConnectionPool(
         settings.database_url, min_size=1, max_size=8, open=False,
@@ -207,7 +214,7 @@ def create_app(
         with pool.connection() as conn:
             account = account_or_404(conn, region, riot_id)
             result = game_report(conn, account["puuid"], match_id, coach=coach,
-                                 generate=generate)
+                                 generate=generate, advisor=advisor)
             return serialize.game_review(result)
 
     @app.get("/api/players/{region}/{riot_id}/matches/{match_id}")
@@ -245,7 +252,8 @@ def create_app(
     def match_page(region: str, riot_id: str, match_id: str) -> HTMLResponse:
         with pool.connection() as conn:
             account = account_or_404(conn, region, riot_id)
-            result = game_report(conn, account["puuid"], match_id, coach=coach, generate=False)
+            result = game_report(conn, account["puuid"], match_id, coach=coach, generate=False,
+                                 advisor=advisor)
         coach_url = (f"/api/players/{region}/{riot_id}/matches/{match_id}/coach"
                      if coach is not None else None)
         links = [("RiftWatch", "/"),

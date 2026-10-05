@@ -131,6 +131,79 @@ def cmd_sync(settings: Settings, args: argparse.Namespace) -> int:
     print(f"{result.riot_id}: {_rank_text(result.rank)}")
     print(f"  {len(result.new_matches)} new match(es), {result.already_cached} already cached")
     print(f"  {_client_stats(api)}")
+    _import_recordings(settings, quiet=True)
+    return 0
+
+
+def _import_recordings(settings: Settings, quiet: bool = False) -> None:
+    """Import live recordings and link them to synced matches (cheap; runs after sync)."""
+    from riftwatch.live.recorder import default_dir
+    from riftwatch.live.store import import_dir
+
+    directory = default_dir()
+    if not directory.exists():
+        if not quiet:
+            print(f"no recordings yet in {directory}")
+        return
+    with connect(settings.database_url) as conn:
+        report = import_dir(conn, directory)
+    if report.imported or not quiet:
+        print(f"live recordings: {report.imported} imported, {report.linked} linked to matches")
+    for name, why in report.skipped if not quiet else []:
+        print(f"  skipped {name}: {why}")
+
+
+def cmd_ml_dataset(settings: Settings, args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from riftwatch.ml.dataset import build
+
+    tiers = [t.strip().upper() for t in args.tiers.split(",")]
+    with connect(settings.database_url) as conn:
+        report = build(conn, Path(args.out), tiers=tiers, progress=print)
+    print(f"{report.games} games ({report.skipped} skipped) -> {args.out}")
+    for role, n in report.rows.items():
+        print(f"  {role:<8} {n} rows")
+    return 0
+
+
+def cmd_ml_train(settings: Settings, args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from riftwatch.ml.situations import ROLES
+    from riftwatch.ml.train import save, train
+
+    data = Path(args.data)
+    roles = [r.strip().upper() for r in args.roles.split(",")] if args.roles else list(ROLES)
+    print(f"{'role':<8} {'decision acc':>12} {'best baseline':>13} {'top-2':>6} "
+          f"{'objective AUC':>13} {'death AUC':>9}")
+    for role in roles:
+        path = data / f"{role}.parquet"
+        if not path.exists():
+            print(f"{role:<8} no dataset at {path} -- run `riftwatch ml dataset` first")
+            continue
+        trained = train(path)
+        save(trained, Path(settings.models_dir))
+        d, o = trained.metrics["decision"], trained.metrics["outcomes"]
+        best = max(d["baseline_majority_accuracy"], d["baseline_by_minute_accuracy"])
+        def auc(name: str) -> str:
+            value = o.get(name, {}).get("auc")
+            return "n/a" if value is None else f"{value:.3f}"
+
+        print(f"{role:<8} {d['accuracy']:>12.1%} {best:>13.1%} {d['top2_accuracy']:>6.1%} "
+              f"{auc('team_objective'):>13} {auc('player_died'):>9}")
+    print(f"models saved to {settings.models_dir} "
+          f"({trained.metrics['games']} games, tested on {trained.metrics['test_games']} unseen)")
+    return 0
+
+
+def cmd_record(settings: Settings, args: argparse.Namespace) -> int:
+    if args.import_only:
+        _import_recordings(settings)
+        return 0
+    from riftwatch.live.recorder import Recorder
+
+    Recorder().run(interval=args.interval)
     return 0
 
 
@@ -239,6 +312,18 @@ def cmd_baselines(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _advisor(settings: Settings):
+    """The high-elo advisor, if models have been trained (riftwatch ml train)."""
+    from pathlib import Path
+
+    directory = Path(settings.models_dir)
+    if not any(directory.glob("*.joblib")):
+        return None
+    from riftwatch.ml.advisor import Advisor
+
+    return Advisor(directory)
+
+
 def cmd_coach(settings: Settings, args: argparse.Namespace) -> int:
     riot_id = parse_riot_id(args.riot_id)
     coach = None
@@ -258,7 +343,7 @@ def cmd_coach(settings: Settings, args: argparse.Namespace) -> int:
             if match_id is None:
                 raise ReportError("no cached games for this player -- run sync first")
             result = game_report(conn, puuid, match_id, coach=coach, tier=args.tier,
-                                 refresh=args.refresh)
+                                 refresh=args.refresh, advisor=_advisor(settings))
         else:
             result = recent_report(conn, puuid, games=args.games, coach=coach, tier=args.tier,
                                    refresh=args.refresh)
@@ -298,6 +383,14 @@ def cmd_watchdog(settings: Settings, args: argparse.Namespace) -> int:
 
     spec = parse_hotkey(args.hotkey or settings.kill_hotkey)
     log_file = Path(args.log) if args.log else None
+    if args.record:
+        import threading
+
+        from riftwatch.live.recorder import Recorder
+
+        stop = threading.Event()
+        threading.Thread(target=Recorder().run, kwargs={"should_stop": stop.is_set},
+                         daemon=True, name="recorder").start()
     run(spec, auto_kill_after=args.auto_kill_after, hang_threshold=args.hang_seconds,
         log_file=log_file)
     return 0
@@ -391,7 +484,27 @@ def build_parser() -> argparse.ArgumentParser:
                    help="kill a confirmed hang automatically after this long (off by default)")
     p.add_argument("--log", help="append triggers to this file")
     p.add_argument("--status", action="store_true", help="show what the watchdog sees, then exit")
+    p.add_argument("--record", action="store_true",
+                   help="also record each game second by second for post-game analysis")
     p.set_defaults(func=cmd_watchdog)
+
+    ml = sub.add_parser("ml", help="high-elo models: build the dataset, train").add_subparsers(
+        dest="ml_command", required=True)
+    p = ml.add_parser("dataset", help="build per-role training tables from crawled games")
+    p.add_argument("--tiers", default="CHALLENGER,GRANDMASTER",
+                   help="ladder tiers whose games to use (default CHALLENGER,GRANDMASTER)")
+    p.add_argument("--out", default="out/ml/data", help="where to write the tables")
+    p.set_defaults(func=cmd_ml_dataset)
+    p = ml.add_parser("train", help="train and evaluate the models for each role")
+    p.add_argument("--data", default="out/ml/data", help="tables from `ml dataset`")
+    p.add_argument("--roles", help="comma list, e.g. JUNGLE,MIDDLE (default: all five)")
+    p.set_defaults(func=cmd_ml_train)
+
+    p = sub.add_parser("record", help="record games second by second from the game client")
+    p.add_argument("--interval", type=float, default=1.0, help="seconds between samples")
+    p.add_argument("--import", dest="import_only", action="store_true",
+                   help="import and link recordings instead of recording")
+    p.set_defaults(func=cmd_record)
 
     p = sub.add_parser("serve", help="run the web API")
     p.add_argument("--host", default="127.0.0.1")

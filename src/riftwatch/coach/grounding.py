@@ -26,7 +26,8 @@ from riftwatch.features.metrics import AREAS
 _IGNORED = re.compile(r"\bE\d+\b|\b\d+v\d+\b", re.IGNORECASE)
 _NUMBER = re.compile(r"(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?|(?<![\w.])\d+(?:\.\d+)?")
 
-Area = Literal["farming", "laning", "fighting", "survival", "vision", "objectives", "economy"]
+Area = Literal["farming", "laning", "fighting", "survival", "vision", "objectives", "economy",
+               "macro"]
 assert set(Area.__args__) == set(AREAS)
 
 

@@ -11,7 +11,8 @@ def test_every_command_parses():
                  ["backfill", "A#B", "--since", "2026-01-01"], ["crawl", "--tiers", "GOLD"],
                  ["crawl", "--high-elo", "--regions", "na,euw,kr", "--players", "50"],
                  ["baselines"], ["features"], ["coach", "A#B", "--last", "--offline"],
-                 ["cache"], ["watchdog", "--status"], ["serve", "--port", "9000"],
+                 ["cache"], ["watchdog", "--status"], ["watchdog", "--record"],
+                 ["record"], ["record", "--import"], ["ml", "dataset"], ["ml", "train", "--roles", "JUNGLE"], ["serve", "--port", "9000"],
                  ["db", "migrate"]):
         assert callable(parser.parse_args(argv).func)
 

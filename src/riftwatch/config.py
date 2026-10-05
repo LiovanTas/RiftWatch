@@ -13,6 +13,7 @@ DEFAULT_COACH_MODEL = "claude-sonnet-5-5"
 DEFAULT_COACH_EFFORT = "low"
 DEFAULT_COACH_THINKING = "adaptive"
 DEFAULT_KILL_HOTKEY = "ctrl+alt+k"
+DEFAULT_MODELS_DIR = "out/ml/models"
 
 
 class ConfigError(RuntimeError):
@@ -29,6 +30,7 @@ class Settings:
     coach_effort: str = DEFAULT_COACH_EFFORT
     coach_thinking: str = DEFAULT_COACH_THINKING
     kill_hotkey: str = DEFAULT_KILL_HOTKEY
+    models_dir: str = DEFAULT_MODELS_DIR
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -42,6 +44,7 @@ class Settings:
             coach_effort=env.get("RIFTWATCH_COACH_EFFORT") or DEFAULT_COACH_EFFORT,
             coach_thinking=env.get("RIFTWATCH_COACH_THINKING") or DEFAULT_COACH_THINKING,
             kill_hotkey=env.get("RIFTWATCH_KILL_HOTKEY") or DEFAULT_KILL_HOTKEY,
+            models_dir=env.get("RIFTWATCH_MODELS_DIR") or DEFAULT_MODELS_DIR,
         )
 
     def require_riot_key(self) -> str:

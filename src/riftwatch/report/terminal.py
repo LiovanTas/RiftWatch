@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from riftwatch.analysis.score import GameScore
-from riftwatch.coach.evidence import ordinal
 from riftwatch.coach.pipeline import CoachResult
 from riftwatch.features.metrics import AREAS
 
@@ -35,7 +34,7 @@ def scorecard(score: GameScore) -> list[str]:
             mark = "!" if s.goodness <= 25 else "+" if s.goodness >= 75 else " "
             lines.append(
                 f"   {mark} {s.metric.label[:44]:<44} {s.metric.show(s.value):>8}  "
-                f"{bar(s.goodness)} {ordinal(s.goodness):>5}  (median {s.metric.show(s.baseline.p50)}, n={s.baseline.n})"
+                f"{bar(s.goodness)} better than {round(s.goodness):>3}%  (median {s.metric.show(s.baseline.p50)}, n={s.baseline.n})"
             )
     return lines
 
@@ -53,6 +52,17 @@ def render(result: CoachResult, *, show_scores: bool = True, show_evidence: bool
         out.append(f"Last {len(result.games)} ranked games, compared against "
                    f"{result.tier_bucket.replace('_', ' ').title()} players")
 
+    if result.live:
+        m = result.live["summary"].get("metrics", {})
+        out.append("")
+        out.append("  live recording (second by second)")
+        out.append(f"   big health losses before 14:00: {int(m.get('early_big_hp_losses', 0))} "
+                   f"(-> recall {int(m.get('early_losses_to_recall', 0))}, "
+                   f"-> death {int(m.get('early_losses_to_death', 0))})")
+        if "avg_recall_hp" in m:
+            out.append(f"   recalls: {int(m['recalls'])}, avg {round(m['avg_recall_hp'] * 100)}% health, "
+                       f"{int(m['avg_recall_gold'])} gold unspent")
+        out.append(f"   burst deaths: {int(m.get('burst_deaths', 0))}")
     out.append("")
     source = ("offline template coach (set ANTHROPIC_API_KEY for the LLM coach)"
               if result.model == "offline" else

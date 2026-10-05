@@ -45,6 +45,8 @@ class CoachResult:
     # True when an LLM coach is configured but its answer isn't cached yet and generation
     # wasn't requested; the output is the offline coach meanwhile.
     coach_pending: bool = False
+    live: dict[str, Any] | None = None   # second-by-second recording, if one is linked
+    review: Any = None                   # comparison with high-elo play (ml.advisor)
 
 
 # -- offline coach -------------------------------------------------------------------------
@@ -62,6 +64,9 @@ _ADVICE = {
               "next objective.",
     "objectives": "Track dragon, grubs, herald and baron timers and be near the pit before "
                   "they spawn.",
+    "macro": "Before moving, check what's up next on the map -- objective timers, which lanes "
+             "are pushed, where the enemy jungler was last seen -- and go where your team is "
+             "strongest.",
     "economy": "Keep collecting gold between fights -- waves, camps and plates -- rather "
                "than idling.",
 }
@@ -202,6 +207,7 @@ def game_report(
     refresh: bool = False,
     min_n: int = 20,
     generate: bool = True,
+    advisor=None,
 ) -> CoachResult:
     game = _game(conn, match_id)
     p = game.by_puuid(puuid)
@@ -209,12 +215,20 @@ def game_report(
         raise ReportError(f"this player is not in {match_id}")
     bucket = player_bucket(conn, puuid, tier)
     score = _score(conn, p, bucket, min_n)
-    evidence = game_evidence(game, score)
+    from riftwatch.live.store import for_match
+
+    live = for_match(conn, match_id)
+    review = None
+    if advisor is not None:
+        raw_match, raw_timeline = repo.get_match(conn, match_id), repo.get_timeline(conn, match_id)
+        if raw_match and raw_timeline:
+            review = advisor.review(raw_match, raw_timeline, puuid)
+    evidence = game_evidence(game, score, live=live, review=review)
     output, model, cached, dropped, usage, pending = _coach(
         conn, coach, puuid, "game", match_id, evidence, "this single game", refresh, p.role,
         generate)
     return CoachResult("game", puuid, bucket, evidence, output, model, cached, dropped, usage,
-                       match_id, [score], [(game, p)], pending)
+                       match_id, [score], [(game, p)], pending, live, review)
 
 
 def recent_report(

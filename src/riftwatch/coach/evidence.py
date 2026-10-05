@@ -25,7 +25,7 @@ MIN_RUN = 4      # minutes a curve must stay weak/strong to count as a pattern
 @dataclass
 class Evidence:
     id: str
-    kind: str          # context | metric | curve | death | trend | pattern
+    kind: str          # context | metric | curve | death | trend | pattern | live
     area: str
     polarity: str      # weakness | strength | neutral
     text: str
@@ -110,8 +110,10 @@ class _Builder:
 
 def _metric_text(s: Score, group: _Group) -> str:
     m = s.metric
-    return (f"{m.label}: {m.show(s.value)}; {ordinal(s.percentile)} percentile"
-            f"{group.suffix(s)}; {_vs_median(m, s.value, s.baseline.p50)}.")
+    # "better than N%" reads the same way for every metric: for deaths it already accounts
+    # for lower being better, so it can't be misread the way a raw percentile can.
+    return (f"{m.label}: {m.show(s.value)}; better than {round(s.goodness)}% of comparable "
+            f"players{group.suffix(s)}; {_vs_median(m, s.value, s.baseline.p50)}.")
 
 
 def _runs(scores: list[Score], test) -> list[list[Score]]:
@@ -148,6 +150,8 @@ def game_evidence(
     max_metric_findings: int = 8,
     max_per_area: int = 2,
     max_deaths: int = 6,
+    live: dict | None = None,
+    review=None,
 ) -> EvidenceSet:
     p = score.participant
     b = _Builder()
@@ -178,7 +182,7 @@ def game_evidence(
         if taken >= max_metric_findings or per_area[s.metric.area] >= max_per_area:
             continue
         b.add("metric", s.metric.area, pol, _metric_text(s, group), severity, metric=s.metric.name,
-              value=s.value, percentile=round(s.percentile, 1), n=s.baseline.n)
+              value=s.value, better_than=round(s.goodness, 1), n=s.baseline.n)
         per_area[s.metric.area] += 1
         taken += 1
 
@@ -192,7 +196,7 @@ def game_evidence(
                 last = run[-1]
                 b.add("curve", m.area, pol,
                       f"From minute {run[0].minute} to minute {last.minute}, {m.label} stayed "
-                      f"{'below the 25th' if pol == 'weakness' else 'above the 75th'} percentile"
+                      f"in the {'bottom' if pol == 'weakness' else 'top'} quarter of comparable players"
                       f"{group.suffix(last)}; at minute {last.minute} it was "
                       f"{m.show(last.value)} ({_vs_median(m, last.value, last.baseline.p50)}).",
                       severity=sum(abs(s.goodness - 50) for s in run) / len(run) + len(run),
@@ -208,6 +212,10 @@ def game_evidence(
         b.add("death", "survival", "neutral",
               f"{len(p.deaths) - max_deaths} further deaths are not itemised.")
 
+    if live:
+        _live_evidence(b, live["summary"], len(p.deaths))
+    if review is not None:
+        _review_evidence(b, review)
     return EvidenceSet(b.items)
 
 
@@ -227,7 +235,7 @@ def trend_evidence(
           f"Roles: {', '.join(f'{r.lower()} {n}' for r, n in roles.most_common())}. "
           f"Most played: {', '.join(f'{c} {n}' for c, n in champs.most_common(3))}. "
           f"Each game is compared against {tier_label} players in the role played; "
-          f"percentiles below are for that group.")
+          f"comparisons below are with that group.")
 
     found = []
     for t in trends:
@@ -241,11 +249,11 @@ def trend_evidence(
         m = t.metric
         change = ""
         if t.change is not None:
-            change = (f" In the {t.older_games} games before that it was the "
-                      f"{ordinal(t.older_goodness)} percentile.")
+            change = (f" In the {t.older_games} games before that it was better than about "
+                      f"{round(t.older_goodness)}%.")
         b.add("trend", m.area, pol,
-              f"{m.label}: typical {m.show(t.median_value)} over {t.games} games, around the "
-              f"{ordinal(t.median_goodness)} percentile.{change}", severity, metric=m.name)
+              f"{m.label}: typical {m.show(t.median_value)} over {t.games} games, better than about "
+              f"{round(t.median_goodness)}% of comparable players.{change}", severity, metric=m.name)
 
     # Where deaths happen, across games.
     zones: Counter[str] = Counter()
@@ -263,3 +271,72 @@ def trend_evidence(
               f"{early} of them came before 14:00 and {ahead} came while 500+ gold ahead of "
               f"the lane opponent.", severity=0)
     return EvidenceSet(b.items)
+
+
+def _live_evidence(b: _Builder, summary: dict, total_deaths: int) -> None:
+    """Facts from a second-by-second recording of the game (riftwatch record)."""
+    m = summary.get("metrics", {})
+    drops = summary.get("drops", [])
+    early = int(m.get("early_big_hp_losses", 0))
+    if early:
+        to_recall = int(m.get("early_losses_to_recall", 0))
+        to_death = int(m.get("early_losses_to_death", 0))
+        b.add("live", "laning", "weakness" if to_recall + to_death >= 2 else "neutral",
+              f"Live recording: before 14:00 you lost a fifth or more of your health in a short "
+              f"window {early} time{'s' if early != 1 else ''}; {to_recall} of those were followed "
+              f"by a recall within a minute and {to_death} by a death within 20 seconds.",
+              severity=5 * (to_recall + to_death), drops=len(drops))
+        worst = max((d for d in drops if d["start"] < 14 * 60), key=lambda d: d["lost"])
+        b.add("live", "laning", "neutral",
+              f"Biggest early health loss: {round(worst['lost'] * 100)}% of your health between "
+              f"{clock(worst['start'] / 60)} and {clock(worst['end'] / 60)}, leaving you on "
+              f"{round(worst['hp_after'] * 100)}%; it was followed by "
+              f"{ {'death': 'a death', 'recall': 'a recall', 'stayed': 'you staying in lane'}[worst['led_to']] }.",
+              severity=1)
+    recalls = int(m.get("recalls", 0))
+    if recalls and "avg_recall_hp" in m:
+        b.add("live", "economy", "neutral",
+              f"Live recording: you recalled {recalls} time{'s' if recalls != 1 else ''}, on average "
+              f"with {round(m['avg_recall_hp'] * 100)}% health and {int(m['avg_recall_gold'])} "
+              f"unspent gold.", severity=0)
+    burst = int(m.get("burst_deaths", 0))
+    if burst and total_deaths:
+        b.add("live", "survival", "weakness" if burst >= 2 else "neutral",
+              f"Live recording: {burst} of your {total_deaths} deaths went from above 60% health "
+              f"to dead in 3 seconds or less.", severity=4 * burst)
+
+
+HIGH_ELO = "Grandmaster/Challenger"
+_ROLE_NAME = {"TOP": "top laners", "JUNGLE": "junglers", "MIDDLE": "mid laners",
+              "BOTTOM": "ADCs", "UTILITY": "supports"}
+
+
+def _pct(x: float) -> int:
+    return round(x * 100)
+
+
+def _review_evidence(b: _Builder, review) -> None:
+    """Facts from comparing the player's decisions with high-elo play (ml.advisor)."""
+    from riftwatch.ml.advisor import DID
+
+    who = f"{HIGH_ELO} {_ROLE_NAME.get(review.role, 'players')}"
+    b.add("context", "macro", "neutral",
+          f"High-elo comparison: across {review.minutes} minutes of this game, your move matched "
+          f"the most common choice of {who} in similar situations {_pct(review.agreement)}% of the "
+          "time.")
+    for m in review.moments:
+        did, best = m.did, m.best
+        text = (f"At {m.minute}:00 you {DID[did.decision]}. In similar situations only "
+                f"{_pct(did.share)}% of {who} did that; {_pct(best.share)}% {DID[best.decision]}.")
+        if m.outcomes_meaningful:
+            text += (f" In those games the team took an objective within the next 3 minutes "
+                     f"{_pct(best.objective)}% of the time after the common choice versus "
+                     f"{_pct(did.objective)}% after yours, and the player died "
+                     f"{_pct(best.death)}% versus {_pct(did.death)}% of the time.")
+        b.add("decision", "macro", "weakness", text, severity=10 + 20 * m.gain,
+              minute=m.minute, decision=did.decision, alternative=best.decision)
+    for m in review.good:
+        b.add("decision", "macro", "strength",
+              f"At {m.minute}:00 you {DID[m.did.decision]}, the choice {_pct(m.did.share)}% of "
+              f"{who} made in similar situations.", severity=8, minute=m.minute,
+              decision=m.did.decision)

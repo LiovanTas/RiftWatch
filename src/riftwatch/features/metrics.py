@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-AREAS = ("farming", "laning", "fighting", "survival", "vision", "objectives", "economy")
+AREAS = ("farming", "laning", "fighting", "survival", "vision", "objectives", "economy", "macro")
 
 
 @dataclass(frozen=True)

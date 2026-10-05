@@ -53,10 +53,10 @@ player and their games. Each comes from the player's match timeline and is compa
 players of the same rank tier and role (the comparison group named in the first item).
 
 How to read the evidence:
-- "Nth percentile" ranks the player within the comparison group: 10th means 90% of those
-  players did better on that measure. For measures where lower is better (deaths, deaths
-  before 14 minutes, solo deaths, deaths while ahead), the percentile is already flipped so
-  a high percentile is always good.
+- "better than N% of comparable players" ranks the player within the comparison group, with
+  direction already accounted for: for deaths, "better than 10%" means more deaths than 90%
+  of those players. Higher is always better. "Bottom quarter" / "top quarter" mean worse
+  than 75% / better than 75% of them.
 - "median" is the comparison group's typical value; "below"/"above" give the gap to it.
 - "lane opponent" means the enemy player in the same role. For a jungler that is the enemy
   jungler; for a support, the enemy support.
@@ -64,6 +64,14 @@ How to read the evidence:
   stretch, which matters more than a single moment.
 - Death items describe one death: time, map area relative to the player's team, who got
   the kill, how many enemies helped, and the gold gap to the lane opponent at the time.
+- "High-elo comparison" items compare the player's move at a minute with what
+  Grandmaster/Challenger players in the same role did in similar situations, and with what
+  followed each choice in those games. They describe how high-elo games tended to go, not
+  certainties: say "in similar high-elo situations, most players..." or "that choice was
+  followed by...", never "you would have" or "you should have".
+- "Live recording" items come from the player's own health and gold sampled every second
+  during the game. A large health loss in a short window is the player's side of a trade
+  they lost; whether a recall or a death followed shows what it cost them.
 - Measures: CS is minions plus jungle monsters killed. Kill participation is the share of
   the team's kills the player had a kill or assist in. Damage share is the player's share
   of the team's damage to champions. Vision score is Riot's measure of wards placed,

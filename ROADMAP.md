@@ -49,6 +49,22 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
 - [ ] **Production key.** A public site needs a registered Riot product and a production API
       key; development keys are for personal use and expire daily.
 
+## High-elo models
+
+- [x] High-elo crawl: Challenger, Grandmaster and Master games from NA, EUW and KR at once
+- [x] Situation / decision / outcome examples for all five roles, with player-known features only
+- [x] Decision and outcome models per role, evaluated by game against baselines
+- [x] Advisor: key moments in the player's games, fed to the coach and shown in the review
+- [ ] Camp respawn timers and lane states as features (the decision models' weak spot)
+- [ ] Champion-specific comparisons once there's enough data per champion
+
+## In-game data
+
+- [x] **Live recorder** on Riot's Live Client Data API: own health, gold, items and events every
+      second, linked to the match afterwards; trades, recalls and deaths in the review and coach
+- [ ] **Enemy health from the screen** (computer vision on health bars) to see both sides of a
+      trade -- start with a one-week spike on recorded games before committing
+
 ## Later
 
 - [ ] Build timing: when the first and second legendary items were finished, against the

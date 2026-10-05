@@ -13,7 +13,7 @@ import json
 from typing import Any
 
 from riftwatch.analysis.score import GameScore
-from riftwatch.coach.evidence import clock, ordinal
+from riftwatch.coach.evidence import clock
 from riftwatch.coach.pipeline import CoachResult
 from riftwatch.features.metrics import AREAS, CURVE_METRICS
 
@@ -202,7 +202,7 @@ function chart(c, host) {
     row('var(--you)', fmt(p.v, c.kind), 'you');
     if (p.p50 != null) {
       row('var(--group)', fmt(p.p50, c.kind), `${D.group} median`);
-      h('div', 't', `middle 50%: ${fmt(p.p25, c.kind)} to ${fmt(p.p75, c.kind)}` + (p.pct != null ? ` · you: ${p.pct} percentile` : ''), tip);
+      h('div', 't', `middle 50%: ${fmt(p.p25, c.kind)} to ${fmt(p.p75, c.kind)}` + (p.pct != null ? ` · you: better than ${p.pct}` : ''), tip);
     }
     tip.style.display = 'block';
     const box = svg.getBoundingClientRect();
@@ -234,6 +234,35 @@ for (const c of D.curves) {
   h('h3', null, c.label, card);
   chart(c, card);
 }
+
+function healthChart(host) {
+  const hd = D.health;
+  if (!host || !hd || !hd.series.length) return;
+  const W = 560, H = 160, L = 40, R = 16, T = 12, B = 24;
+  const tMax = hd.series[hd.series.length - 1][0];
+  const x = t => L + t / tMax * (W - L - R);
+  const y = v => T + (1 - v) * (H - T - B);
+  const svg = el('svg', {viewBox: `0 0 ${W} ${H}`, role: 'img',
+                         'aria-label': 'Your health over the game (events listed below)'}, host);
+  for (const v of [0, 0.5, 1]) {
+    el('line', {x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: 'var(--grid)', 'stroke-width': 1}, svg);
+    const t = el('text', {x: L - 6, y: y(v) + 4, 'text-anchor': 'end', class: 'tick'}, svg);
+    t.textContent = Math.round(v * 100) + '%';
+  }
+  for (let m = 0; m * 60 <= tMax; m += 5) {
+    const t = el('text', {x: x(m * 60), y: H - 6, 'text-anchor': 'middle', class: 'tick'}, svg);
+    t.textContent = m;
+  }
+  const d = hd.series.map(([t, v], i) => `${i ? 'L' : 'M'}${x(t)},${y(v)}`).join('');
+  el('path', {d, fill: 'none', stroke: 'var(--you)', 'stroke-width': 2, 'stroke-linejoin': 'round'}, svg);
+  const glyph = {death: '×', recall: '↩', loss: '▾'};
+  for (const mk of hd.marks) {
+    const g = el('text', {x: x(mk.t), y: T + 10, 'text-anchor': 'middle', class: 'endlabel'}, svg);
+    g.textContent = glyph[mk.kind] || '•';
+    const title = el('title', {}, g); title.textContent = mk.text;
+  }
+}
+healthChart(document.getElementById('health'));
 
 const strip = document.getElementById('deaths');
 if (strip && D.deaths.length) {
@@ -282,7 +311,7 @@ def curve_series(score: GameScore) -> list[dict[str, Any]]:
                 "m": row.minute, "v": value,
                 "p25": s.baseline.p25 if s else None, "p50": s.baseline.p50 if s else None,
                 "p75": s.baseline.p75 if s else None,
-                "pct": ordinal(s.percentile) if s else None,
+                "pct": f"{round(s.goodness)}%" if s else None,
             })
         if any(pt["v"] is not None for pt in points):
             out.append({"name": name, "label": metric.label[0].upper() + metric.label[1:],
@@ -306,10 +335,10 @@ def _scorecard_html(score: GameScore) -> str:
                 f"<tr><td>{_esc(s.metric.label)}<div class=\"small\">median "
                 f"{_esc(s.metric.show(s.baseline.p50))} · n={s.baseline.n}</div></td>"
                 f'<td class="num">{_esc(s.metric.show(s.value))}</td>'
-                f'<td class="bar"><div class="track" role="img" aria-label="{_esc(ordinal(s.goodness))} percentile">'
+                f'<td class="bar"><div class="track" role="img" aria-label="better than {round(s.goodness)}%">'
                 f'<div class="line"></div><div class="typ"></div>'
                 f'<div class="dot" style="left:{s.goodness:.1f}%"></div></div></td>'
-                f'<td class="num">{_esc(ordinal(s.goodness))}<div class="small">{flag}</div></td></tr>'
+                f'<td class="num">better than {round(s.goodness)}%<div class="small">{flag}</div></td></tr>'
             )
     if not rows:
         return '<p class="sub">No baselines for this tier and role yet.</p>'
@@ -351,7 +380,7 @@ def _table_view(curves: list[dict[str, Any]], group: str) -> str:
         )
         blocks.append(f"<h3>{_esc(c['label'])}</h3><div class=\"scroll\"><table><tr><th>minute</th>"
                       f"<th>you</th><th>{_esc(group)} median</th><th>middle 50%</th>"
-                      f"<th>your percentile</th></tr>{rows}</table></div>")
+                      f"<th>you: better than</th></tr>{rows}</table></div>")
     return "".join(blocks)
 
 
@@ -396,6 +425,58 @@ def page(title: str, description: str, body: str, data: dict[str, Any] | None = 
 
 
 
+def _moments_html(result: CoachResult) -> str:
+    """Key moments from the high-elo comparison, in the same words the coach was given."""
+    items = [e for e in result.evidence.items
+             if e.kind == "decision" or (e.kind == "context" and e.area == "macro")]
+    if not items:
+        return ""
+    lines = []
+    for e in items:
+        tag = {"weakness": "Different from high elo", "strength": "Matched high elo"}.get(e.polarity, "")
+        label = f'<div class="kind">{_esc(tag)}</div>' if tag else ""
+        lines.append(f'<div class="point">{label}<p>{_esc(e.text)}</p></div>')
+    return ('<h2>Compared with high-elo play</h2><div class="card coach">' + "".join(lines)
+            + '<p class="meta">From models trained on Grandmaster and Challenger games in your role. '
+              "They describe what tended to follow each choice in those games, not certainties.</p></div>")
+
+
+_LED_TO = {"death": "a death", "recall": "a recall", "stayed": "you staying"}
+
+
+def _health_events(live: dict[str, Any]) -> list[tuple[float, str, str]]:
+    summary = live["summary"]
+    out = []
+    for d in summary.get("drops", []):
+        out.append((d["start"], "loss", f"{clock(d['start'] / 60)}: lost {round(d['lost'] * 100)}% "
+                    f"health in {round(d['end'] - d['start'])} s, then {_LED_TO[d['led_to']]}"))
+    for r in summary.get("recalls", []):
+        out.append((r["t"], "recall", f"{clock(r['t'] / 60)}: recalled at {round(r['hp'] * 100)}% "
+                    f"health with {r['gold']} gold"))
+    for d in summary.get("deaths", []):
+        how = "burst" if d["burst"] else "died"
+        out.append((d["t"], "death", f"{clock(d['t'] / 60)}: {how}, {round(d['hp_10s_before'] * 100)}% "
+                    "health 10 s earlier"))
+    return sorted(out)
+
+
+def _health_data(result: CoachResult) -> dict[str, Any] | None:
+    if not result.live:
+        return None
+    return {"series": result.live["hp_series"],
+            "marks": [{"t": t, "kind": k, "text": text} for t, k, text in _health_events(result.live)]}
+
+
+def _health_html(result: CoachResult) -> str:
+    if not result.live:
+        return ""
+    items = "".join(f"<li>{_esc(text)}</li>" for _t, _k, text in _health_events(result.live))
+    return ('<h2>Health (live recording)</h2><div class="card"><div id="health"></div>'
+            '<p class="meta">▾ big health loss · ↩ recall · × death. Recorded every second '
+            "from the game client.</p>"
+            f'<ol class="deathlist">{items or "<li>No big health losses.</li>"}</ol></div>')
+
+
 def game_html(result: CoachResult, *, coach_url: str | None = None,
               links: list[tuple[str, str]] | None = None) -> str:
     game, p = result.games[0]
@@ -411,7 +492,7 @@ def game_html(result: CoachResult, *, coach_url: str | None = None,
         if key not in m:
             return ""
         value = s.metric.show(m[key]) if s else f"{m[key]:.1f}"
-        pct = f"{ordinal(s.goodness)} percentile" if s else "no baseline"
+        pct = f"better than {round(s.goodness)}% of comparable players" if s else "no baseline"
         return (f'<div class="card tile"><div class="label">{_esc(label)}</div>'
                 f'<div class="value">{_esc(value)}</div><div class="pct">{_esc(pct)}</div></div>')
 
@@ -438,13 +519,16 @@ def game_html(result: CoachResult, *, coach_url: str | None = None,
         f"{_esc(group)} players{', patches ' + _esc(first.baseline.patch_window) if first else ''}</p>"
         f'<div class="tiles">{tiles}</div>'
         f'<h2>Coaching</h2><div class="card coach">{coach_html(result, coach_url)}</div>'
-        f'<h2>Minute by minute</h2>{legend}<div class="charts" id="charts"></div>'
+        + _moments_html(result)
+        + f'<h2>Minute by minute</h2>{legend}<div class="charts" id="charts"></div>'
+        + _health_html(result) +
         f'<h2>Deaths</h2><div class="card"><div class="deaths" id="deaths"></div>'
         f'<ol class="deathlist">{death_list or "<li>No deaths.</li>"}</ol></div>'
         f'<h2>How you compare</h2><div class="card">{_scorecard_html(score)}</div>'
         f"<details><summary>Table view of every chart</summary>{_table_view(curves, group)}</details>"
     )
-    data = {"group": group, "curves": curves, "deaths": deaths, "duration_min": game.duration_min}
+    data = {"group": group, "curves": curves, "deaths": deaths, "duration_min": game.duration_min,
+            "health": _health_data(result)}
     return page(title, f"RiftWatch review of {game.match_id}", body, data)
 
 

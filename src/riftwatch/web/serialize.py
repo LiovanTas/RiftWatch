@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from riftwatch.analysis.score import GameScore
-from riftwatch.coach.evidence import clock, ordinal
+from riftwatch.coach.evidence import clock
 from riftwatch.coach.pipeline import CoachResult
 from riftwatch.features.extract import GameFeatures, ParticipantFeatures
 from riftwatch.report.html import curve_series
@@ -30,7 +30,7 @@ def scorecard(score: GameScore) -> list[dict[str, Any]]:
         rows.append({
             "metric": s.metric.name, "label": s.metric.label, "area": s.metric.area,
             "value": s.value, "display": s.metric.show(s.value),
-            "percentile": round(s.goodness, 1), "percentile_text": ordinal(s.goodness),
+            "better_than": round(s.goodness, 1),
             "median": s.baseline.p50, "median_display": s.metric.show(s.baseline.p50),
             "n": s.baseline.n, "scope": s.baseline.scope,
             "flag": "weakness" if s.goodness <= 25 else "strength" if s.goodness >= 75 else None,
@@ -85,6 +85,24 @@ def game_review(result: CoachResult) -> dict[str, Any]:
                    for d in p.deaths],
         "evidence": result.evidence.to_json(),
         "coach": coach_json(result),
+        "live": result.live,
+        "high_elo": _review_json(result.review),
+    }
+
+
+def _review_json(review) -> dict[str, Any] | None:
+    if review is None:
+        return None
+
+    def option(o) -> dict[str, Any]:
+        return {"decision": o.decision, "share": round(o.share, 3), "objective": round(o.objective, 3),
+                "death": round(o.death, 3), "gold": round(o.gold)}
+
+    return {
+        "role": review.role, "minutes": review.minutes, "agreement": round(review.agreement, 3),
+        "moments": [{"minute": m.minute, "did": option(m.did), "alternative": option(m.best)}
+                    for m in review.moments],
+        "matched": [{"minute": m.minute, "did": option(m.did)} for m in review.good],
     }
 
 

@@ -72,7 +72,8 @@ riftwatch coach "Name#TAG" --last --html last-game.html
 | `features` | Extracts per-minute features from any cached games that still need it |
 | `coach Name#TAG` | Coaching on the last 20 games; `--last` or `--match ID` for one game |
 | `cache` | Cache size and hit rate |
-| `watchdog` | Arms the black-screen kill switch (Windows) |
+| `watchdog` | Arms the black-screen kill switch (Windows); `--record` also records each game |
+| `record` | Records games second by second from the game client; `--import` links recordings to matches |
 | `serve` | Runs the website and JSON API on http://127.0.0.1:8000 |
 | `doctor`, `db migrate`, `db status` | Setup checks and schema migrations |
 
@@ -168,6 +169,73 @@ riftwatch watchdog --status             # what it sees right now
 It watches the game window with Windows' own "is this window responding" checks, warns when
 the game has held the screen without responding for 5 seconds, and kills it on the hotkey (or
 automatically, if you ask). It never reads or writes game memory or injects input.
+
+## High-elo models
+
+```bash
+riftwatch crawl --high-elo --regions na,euw,kr --players 60 --matches 10
+riftwatch ml dataset          # per-role training tables from Grandmaster/Challenger games
+riftwatch ml train            # trains and evaluates the models for each role
+```
+
+Every Grandmaster and Challenger game is turned into minute-by-minute examples for all five
+roles: the *situation* a player was in, the *decision* they made over the next minute, and the
+*outcome* over the three minutes after that. Each role has its own decisions -- a jungler ganks,
+farms, invades or takes an objective; a mid laner stays, roams top or bot, or pushes; a support
+stays with the ADC, roams or goes warding.
+
+Situations only use what the player could know: their own state, the scoreboard, teammates'
+positions, objective history, and where the enemy jungler was last *seen* in a fight. Hidden
+enemy positions are left out, so the models can't learn to see through fog of war.
+
+Two kinds of gradient-boosted models are trained per role:
+
+- **Decision model:** how often high-elo players chose each option in a situation like this.
+- **Outcome models:** what tended to follow each option -- the team taking an objective, the
+  player dying, the team's gold swing, and for laners their CS gap.
+
+Evaluation splits by game, never by row, and every model is compared with simple baselines.
+The honest picture: predicting the *exact* next move beats the best baseline by only a few
+points, since one snapshot a minute doesn't pin it down and good players differ. The outcome
+models are the useful part, and they're what the coach leans on.
+
+Measured on games the models never saw (3,922 Grandmaster/Challenger games, about 109,000
+examples per role):
+
+| Role | Decision accuracy | Best simple baseline | Top-2 | Objective within 3 min (AUC) | Player dies within 3 min (AUC) |
+|---|---|---|---|---|---|
+| Top | 66.2% | 64.2% | 81.2% | 0.77 | 0.62 |
+| Jungle | 53.0% | 48.4% | 68.9% | 0.79 | 0.63 |
+| Mid | 57.1% | 54.2% | 73.0% | 0.78 | 0.61 |
+| ADC | 65.1% | 61.7% | 80.2% | 0.78 | 0.63 |
+| Support | 37.9% | 35.5% | 60.8% | 0.78 | 0.61 |
+
+Doubling the data from 1,830 games moved these by a point or two at most, so the limit now is
+the inputs (camp timers and lane states aren't modelled yet), not the amount of data.
+
+The coach uses them through the **advisor**: for each minute of your game it compares your move
+with the options high-elo players actually chose in similar spots. A *key moment* is when your
+choice was uncommon and a common alternative was followed by clearly better outcomes. The
+review shows those moments, and the coach explains them as "in similar Grandmaster/Challenger
+situations, most players..." -- never "you should have".
+
+## Live recording (Windows)
+
+```bash
+riftwatch watchdog --record     # kill switch and recorder together while you play
+riftwatch record                # or just the recorder
+```
+
+While a match runs, the game client serves its own state on your PC through Riot's Live Client
+Data API. The recorder reads it once a second -- your health, mana, gold and abilities, every
+player's score, items and respawn timers, and the event feed -- and writes each game to a local
+file. `sync` imports new recordings and links them to their matches; the match review then
+gains a health chart and the coach gets facts like "before 14:00 you lost a fifth of your health
+in a short window 4 times; 2 were followed by a recall within a minute".
+
+It shows your side of trades only: the client exposes your health, not your opponents', and no
+positions. Everything is for after the game; nothing gives advice during a match, which Riot's
+policy doesn't allow.
 
 ## Configuration
 
