@@ -143,9 +143,16 @@ def test_patch_window_takes_newest_patches(conn):
 def test_baseline_set_fallbacks(conn):
     load_games(conn, 25)
     bl.build(conn, min_n=20)
-    # Champion-level exists for Aatrox (266) in GOLD.
+    # Aatrox (266) has 25 GOLD games: real, but under CHAMPION_MIN_N, so the role baseline
+    # (50 players) is the better yardstick...
     gold_aatrox = bl.BaselineSet(conn, "GOLD", "TOP", 266)
-    assert gold_aatrox.get("cs_at_10").champion_id == 266
+    assert gold_aatrox.get("cs_at_10").champion_id == 0
+    # ...until the champion threshold is met.
+    bl.CHAMPION_MIN_N, saved = 20, bl.CHAMPION_MIN_N
+    try:
+        assert bl.BaselineSet(conn, "GOLD", "TOP", 266).get("cs_at_10").champion_id == 266
+    finally:
+        bl.CHAMPION_MIN_N = saved
     # Unknown champion -> role level.
     assert bl.BaselineSet(conn, "GOLD", "TOP", 999).get("cs_at_10").champion_id == 0
     # No PLATINUM data -> nearest tier (GOLD).
@@ -161,8 +168,9 @@ def test_score_and_trend_end_to_end(conn):
     baselines = bl.BaselineSet(conn, "GOLD", "TOP", 266)
     best = score_participant(games[-1].participants[1], baselines)    # most CS
     worst = score_participant(games[0].participants[1], baselines)
+    # Role-level baseline (both teams' top laners): the best game far above the worst.
     assert best.game["cs_at_10"].goodness > 85
-    assert worst.game["cs_at_10"].goodness < 15
+    assert worst.game["cs_at_10"].goodness < 30 < best.game["cs_at_10"].goodness - 50
     assert best.curve_at("cs", 10).value == best.game["cs_at_10"].value
     assert "cs" in best.curves and len(best.curves["cs"]) == 26   # minutes 1..26
 

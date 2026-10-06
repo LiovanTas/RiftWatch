@@ -288,7 +288,7 @@ def test_game_report_caches_llm_answer(conn):
     second = game_report(conn, puuid, "NA1_2000", coach=coach, tier="gold")
     assert not first.cached and second.cached and len(messages.calls) == 1
     assert second.output == first.output
-    assert first.scores[0].game["cs_at_10"].goodness < 15
+    assert first.scores[0].game["cs_at_10"].goodness < 30
 
     offline = game_report(conn, puuid, "NA1_2000", tier="gold")
     assert offline.model == "offline" and offline.output.points

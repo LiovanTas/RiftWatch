@@ -18,7 +18,8 @@ import psycopg
 from riftwatch.features.metrics import CURVE_METRICS, CURVE_MINUTES
 
 TIER_ORDER = ("IRON", "BRONZE", "SILVER", "GOLD", "PLATINUM", "EMERALD", "DIAMOND", "MASTER_PLUS")
-MIN_GAME_S = 600  # drop remakes and other games too short to say anything
+MIN_GAME_S = 600      # drop remakes and other games too short to say anything
+CHAMPION_MIN_N = 50   # games before a champion-specific baseline replaces the role baseline
 
 _STATS = """
     count(*), avg(v), coalesce(stddev_samp(v), 0),
@@ -212,7 +213,10 @@ class BaselineSet:
     def get(self, metric: str, minute: int | None = None) -> Baseline | None:
         for bucket, champ in self._order:
             b = self._rows.get((metric, minute, bucket, champ))
-            if b is not None and b.n >= self.min_n:
+            # A one-champion group must be big enough to beat the whole-role group as a
+            # yardstick: 25 games of one champion is noisier than hundreds of the role.
+            needed = max(self.min_n, CHAMPION_MIN_N) if champ else self.min_n
+            if b is not None and b.n >= needed:
                 return b
         return None
 

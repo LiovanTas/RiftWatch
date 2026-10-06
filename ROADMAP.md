@@ -46,7 +46,8 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
       grounding check; the validated final answer replaces the preview
 - [x] **Jobs in Postgres** (claimed with `FOR UPDATE SKIP LOCKED`, retried if a worker dies), so
       several server processes can share the work
-- [ ] **Scheduled baseline refresh.** Re-crawl and rebuild baselines when a new patch lands.
+- [x] **Baseline refresh** (`riftwatch refresh`): tops up every rank bucket on the live patch and
+      rebuilds baselines; schedule it daily
 - [ ] **Production key.** A public site needs a registered Riot product and a production API
       key; development keys are for personal use and expire daily.
 

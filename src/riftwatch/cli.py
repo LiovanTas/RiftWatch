@@ -197,6 +197,30 @@ def cmd_ml_train(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_refresh(settings: Settings, args: argparse.Namespace) -> int:
+    from riftwatch.baselines import refresh as rf
+    from riftwatch.riot.ddragon import DataDragon
+
+    patch = args.patch or rf.live_patch(DataDragon())
+    regions = [r.strip() for r in args.regions.split(",") if r.strip()]
+    api = None if args.dry_run else _api(settings)
+    with connect(settings.database_url) as conn:
+        report = rf.refresh(
+            conn, current_patch=patch, target=args.target, dry_run=args.dry_run,
+            crawl_fn=(rf.crawler(api, regions, connect, settings.database_url)
+                      if api else lambda tiers, players: 0),
+            extract_fn=lambda: feature_store.extract_pending(conn, progress=print),
+        )
+    print(f"patch {report.patch}: crawled games per bucket")
+    for bucket in rf.BUCKET_TIERS:
+        after = report.after.get(bucket, 0)
+        added = after - report.before.get(bucket, 0)
+        print(f"  {bucket:<12} {after:>6}" + (f"  (+{added})" if added else ""))
+    if api is not None:
+        print(f"  {_client_stats(api)}")
+    return 0
+
+
 def cmd_record(settings: Settings, args: argparse.Namespace) -> int:
     if args.import_only:
         _import_recordings(settings)
@@ -488,6 +512,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="also record each game second by second for post-game analysis")
     p.set_defaults(func=cmd_watchdog)
 
+    p = sub.add_parser("refresh", help="top up crawled games on the current patch and rebuild baselines")
+    p.add_argument("--regions", default="na,euw,kr", help="regions to crawl (default na,euw,kr)")
+    p.add_argument("--target", type=int, default=300, help="crawled games per rank bucket (default 300)")
+    p.add_argument("--patch", help="patch to fill (default: the live patch from Data Dragon)")
+    p.add_argument("--dry-run", action="store_true", help="only report what would be crawled")
+    p.set_defaults(func=cmd_refresh)
+
     ml = sub.add_parser("ml", help="high-elo models: build the dataset, train").add_subparsers(
         dest="ml_command", required=True)
     p = ml.add_parser("dataset", help="build per-role training tables from crawled games")
@@ -528,6 +559,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
+    # Scheduled tasks start in another folder (Task Scheduler uses System32), so also read the
+    # project's own .env; values already set (including from the line above) win.
+    from pathlib import Path
+
+    project_env = Path(__file__).resolve().parents[2] / ".env"
+    if project_env.exists():
+        load_dotenv(project_env)
     args = build_parser().parse_args(argv)
     try:
         return args.func(Settings.from_env(), args)

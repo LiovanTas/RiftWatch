@@ -176,6 +176,26 @@ It watches the game window with Windows' own "is this window responding" checks,
 the game has held the screen without responding for 5 seconds, and kills it on the hotkey (or
 automatically, if you ask). It never reads or writes game memory or injects input.
 
+## Keeping baselines current
+
+```bash
+riftwatch refresh --dry-run     # crawled games per rank bucket on the live patch
+riftwatch refresh               # top up thin buckets and rebuild baselines
+```
+
+`refresh` reads the live patch from Data Dragon, crawls recent games for every rank bucket
+with fewer than 300 on it (several regions at once, in up to three rounds sized from the yield
+of the last -- many low-ladder accounts haven't played in weeks), then re-extracts features and
+rebuilds baselines, so comparisons move onto a new patch by themselves. To run it daily on Windows:
+
+```bash
+schtasks /Create /SC DAILY /ST 05:00 /TN "RiftWatch refresh" /TR "C:\path\to\riftwatch\.venv\Scripts\riftwatch.exe refresh"
+iftwatch\.venv\Scripts
+iftwatch.exe refresh"
+```
+
+A development key expires every 24 hours, so an unattended refresh needs a production key.
+
 ## High-elo models
 
 ```bash
