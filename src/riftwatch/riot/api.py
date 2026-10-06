@@ -128,3 +128,21 @@ class RiotApi:
             {"page": page},
         )
         return entries or []
+
+    # -- spectator-v5 and champion-mastery-v4 (platform) -----------------------------------
+
+    def active_game(self, platform: str, puuid: str) -> dict[str, Any] | None:
+        """The game this player is in right now, or None if they aren't in one."""
+        return self.client.get(
+            platform_for(platform),
+            "spectator-v5.active-game",
+            f"/lol/spectator/v5/active-games/by-summoner/{_seg(puuid)}",
+        )
+
+    def champion_mastery(self, platform: str, puuid: str, champion_id: int) -> dict[str, Any] | None:
+        """None if the player has never played the champion."""
+        return self.client.get(
+            platform_for(platform),
+            "champion-mastery-v4.by-champion",
+            f"/lol/champion-mastery/v4/champion-masteries/by-puuid/{_seg(puuid)}/by-champion/{int(champion_id)}",
+        )

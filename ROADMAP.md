@@ -72,7 +72,8 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
 ## Later
 
 - [x] Build timing: first and second legendary items and boots, against players at your rank
-- [ ] Live-game scouting via spectator-v5, using cached history for all ten players
+- [x] Live-game scouting via spectator-v5: rank, recent form and champion experience for
+      all ten players, from the shared match cache (CLI and a website page)
 - [ ] Matchup-specific baselines (champion vs champion) once the crawl is large enough
 - [ ] Arena and ARAM support (different timelines, different metrics)
 

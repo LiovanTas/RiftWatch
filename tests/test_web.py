@@ -165,6 +165,27 @@ def test_player_and_match_pages(web):
     assert 'href="/players/na/Me-NA1"' in match                    # back to the player
 
 
+def test_scout_job_and_page(web):
+    client, api, _, jobs = web
+    assert 'href="/scout/na/Me-NA1">Live game' in client.get("/players/na/Me-NA1").text
+    page = client.get("/scout/na/Me-NA1")
+    assert page.status_code == 200 and "Scout live game" in page.text
+    r = client.post("/api/scout/na/Me-NA1")
+    assert r.status_code == 202
+    job = jobs.wait(r.json()["job"]["id"])
+    assert job.status == "done", job.error
+    assert len(job.result["players"]) == 10
+    html = client.get(f"/scout/na/Me-NA1?job={job.id}").text
+    assert "Blue team" in html and "Red team" in html and "<strong>Me#NA1</strong>" in html
+    assert 'href="/players/na/Player2-NA1"' in html
+
+    api.in_game = False
+    jobs.cooldown_s = 0
+    failed = jobs.wait(client.post("/api/scout/na/Me-NA1").json()["job"]["id"])
+    assert failed.status == "failed" and "isn't in a game" in failed.error
+    assert "isn&#x27;t in a game" in client.get(f"/scout/na/Me-NA1?job={failed.id}").text
+
+
 def test_page_escapes_riot_ids(web):
     client, *_ = web
     page = client.get("/players/na/%3Cscript%3Ealert(1)%3C%2Fscript%3E-NA1").text

@@ -64,6 +64,32 @@ class FakeApi:
         self.calls.append("timeline")
         return self.games[match_id][1]
 
+    in_game = True
+
+    def active_game(self, platform, puuid):
+        """A live game: the player on Aatrox with the nine others from their oldest game,
+        plus one bot in place of the last red player."""
+        self.calls.append("spectator")
+        if not self.in_game:
+            return None
+        oldest = self.games[self.ids[-1]][0]["info"]["participants"]
+        players = [{"puuid": p["puuid"], "riotId": f"{p['riotIdGameName']}#NA1",
+                    "teamId": p["teamId"], "championId": p["championId"], "bot": False}
+                   for p in oldest[:9]]
+        players[0]["riotId"] = "Me#NA1"
+        players.append({"puuid": None, "riotId": "", "teamId": 200, "championId": 117,
+                        "bot": True})
+        return {"gameId": 99, "gameQueueConfigId": 420, "gameStartTime": 1_790_100_000_000,
+                "gameLength": 125, "participants": players,
+                "bannedChampions": [{"teamId": 100, "championId": 157, "pickTurn": 1},
+                                    {"teamId": 200, "championId": -1, "pickTurn": 6}]}
+
+    def champion_mastery(self, platform, puuid, champion_id):
+        self.calls.append("mastery")
+        if puuid == self.puuid:
+            return {"championId": champion_id, "championPoints": 250_000}
+        return None
+
 
 def test_insert_match_extracts_participants(conn):
     match, _ = build_game("NA1_42")

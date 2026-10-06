@@ -420,6 +420,22 @@ def cmd_watchdog(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_scout(settings: Settings, args: argparse.Namespace) -> int:
+    from riftwatch.report.terminal import scout_text
+    from riftwatch.riot.ddragon import ChampionNames, DataDragon
+    from riftwatch.scout import scout
+
+    api = _api(settings)
+    with connect(settings.database_url) as conn:
+        report = scout(conn, api, parse_riot_id(args.riot_id), _platform(settings, args),
+                       games=args.games, names=ChampionNames(DataDragon()), progress=print)
+    print()
+    print(scout_text(report))
+    print()
+    print(f"  {_client_stats(api)}")
+    return 0
+
+
 def cmd_serve(settings: Settings, args: argparse.Namespace) -> int:
     try:
         import uvicorn
@@ -537,6 +553,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="import and link recordings instead of recording")
     p.set_defaults(func=cmd_record)
 
+    p = sub.add_parser("scout", help="rank, champion experience and form of everyone in a live game")
+    p.add_argument("riot_id", help="Name#TAG of a player in the game")
+    _add_region(p)
+    p.add_argument("--games", type=int, default=10, help="recent ranked games per player (max 100)")
+    p.set_defaults(func=cmd_scout)
+
     p = sub.add_parser("serve", help="run the web API")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
@@ -558,6 +580,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Riot IDs can be in any script; a redirected Windows console is cp1252, so print what
+    # it can rather than crash.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
     load_dotenv()
     # Scheduled tasks start in another folder (Task Scheduler uses System32), so also read the
     # project's own .env; values already set (including from the line above) win.

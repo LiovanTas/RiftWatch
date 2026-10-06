@@ -96,3 +96,32 @@ def render(result: CoachResult, *, show_scores: bool = True, show_evidence: bool
         for e in result.evidence.items:
             out.append(f"  [{e.id}] {e.text}")
     return "\n".join(out)
+
+
+def scout_text(report) -> str:
+    """Both teams from a :class:`riftwatch.scout.ScoutReport`, one line per player."""
+    minutes, seconds = divmod(max(report.game_length_s, 0), 60)
+    lines = [f"{report.queue} on {report.platform.upper()}, {minutes}:{seconds:02d} in"]
+    for team_id, name in ((100, "Blue team"), (200, "Red team")):
+        lines.append("")
+        bans = [b["champion"] for b in report.bans if b["team_id"] == team_id]
+        lines.append(name + (f"  (bans: {', '.join(bans)})" if bans else ""))
+        for p in report.team(team_id):
+            me = "*" if p.puuid == report.me else " "
+            r = p.rank
+            rank = (f"{r['tier'].title()} {r['division'] or ''}".strip() + f" {r['lp']} LP"
+                    if r else "Unranked")
+            season = (f"{round(100 * r['wins'] / max(r['wins'] + r['losses'], 1))}% of "
+                      f"{r['wins'] + r['losses']}" if r else "")
+            recent = (f"last {p.games}: {p.wins}W {p.games - p.wins}L, "
+                      f"{p.kills}/{p.deaths}/{p.assists}" if p.games else "no recent ranked games")
+            role = f", {p.main_role.lower()} {round(100 * p.main_role_share)}%" if p.main_role else ""
+            champ = (f"{p.champion_games} game{'s' if p.champion_games != 1 else ''} "
+                     f"{round(100 * p.champion_wins / p.champion_games)}%"
+                     if p.champion_games else "no ranked games")
+            mastery = f", {p.mastery_points:,} pts" if p.mastery_points is not None else ""
+            lines.append(f" {me}{p.riot_id[:22]:<22} {p.champion[:12]:<12} {rank:<22} {season:<11}"
+                         f" | {recent}{role} | on champ: {champ}{mastery}")
+            if p.flags:
+                lines.append(f"   {'':<22} {', '.join(p.flags)}")
+    return "\n".join(lines)

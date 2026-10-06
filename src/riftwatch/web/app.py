@@ -102,6 +102,22 @@ def create_app(
 
     services.jobs.register("sync", sync_job)
 
+    names = None
+
+    def scout_job(params: dict[str, Any], progress) -> dict[str, Any]:
+        nonlocal names
+        from riftwatch.riot.ddragon import ChampionNames, DataDragon
+        from riftwatch.scout import scout
+
+        names = names or ChampionNames(DataDragon())
+        with pool.connection() as conn:
+            report = scout(conn, services.require_api(),
+                           RiotId(params["game_name"], params["tag_line"]), params["platform"],
+                           names=names, progress=progress)
+        return report.to_json()
+
+    services.jobs.register("scout", scout_job)
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if owns_pool:
@@ -213,6 +229,29 @@ def create_app(
             key, "sync", {"platform": platform, "game_name": rid.game_name,
                           "tag_line": rid.tag_line, "count": count}, owner=owner)
         return {"job": job.to_json(), "created": created}
+
+    @app.post("/api/scout/{region}/{riot_id}", status_code=202)
+    def scout(request: Request, region: str, riot_id: str) -> dict[str, Any]:
+        """Scout the player's live game as a background job; the job's result is the report."""
+        platform = platform_for(region)
+        rid = parse_path_riot_id(riot_id)
+        services.require_api()
+        key = f"scout:{platform}:{rid.game_name.lower()}#{rid.tag_line.lower()}"
+        owner = request.client.host if request.client else "anonymous"
+        job, created = services.jobs.submit(
+            key, "scout", {"platform": platform, "game_name": rid.game_name,
+                           "tag_line": rid.tag_line}, owner=owner)
+        return {"job": job.to_json(), "created": created}
+
+    @app.get("/scout/{region}/{riot_id}", response_class=HTMLResponse)
+    def scout_page(region: str, riot_id: str, job: int | None = None) -> HTMLResponse:
+        platform_for(region)
+        parse_path_riot_id(riot_id)
+        found = services.jobs.get(job) if job is not None else None
+        if found is not None and found.kind == "scout" and found.status == "done":
+            return HTMLResponse(pages.scout_page(region, riot_id, found.result))
+        error = found.error if found is not None and found.status == "failed" else None
+        return HTMLResponse(pages.scout_page(region, riot_id, None, error))
 
     @app.get("/api/jobs/{job_id}")
     def job_status(job_id: int) -> dict[str, Any]:

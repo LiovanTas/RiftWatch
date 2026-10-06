@@ -71,6 +71,7 @@ riftwatch coach "Name#TAG" --last --html last-game.html
 | `baselines` | Rebuilds the per-tier, per-role, per-champion comparison tables |
 | `features` | Extracts per-minute features from any cached games that still need it |
 | `coach Name#TAG` | Coaching on the last 20 games; `--last` or `--match ID` for one game |
+| `scout Name#TAG` | Rank, champion experience and recent form of all ten players in a live game |
 | `cache` | Cache size and hit rate |
 | `watchdog` | Arms the black-screen kill switch (Windows); `--record` also records each game |
 | `record` | Records games second by second from the game client; `--import` links recordings to matches |
@@ -159,6 +160,7 @@ take the next one from whoever has the least work running, and retry a job whose
 | `GET /api/players/.../matches/{match_id}` (scores, curves, evidence) | 18 ms |
 | `GET /api/players/.../recent` (trends over 40 games) | 85 ms |
 | `POST /api/players/.../sync` | returns a job; `GET /api/jobs/{id}` for progress |
+| `POST /api/scout/{region}/{Name-TAG}` | scouts the player's live game as a job; the result is the report |
 | `POST /api/players/.../matches/{match_id}/coach` | generates and caches coaching |
 | `POST /api/players/.../matches/{match_id}/coach/stream` | the same, as server-sent events: each point once it passes the grounding check, then the final answer |
 
@@ -262,6 +264,25 @@ in a short window 4 times; 2 were followed by a recall within a minute".
 It shows your side of trades only: the client exposes your health, not your opponents', and no
 positions. Everything is for after the game; nothing gives advice during a match, which Riot's
 policy doesn't allow.
+
+## Live-game scouting
+
+```bash
+riftwatch scout "Name#TAG" -r na
+```
+
+Looks up the game a player is in right now (spectator-v5) and shows, for all ten players:
+solo/duo rank and season win rate, their last 10 ranked games (record, average K/D/A, main
+role), how many ranked games they have on the champion they picked, and their mastery points
+on it, plus short notes like "new to Qiyana", "plays mostly Swain" or "lost last 3". On the
+website it's the **Live game** link on a player page.
+
+Recent games are downloaded once into the same match cache everything else uses, without
+timelines. The first scout of a lobby takes about a hundred requests. Scouting it again
+mid-game, or the next game with the same duo, takes about thirty.
+
+It only shows public facts available before the game starts, like the loading-screen tools
+players already use. It never reads the game client and doesn't give advice during the game.
 
 ## Configuration
 

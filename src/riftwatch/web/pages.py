@@ -76,6 +76,7 @@ def player_page(
 ) -> str:
     sync_url = f"/api/players/{_esc(region)}/{_esc(riot_id)}/sync"
     update = (f'<p><button class="action" id="sync" data-url="{sync_url}">Update</button>'
+              f' <a class="plain" href="/scout/{_esc(region)}/{_esc(riot_id)}">Live game</a>'
               '<span class="status" id="sync-status"></span></p>')
     links = nav([("RiftWatch", "/")])
     if player is None:
@@ -116,3 +117,83 @@ def player_page(
     )
     return page(f"{player['riot_id']} - RiftWatch", f"RiftWatch coaching for {player['riot_id']}",
                 body, extra_js=SYNC_JS)
+
+
+
+SCOUT_JS = r"""
+const scoutBtn = document.getElementById('scout');
+if (scoutBtn) scoutBtn.addEventListener('click', async () => {
+  const status = document.getElementById('scout-status');
+  scoutBtn.disabled = true; status.textContent = 'Finding the game...';
+  try {
+    const r = await fetch(scoutBtn.dataset.url, {method: 'POST'});
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.detail || body.error || r.statusText);
+    let job = body.job;
+    while (job.status === 'queued' || job.status === 'running') {
+      status.textContent = job.progress.length ? job.progress[job.progress.length - 1] : 'Waiting for Riot...';
+      await new Promise(res => setTimeout(res, 800));
+      job = await (await fetch('/api/jobs/' + job.id)).json();
+    }
+    if (job.status === 'failed') throw new Error(job.error);
+    location.search = '?job=' + job.id;
+  } catch (e) { scoutBtn.disabled = false; status.textContent = e.message; }
+});
+"""
+
+
+def _scout_row(p: dict[str, Any], me: str, region: str) -> str:
+    r = p["rank"]
+    rank = (f"{r['tier'].title()} {r['division'] or ''}".strip() + f" · {r['lp']} LP"
+            if r else "Unranked")
+    season = (f"{round(100 * r['wins'] / max(r['wins'] + r['losses'], 1))}% of "
+              f"{r['wins'] + r['losses']}" if r else "")
+    recent = (f"{p['wins']}W {p['games'] - p['wins']}L · {p['kills']}/{p['deaths']}/{p['assists']}"
+              if p["games"] else "none")
+    role = (f"{p['main_role'].lower()} {round(100 * p['main_role_share'])}%"
+            if p["main_role"] else "")
+    champ = (f"{p['champion_games']} · {round(100 * p['champion_wins'] / p['champion_games'])}%"
+             if p["champion_games"] else "none")
+    mastery = "" if p["mastery_points"] is None else f"{p['mastery_points']:,}"
+    name = _esc(p["riot_id"])
+    if p["puuid"] == me:
+        name = f"<strong>{name}</strong>"
+    elif p["puuid"] and "#" in p["riot_id"]:
+        game_name, tag = p["riot_id"].rsplit("#", 1)
+        name = f'<a class="plain" href="/players/{_esc(region)}/{path_id(game_name, tag)}">{name}</a>'
+    return (f'<tr><td>{name}<div class="small">{_esc(", ".join(p["flags"]))}</div></td>'
+            f'<td>{_esc(p["champion"])}</td>'
+            f'<td>{_esc(rank)}<div class="small">{_esc(season)}</div></td>'
+            f'<td class="num">{_esc(recent)}<div class="small">{_esc(role)}</div></td>'
+            f'<td class="num">{_esc(champ)}</td><td class="num">{_esc(mastery)}</td></tr>')
+
+
+def scout_page(region: str, riot_id: str, report: dict[str, Any] | None,
+               error: str | None = None) -> str:
+    shown = "#".join(riot_id.rsplit("-", 1))
+    url = f"/api/scout/{_esc(region)}/{_esc(riot_id)}"
+    button = (f'<p><button class="action" id="scout" data-url="{url}">'
+              f'{"Refresh" if report else "Scout live game"}</button>'
+              f'<span class="status" id="scout-status">{_esc(error or "")}</span></p>')
+    links = nav([("RiftWatch", "/"), (shown, f"/players/{_esc(region)}/{_esc(riot_id)}")])
+    if report is None:
+        body = (links + "<h1>Live game</h1><p class=\"sub\">Rank, champion experience and recent "
+                f"form of everyone in {_esc(shown)}'s current game.</p>" + button)
+        return page(f"Live game - {shown}", "RiftWatch live-game scouting", body,
+                    extra_js=SCOUT_JS)
+
+    minutes, seconds = divmod(max(report["game_length_s"], 0), 60)
+    head = ('<tr class="area"><td>player</td><td>champion</td><td>solo/duo</td>'
+            "<td>last games</td><td>ranked games on champ</td><td>mastery</td></tr>")
+    teams = []
+    for team_id, name in ((100, "Blue team"), (200, "Red team")):
+        rows = "".join(_scout_row(p, report["me"], region)
+                       for p in report["players"] if p["team_id"] == team_id)
+        bans = ", ".join(b["champion"] for b in report["bans"] if b["team_id"] == team_id)
+        teams.append(f"<h2>{name}</h2>"
+                     + (f'<p class="sub">Bans: {_esc(bans)}</p>' if bans else "")
+                     + f'<div class="card scroll"><table class="score">{head}{rows}</table></div>')
+    body = (links + "<h1>Live game</h1>"
+            f'<p class="sub">{_esc(report["queue"])} · {_esc(report["platform"].upper())} · '
+            f"{minutes}:{seconds:02d} in when scouted</p>" + button + "".join(teams))
+    return page(f"Live game - {shown}", "RiftWatch live-game scouting", body, extra_js=SCOUT_JS)
