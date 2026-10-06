@@ -16,6 +16,8 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from psycopg_pool import ConnectionPool
+from starlette.datastructures import MutableHeaders
+from starlette.middleware.gzip import GZipMiddleware
 
 import riftwatch.db.connection  # noqa: F401  (installs the orjson jsonb codecs)
 from riftwatch import __version__
@@ -29,8 +31,35 @@ from riftwatch.report.html import game_html
 from riftwatch.riot.api import QUEUE_NAMES, SUPPORTED_QUEUES, RiotApi
 from riftwatch.riot.client import RiotApiError, RiotClient
 from riftwatch.riot.routing import RiotId, UnknownRegion, parse_riot_id, platform_for
-from riftwatch.web import pages, serialize
+from riftwatch.web import limits, pages, serialize
 from riftwatch.web.jobs import JobQueue
+
+SECURITY_HEADERS = (
+    ("x-content-type-options", "nosniff"),
+    ("x-frame-options", "DENY"),
+    ("referrer-policy", "same-origin"),
+)
+
+
+class SecurityHeaders:
+    """Plain ASGI middleware (not BaseHTTPMiddleware), so streamed coaching passes through
+    untouched."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for name, value in SECURITY_HEADERS:
+                    headers.setdefault(name, value)
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 
 def parse_path_riot_id(text: str) -> RiotId:
@@ -83,6 +112,7 @@ def create_app(
         kwargs={"autocommit": True, "connect_timeout": 5},
     )
     services = Services(settings, pool, api, coach, jobs or JobQueue(pool))
+    rate_limits = limits.parse_limits(settings.rate_limits)
 
     def sync_job(params: dict[str, Any], progress) -> dict[str, Any]:
         """Runs in whichever server process claims the job, so it rebuilds what it needs
@@ -132,6 +162,10 @@ def create_app(
     # no custom response class needed.
     app = FastAPI(title="RiftWatch", version=__version__, lifespan=lifespan)
     app.state.services = services
+    # Pages carry their CSS and JavaScript inline; compressed they are a fraction of the size.
+    # Starlette never compresses text/event-stream, so streamed coaching still streams.
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
+    app.add_middleware(SecurityHeaders)
 
     # -- errors -> HTTP ---------------------------------------------------------------------
 
@@ -148,6 +182,27 @@ def create_app(
     app.add_exception_handler(CoachError, error(502))
 
     # -- helpers ----------------------------------------------------------------------------
+
+    def visitor(request: Request) -> str:
+        # Behind a proxy, uvicorn's --proxy-headers (with FORWARDED_ALLOW_IPS set to the
+        # proxy) puts the real client address here.
+        return request.client.host if request.client else "anonymous"
+
+    def limit(request: Request, action: str) -> None:
+        """429 with Retry-After once a visitor has used up this action for the hour."""
+        with pool.connection() as conn:
+            retry = limits.hit(conn, f"{action}:{visitor(request)}", rate_limits[action])
+        if retry is not None:
+            raise HTTPException(429, f"too many {action} requests; try again in "
+                                     f"{int(retry // 60) + 1} min",
+                                headers={"Retry-After": str(int(retry))})
+
+    def require_coach_budget() -> None:
+        with pool.connection() as conn:
+            spent = limits.coach_spend_today(conn)
+        if spent >= settings.coach_daily_budget_usd:
+            raise HTTPException(503, "AI coaching has reached today's budget; "
+                                     "it comes back at midnight UTC")
 
     def account_or_404(conn, region: str, riot_id: str) -> dict[str, Any]:
         platform = platform_for(region)
@@ -224,8 +279,9 @@ def create_app(
         platform = platform_for(region)
         rid = parse_path_riot_id(riot_id)
         services.require_api()
+        limit(request, "sync")
         key = f"sync:{platform}:{rid.game_name.lower()}#{rid.tag_line.lower()}"
-        owner = request.client.host if request.client else "anonymous"
+        owner = visitor(request)
         job, created = services.jobs.submit(
             key, "sync", {"platform": platform, "game_name": rid.game_name,
                           "tag_line": rid.tag_line, "count": count}, owner=owner)
@@ -237,8 +293,9 @@ def create_app(
         platform = platform_for(region)
         rid = parse_path_riot_id(riot_id)
         services.require_api()
+        limit(request, "scout")
         key = f"scout:{platform}:{rid.game_name.lower()}#{rid.tag_line.lower()}"
-        owner = request.client.host if request.client else "anonymous"
+        owner = visitor(request)
         job, created = services.jobs.submit(
             key, "scout", {"platform": platform, "game_name": rid.game_name,
                            "tag_line": rid.tag_line}, owner=owner)
@@ -275,17 +332,22 @@ def create_app(
         return review(region, riot_id, match_id, generate=False)
 
     @app.post("/api/players/{region}/{riot_id}/matches/{match_id}/coach")
-    def match_coach(region: str, riot_id: str, match_id: str) -> dict[str, Any]:
+    def match_coach(request: Request, region: str, riot_id: str, match_id: str) -> dict[str, Any]:
         if coach is None:
             raise HTTPException(503, "LLM coach not configured on the server")
+        limit(request, "coach")
+        require_coach_budget()
         return review(region, riot_id, match_id, generate=True)
 
     @app.post("/api/players/{region}/{riot_id}/matches/{match_id}/coach/stream")
-    def match_coach_stream(region: str, riot_id: str, match_id: str) -> StreamingResponse:
+    def match_coach_stream(request: Request, region: str, riot_id: str,
+                           match_id: str) -> StreamingResponse:
         """Coaching as server-sent events: each point once it is complete and grounded, then
         the validated final answer. A POST, because generating coaching costs money."""
         if coach is None:
             raise HTTPException(503, "LLM coach not configured on the server")
+        limit(request, "coach")
+        require_coach_budget()
         with pool.connection() as conn:     # fail fast (404s) before the stream starts
             account = account_or_404(conn, region, riot_id)
 
@@ -315,10 +377,12 @@ def create_app(
         return recent(region, riot_id, games, generate=False)
 
     @app.post("/api/players/{region}/{riot_id}/recent/coach")
-    def recent_coach(region: str, riot_id: str,
+    def recent_coach(request: Request, region: str, riot_id: str,
                      games: int = Query(20, ge=5, le=50)) -> dict[str, Any]:
         if coach is None:
             raise HTTPException(503, "LLM coach not configured on the server")
+        limit(request, "coach")
+        require_coach_budget()
         return recent(region, riot_id, games, generate=True)
 
     @app.get("/players/{region}/{riot_id}/matches/{match_id}", response_class=HTMLResponse)

@@ -14,5 +14,22 @@ services:
       interval: 2s
       retries: 15
 
+  # The website. `docker compose up -d db` (local development) starts only the database.
+  web:
+    build: .
+    env_file: .env
+    environment:
+      RIFTWATCH_DATABASE_URL: postgresql://riftwatch:riftwatch@db:5432/riftwatch
+      # Set to your reverse proxy's address so visitor limits see real client addresses.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+    volumes:
+      - ./out/ml/models:/app/models:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   pgdata:

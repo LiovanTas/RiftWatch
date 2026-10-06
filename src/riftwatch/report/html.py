@@ -45,6 +45,8 @@ _CSS = """
 body { margin: 0; background: var(--page); color: var(--ink);
   font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
 main { max-width: 1120px; margin: 0 auto; padding: 24px 16px 64px; }
+footer.legal { max-width: 1120px; margin: 0 auto; padding: 0 16px 32px; font-size: 12px;
+  color: var(--ink-2); }
 h1 { font-size: 24px; margin: 0 0 4px; font-weight: 650; }
 h2 { font-size: 17px; margin: 32px 0 12px; font-weight: 650; }
 .sub { color: var(--ink-2); margin: 0; }
@@ -452,6 +454,15 @@ def nav(links: list[tuple[str, str]]) -> str:
             + "".join(f'<a href="{_esc(u)}">{_esc(t)}</a>' for t, u in links) + "</nav>")
 
 
+# Riot's policy for products using its API requires this notice where people see the product.
+LEGAL_FOOTER = (
+    '<footer class="legal">RiftWatch isn\'t endorsed by Riot Games and doesn\'t reflect the views '
+    "or opinions of Riot Games or anyone officially involved in producing or managing Riot "
+    "Games properties. Riot Games, and all associated properties are trademarks or registered "
+    "trademarks of Riot Games, Inc.</footer>"
+)
+
+
 def page(title: str, description: str, body: str, data: dict[str, Any] | None = None,
          extra_js: str = "") -> str:
     payload = json.dumps(data or {"group": "", "curves": [], "deaths": [], "duration_min": 1})
@@ -464,7 +475,7 @@ def page(title: str, description: str, body: str, data: dict[str, Any] | None = 
         'viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 rx=%224%22 '
         'fill=%22%232a78d6%22/%3E%3C/svg%3E">'
         f"<title>{_esc(title)}</title><meta name=\"description\" content=\"{_esc(description)}\">"
-        f"<style>{_CSS}</style></head><body><main>{body}</main>"
+        f"<style>{_CSS}</style></head><body><main>{body}</main>{LEGAL_FOOTER}"
         f'<script type="application/json" id="data">{payload}</script>'
         f"<script>{_JS}{ACTION_JS}{extra_js}</script></body></html>"
     )

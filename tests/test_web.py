@@ -44,7 +44,8 @@ def web(request):
     # Cites only the context item and states no numbers, so it passes grounding for any game.
     ok = CoachOutput(headline="Review.", points=[point(evidence_ids=["E1"], explanation="A game.")])
     coach, coach_calls = fake_coach(ok, ok, ok)
-    settings = Settings.from_env({"RIFTWATCH_DATABASE_URL": TEST_DB})
+    # Tests can pass extra settings with @pytest.mark.parametrize("web", [{...}], indirect=True).
+    settings = Settings.from_env({"RIFTWATCH_DATABASE_URL": TEST_DB, **getattr(request, "param", {})})
     app = create_app(settings, api=api, coach=coach, pool=pool, jobs=jobs)
     with TestClient(app) as client:
         yield client, api, coach_calls, jobs
@@ -190,3 +191,50 @@ def test_page_escapes_riot_ids(web):
     client, *_ = web
     page = client.get("/players/na/%3Cscript%3Ealert(1)%3C%2Fscript%3E-NA1").text
     assert "<script>alert(1)</script>" not in page
+
+
+# -- public-site guards -------------------------------------------------------------------------
+
+@pytest.mark.parametrize("web", [{"RIFTWATCH_RATE_LIMITS": "sync=2"}], indirect=True)
+def test_visitor_rate_limit_answers_429_with_retry_after(web):
+    client, *_ = web
+    for _ in range(2):
+        assert client.post("/api/players/na/Me-NA1/sync").status_code == 202
+    blocked = client.post("/api/players/na/Me-NA1/sync")
+    assert blocked.status_code == 429
+    assert 1 <= int(blocked.headers["retry-after"]) <= 3600
+    assert "too many sync requests" in blocked.json()["detail"]
+    # Other actions keep their own allowance.
+    assert client.post("/api/scout/na/Me-NA1").status_code == 202
+
+
+@pytest.mark.parametrize("web", [{"RIFTWATCH_COACH_DAILY_BUDGET_USD": "0"}], indirect=True)
+def test_coaching_stops_at_the_daily_budget(web):
+    client, api, coach_calls, jobs = web
+    sync(client, jobs)
+    r = client.post(f"/api/players/na/Me-NA1/matches/{api.ids[0]}/coach")
+    assert r.status_code == 503 and "budget" in r.json()["detail"]
+    assert coach_calls.calls == []
+    # Reading pages and cached data still works.
+    assert client.get(f"/api/players/na/Me-NA1/matches/{api.ids[0]}").status_code == 200
+
+
+def test_pages_carry_the_legal_notice_headers_and_compression(web):
+    client, *_ = web
+    r = client.get("/", headers={"Accept-Encoding": "gzip"})
+    assert "isn't endorsed by Riot Games" in r.text
+    assert r.headers["content-encoding"] == "gzip"
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["x-frame-options"] == "DENY"
+    assert client.get("/api/health").headers["referrer-policy"] == "same-origin"
+
+
+def test_parse_limits():
+    from riftwatch.web.limits import DEFAULT_LIMITS, parse_limits
+
+    assert parse_limits(None) == DEFAULT_LIMITS
+    assert parse_limits("coach=3, sync=100") == {**DEFAULT_LIMITS, "coach": 3, "sync": 100}
+    with pytest.raises(ValueError):
+        parse_limits("coach=lots")
+    with pytest.raises(ValueError):
+        parse_limits("download=5")

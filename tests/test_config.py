@@ -31,3 +31,9 @@ def test_require_riot_key():
     with pytest.raises(ConfigError, match="24h"):
         Settings.from_env({}).require_riot_key()
     assert Settings.from_env({"RIOT_API_KEY": "RGAPI-x"}).require_riot_key() == "RGAPI-x"
+
+
+def test_website_guard_settings():
+    s = Settings.from_env({"RIFTWATCH_RATE_LIMITS": "coach=3", "RIFTWATCH_COACH_DAILY_BUDGET_USD": "2.5"})
+    assert s.rate_limits == "coach=3" and s.coach_daily_budget_usd == 2.5
+    assert Settings.from_env({}).coach_daily_budget_usd == 5.0

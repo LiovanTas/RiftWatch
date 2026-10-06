@@ -48,6 +48,9 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
       several server processes can share the work
 - [x] **Baseline refresh** (`riftwatch refresh`): tops up every rank bucket on the live patch and
       rebuilds baselines; schedule it daily
+- [x] **Deploy prep**: Docker image (migrations on start, several workers), per-visitor
+      limits in Postgres with `429`/`Retry-After`, a daily LLM coaching budget, Riot's legal
+      notice, gzip and security headers, a deploy guide
 - [ ] **Production key.** A public site needs a registered Riot product and a production API
       key; development keys are for personal use and expire daily.
 

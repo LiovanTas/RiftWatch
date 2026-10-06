@@ -191,6 +191,41 @@ take the next one from whoever has the least work running, and retry a job whose
 
 Interactive API docs are at `/docs`.
 
+## Deploying the website
+
+```bash
+docker compose up -d --build       # Postgres and the website on http://localhost:8000
+docker compose exec web riftwatch refresh    # fill baselines on the live patch (then daily)
+```
+
+The `web` image runs migrations on every start, then serves with `WEB_WORKERS` processes (default
+2). Jobs, rate limits and the baseline cache's staleness check all go through Postgres, so
+workers -- and several containers -- stay consistent. It reads keys from `.env`; trained
+high-elo models are mounted read-only from `out/ml/models`.
+
+What makes it safe to put in public:
+
+- **Visitor limits.** Update, live-game scouting and AI coaching are limited per visitor per hour
+  (`RIFTWATCH_RATE_LIMITS`, default `sync=30,scout=60,coach=10`), counted in Postgres and
+  answered with `429` and `Retry-After`. Behind a reverse proxy, set `FORWARDED_ALLOW_IPS` to
+  the proxy's address so the limits see visitors' real addresses.
+- **Coaching budget.** AI coaching stops for the day once that day's coaching has cost
+  `RIFTWATCH_COACH_DAILY_BUDGET_USD` (default 5; about 400 games at ~$0.012 each). Cached
+  coaching and everything else keep working.
+- **One Riot rate limiter** per server process, sized from Riot's own response headers, and
+  every page reads Postgres only.
+- Riot's required legal notice on every page, gzip for pages and JSON, and `nosniff`,
+  `DENY` framing and `same-origin` referrer headers.
+
+Put it behind a reverse proxy that terminates HTTPS (Caddy, nginx, or the host's load
+balancer) and schedule `riftwatch refresh` daily.
+
+**Production key.** A development key expires every 24 hours and is for personal use. A public
+site needs a production key: register RiftWatch as a product at https://developer.riotgames.com
+with a description of what it does and a URL where Riot can see it working, and keep the legal
+notice visible. Riot reviews each application, so allow time for that. Until then, run the site
+privately with a development key.
+
 ## Black-screen watchdog (Windows)
 
 ```bash

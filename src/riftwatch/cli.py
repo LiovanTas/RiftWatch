@@ -449,9 +449,11 @@ def cmd_serve(settings: Settings, args: argparse.Namespace) -> int:
         print("error: the web server needs the web extras: pip install -e \".[web]\"",
               file=sys.stderr)
         return 2
-    from riftwatch.web.app import create_app
-
-    uvicorn.run(create_app(settings), host=args.host, port=args.port, log_level="info")
+    # A factory string, so uvicorn can start several worker processes; each builds the app
+    # from the same environment (.env is already loaded). Jobs, rate limits and the baseline
+    # cache's staleness check all go through Postgres, so the workers stay consistent.
+    uvicorn.run("riftwatch.web.app:create_app", factory=True, host=args.host, port=args.port,
+                workers=args.workers, log_level="info")
     return 0
 
 
@@ -576,6 +578,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("serve", help="run the web API")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--workers", type=int, default=1, help="server processes (default 1)")
     p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("features", help="extract per-minute features from cached timelines")

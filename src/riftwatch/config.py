@@ -31,6 +31,8 @@ class Settings:
     coach_thinking: str = DEFAULT_COACH_THINKING
     kill_hotkey: str = DEFAULT_KILL_HOTKEY
     models_dir: str = DEFAULT_MODELS_DIR
+    rate_limits: str | None = None          # website: "sync=30,scout=60,coach=10" per hour
+    coach_daily_budget_usd: float = 5.0     # website: LLM coaching stops for the day past this
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -45,6 +47,8 @@ class Settings:
             coach_thinking=env.get("RIFTWATCH_COACH_THINKING") or DEFAULT_COACH_THINKING,
             kill_hotkey=env.get("RIFTWATCH_KILL_HOTKEY") or DEFAULT_KILL_HOTKEY,
             models_dir=env.get("RIFTWATCH_MODELS_DIR") or DEFAULT_MODELS_DIR,
+            rate_limits=env.get("RIFTWATCH_RATE_LIMITS") or None,
+            coach_daily_budget_usd=float(env.get("RIFTWATCH_COACH_DAILY_BUDGET_USD") or 5.0),
         )
 
     def require_riot_key(self) -> str:
