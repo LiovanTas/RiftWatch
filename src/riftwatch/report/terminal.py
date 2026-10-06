@@ -27,7 +27,7 @@ def scorecard(score: GameScore) -> list[str]:
     first = next(iter(score.game.values()))
     adjusted = any(s.baseline.adjusted_n for s in score.game.values())
     lines.append(f"  vs {first.baseline.scope.split(',')[0]}, patches {first.baseline.patch_window}"
-                 + ("; ~ = shifted for this champion" if adjusted else ""))
+                 + ("; ~ = adjusted for your champion or lane matchup" if adjusted else ""))
     for area in AREAS:
         if area not in by_area:
             continue

@@ -75,7 +75,8 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
 - [x] Build timing: first and second legendary items and boots, against players at your rank
 - [x] Live-game scouting via spectator-v5: rank, recent form and champion experience for
       all ten players, from the shared match cache (CLI and a website page)
-- [ ] Matchup-specific baselines (champion vs champion) once the crawl is large enough
+- [x] Matchup-specific lane comparisons: lane strength per champion and role, leads judged by
+      strength(you) - strength(opponent); exact-pair tables tested and found to add nothing yet
 - [ ] Arena and ARAM support (different timelines, different metrics)
 
 ## Riot API facts we design around

@@ -23,6 +23,7 @@ from riftwatch.coach.llm import Coach
 from riftwatch.db import repo
 from riftwatch.features import store
 from riftwatch.features.extract import GameFeatures, ParticipantFeatures
+from riftwatch.features.metrics import LANE_LEAD_METRICS
 
 
 class ReportError(LookupError):
@@ -206,13 +207,15 @@ def _add_reference(conn, score: GameScore, bucket: str, min_n: int) -> None:
     p = score.participant
     ref = baselines_for(conn, HIGH_ELO_BUCKET, p.role, p.champion_id, min_n, max_tier_distance=0)
     for name in score.game:
-        b = ref.get(name)
+        b = ref.get(name, None, score.opponent_champion_id if name in LANE_LEAD_METRICS else None)
         if b is not None:
             score.reference[name] = b
 
 
-def _score(conn, p: ParticipantFeatures, bucket: str, min_n: int) -> GameScore:
-    return score_participant(p, baselines_for(conn, bucket, p.role, p.champion_id, min_n))
+def _score(conn, game: GameFeatures, p: ParticipantFeatures, bucket: str, min_n: int) -> GameScore:
+    opponent = game.participants.get(p.opponent_id) if p.opponent_id else None
+    return score_participant(p, baselines_for(conn, bucket, p.role, p.champion_id, min_n),
+                             opponent.champion_id if opponent else None)
 
 
 def game_report(
@@ -232,7 +235,7 @@ def game_report(
     if p is None:
         raise ReportError(f"this player is not in {match_id}")
     bucket = player_bucket(conn, puuid, tier)
-    score = _score(conn, p, bucket, min_n)
+    score = _score(conn, game, p, bucket, min_n)
     _add_reference(conn, score, bucket, min_n)
     from riftwatch.live.store import for_match
 
@@ -279,7 +282,7 @@ def recent_report(
         if p is None or not p.role or game.duration_s < 600:
             continue
         loaded.append((game, p))
-        scores.append(_score(conn, p, bucket, min_n))
+        scores.append(_score(conn, game, p, bucket, min_n))
     if not loaded:
         raise ReportError("no analysable games cached for this player -- run sync first")
     tier_label = bucket.replace("_", " ").title()

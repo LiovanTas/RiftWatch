@@ -15,7 +15,13 @@ from dataclasses import dataclass, field
 
 from riftwatch.baselines.build import Baseline, BaselineSet
 from riftwatch.features.extract import ParticipantFeatures
-from riftwatch.features.metrics import CURVE_METRICS, CURVE_MINUTES, GAME_METRICS, Metric
+from riftwatch.features.metrics import (
+    CURVE_METRICS,
+    CURVE_MINUTES,
+    GAME_METRICS,
+    LANE_LEAD_METRICS,
+    Metric,
+)
 
 _QUANTS = (10, 25, 50, 75, 90)
 
@@ -72,18 +78,23 @@ class GameScore:
     # the player is Master+ themselves, or there's no high-elo data for the role.
     reference: dict[str, Baseline] = field(default_factory=dict)
     reference_label: str = "Master+"
+    opponent_champion_id: int | None = None
 
     def curve_at(self, metric: str, minute: int) -> Score | None:
         return next((s for s in self.curves.get(metric, []) if s.minute == minute), None)
 
 
-def score_participant(p: ParticipantFeatures, baselines: BaselineSet) -> GameScore:
-    gs = GameScore(p, baselines.tier_bucket)
+def score_participant(p: ParticipantFeatures, baselines: BaselineSet,
+                      opponent_champion_id: int | None = None) -> GameScore:
+    """``opponent_champion_id`` is the lane opponent's champion; with it, leads over the
+    opponent are compared against the matchup instead of the whole role."""
+    gs = GameScore(p, baselines.tier_bucket, opponent_champion_id=opponent_champion_id)
+    opp = opponent_champion_id
     for name, value in p.metrics.items():
         metric = GAME_METRICS.get(name)
         if metric is None or not metric.applies_to(p.role):
             continue
-        b = baselines.get(name)
+        b = baselines.get(name, None, opp if name in LANE_LEAD_METRICS else None)
         if b is None:
             gs.missing.append(name)
             continue
@@ -97,7 +108,7 @@ def score_participant(p: ParticipantFeatures, baselines: BaselineSet) -> GameSco
             if row.minute not in CURVE_MINUTES:
                 continue
             value = getattr(row, name)
-            b = baselines.get(name, row.minute)
+            b = baselines.get(name, row.minute, opp if name in LANE_LEAD_METRICS else None)
             if value is None or b is None:
                 continue
             scores.append(Score(metric, float(value), b, row.minute))

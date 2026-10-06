@@ -121,6 +121,15 @@ over at 200 games at your tier. Tested by predicting each champion's median at a
 other tiers: error fell by a fifth overall, and about half for CS, gold, damage share and item
 timings.
 
+**Lane matchups.** Leads over your lane opponent are judged against the matchup. Each champion
+gets a lane strength per role and metric: its average lead over whoever it laned against,
+pooled over every tier and shrunk toward zero. Your lead is compared with the role baseline
+shifted by your strength minus your opponent's, so going even in a lane that usually loses 200
+XP by 15 minutes counts as winning it. On held-out games this explained twice as much of the
+lead as your champion alone (CS lead at 10 minutes: 13% of the variance against 7%).
+Averaging each exact champion pair on top added nothing at this sample size. The coach is
+told who you laned against.
+
 **Coach.** Scores become numbered evidence items. Claude (Sonnet 5.5) answers in a fixed JSON
 schema, citing evidence ids. The grounding check rejects any number that isn't in the evidence
 a point cites; Claude gets one retry with the exact violations, then failing points are

@@ -105,6 +105,9 @@ _CURVES = [
 
 GAME_METRICS: dict[str, Metric] = {m.name: m for m in _GAME}
 CURVE_METRICS: dict[str, Metric] = {m.name: m for m in _CURVES}
+# Leads over the lane opponent: judged against the matchup, not just the role.
+LANE_LEAD_METRICS = frozenset(
+    [n for n in GAME_METRICS if "_diff_at_" in n] + [n for n in CURVE_METRICS if n.endswith("_diff")])
 ALL_METRICS: dict[str, Metric] = {**GAME_METRICS, **CURVE_METRICS}
 
 # Minutes for which curve baselines are built: enough to cover nearly every ranked game's

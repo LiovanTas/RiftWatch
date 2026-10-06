@@ -210,6 +210,52 @@ def test_adjusted_baseline_shifts_the_role_at_the_players_tier(conn):
         bl.CHAMPION_MIN_N = saved
 
 
+def test_lane_leads_are_judged_against_the_matchup(conn):
+    rows = [row("GOLD", 0, 0, n=400, metric="gold_diff_at_10"),
+            row("GOLD", 0, 50, n=400)]
+    with conn.cursor() as cur:
+        for b in rows:
+            cur.execute(
+                """INSERT INTO baselines (tier_bucket, role, champion_id, patch_window, metric,
+                       minute, n, mean, sd, p10, p25, p50, p75, p90)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (b.tier_bucket, b.role, b.champion_id, b.patch_window, b.metric, b.minute,
+                 b.n, b.mean, b.sd, b.p10, b.p25, b.p50, b.p75, b.p90))
+        cur.executemany(
+            "INSERT INTO lane_strength VALUES ('JUNGLE', %s, 'gold_diff_at_10', 0, %s, %s)",
+            [(64, 300, 120.0), (11, 200, -80.0)])
+    bl.invalidate_cache()
+    s = bl.BaselineSet(conn, "GOLD", "JUNGLE", 64)
+    vs = s.get("gold_diff_at_10", None, 11)
+    assert vs.p50 == pytest.approx(200) and vs.adjusted_for == "matchup" and vs.adjusted_n == 500
+    assert vs.scope == "Gold jungle, adjusted for matchup"
+    # Opponent with no lane data: only your own strength counts.
+    assert s.get("gold_diff_at_10", None, 999).p50 == pytest.approx(120)
+    # No opponent given, or not a lane-lead metric: no matchup shift.
+    assert s.get("gold_diff_at_10").adjusted_for != "matchup"
+    assert s.get("cs_per_min", None, 11).p50 == 50
+
+
+def test_build_fills_lane_strength(conn):
+    load_games(conn, 25)
+    bl.build(conn, min_n=20)
+    rows = conn.execute(
+        "SELECT metric, minute, n FROM lane_strength WHERE role = 'TOP' AND champion_id = 266"
+    ).fetchall()
+    metrics = {(m, minute) for m, minute, _ in rows}
+    assert ("gold_diff_at_10", 0) in metrics and ("cs_diff", 10) in metrics
+    assert all(n == 25 for m, minute, n in rows if minute == 0)
+    # The fixture's Aatrox always leads Garen in gold, so its strength is positive and
+    # shrunk: sum / (n + LANE_SHRINK).
+    strength = conn.execute(
+        """SELECT strength FROM lane_strength WHERE role = 'TOP' AND champion_id = 266
+           AND metric = 'gold_diff_at_10' AND minute = 0""").fetchone()[0]
+    garen = conn.execute(
+        """SELECT strength FROM lane_strength WHERE role = 'TOP' AND champion_id = 86
+           AND metric = 'gold_diff_at_10' AND minute = 0""").fetchone()[0]
+    assert strength == pytest.approx(-garen)
+
+
 def test_score_and_trend_end_to_end(conn):
     games = load_games(conn, 25)
     bl.build(conn, min_n=20)

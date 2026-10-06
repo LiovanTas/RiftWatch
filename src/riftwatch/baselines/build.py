@@ -15,7 +15,7 @@ from dataclasses import dataclass, replace
 
 import psycopg
 
-from riftwatch.features.metrics import CURVE_METRICS, CURVE_MINUTES
+from riftwatch.features.metrics import CURVE_METRICS, CURVE_MINUTES, LANE_LEAD_METRICS
 
 TIER_ORDER = ("IRON", "BRONZE", "SILVER", "GOLD", "PLATINUM", "EMERALD", "DIAMOND", "MASTER_PLUS")
 MIN_GAME_S = 600      # drop remakes and other games too short to say anything
@@ -30,6 +30,11 @@ CHAMPION_MIN_N = 200
 ADJUST_MIN_N = 50     # pooled champion games before an adjustment is considered
 ADJUST_SHRINK = 100   # effect * n / (n + this): small samples move the baseline less
 ADJUST_GATE = 2.0     # apply only effects beyond this many standard errors
+# Lane strength: a champion's mean lead over its lane opponent, sum / (n + this). On 16.19
+# held-out games, strength(you) - strength(them) explained twice as much of the CS, gold
+# and XP leads as your own champion alone (CS lead at 10: 13% vs 7% of the variance);
+# averaging each exact pair on top added nothing.
+LANE_SHRINK = 50
 
 _STATS = """
     count(*), avg(v), coalesce(stddev_samp(v), 0),
@@ -76,6 +81,31 @@ HAVING count(*) >= %(min_n)s
 """
 
 
+_LANE_GAME_SQL = """
+INSERT INTO lane_strength (role, champion_id, metric, minute, n, strength)
+SELECT s.role, s.champion_id, kv.key, 0, count(*), sum(kv.value::float8) / (count(*) + %(shrink)s)
+  FROM participant_game_summary s
+  JOIN matches m USING (match_id)
+  JOIN match_samples ms USING (match_id)
+  CROSS JOIN LATERAL jsonb_each_text(s.metrics) kv
+ WHERE {source} AND kv.key = ANY(%(lead)s)
+ GROUP BY s.role, s.champion_id, kv.key
+"""
+
+_LANE_CURVES = [c for c in CURVE_METRICS if c in LANE_LEAD_METRICS]
+_LANE_CURVE_SQL = f"""
+INSERT INTO lane_strength (role, champion_id, metric, minute, n, strength)
+SELECT s.role, s.champion_id, c.metric, f.minute, count(*), sum(c.v) / (count(*) + %(shrink)s)
+  FROM participant_minute_features f
+  JOIN participant_game_summary s USING (match_id, participant_id)
+  JOIN matches m USING (match_id)
+  JOIN match_samples ms USING (match_id)
+  CROSS JOIN LATERAL (VALUES {", ".join(f"('{c}', f.{c}::float8)" for c in _LANE_CURVES)}) AS c(metric, v)
+ WHERE {{source}} AND c.v IS NOT NULL AND f.minute BETWEEN %(min_minute)s AND %(max_minute)s
+ GROUP BY s.role, s.champion_id, c.metric, f.minute
+"""
+
+
 @dataclass
 class BuildReport:
     patches: list[str]
@@ -119,6 +149,7 @@ def build(
         "patches": patches, "window": window, "min_n": min_n,
         "min_game_s": MIN_GAME_S, "include_player": include_player_games,
         "min_minute": CURVE_MINUTES.start, "max_minute": CURVE_MINUTES.stop - 1,
+        "shrink": LANE_SHRINK, "lead": sorted(LANE_LEAD_METRICS),
     }
     with conn.transaction():
         conn.execute("DELETE FROM baselines")
@@ -129,6 +160,9 @@ def build(
                                     source=_SOURCE_FILTER),
                     params,
                 )
+        conn.execute("DELETE FROM lane_strength")
+        for template in (_LANE_GAME_SQL, _LANE_CURVE_SQL):
+            conn.execute(template.format(source=_SOURCE_FILTER), params)
         rows = conn.execute("SELECT count(*) FROM baselines").fetchone()[0]
         games = conn.execute(
             f"""
@@ -164,16 +198,19 @@ class Baseline:
     p50: float
     p75: float
     p90: float
-    adjusted_n: int = 0     # > 0: role baseline shifted by a champion effect from this many games
+    adjusted_n: int = 0     # > 0: role baseline shifted using this many games
+    adjusted_for: str = ""  # "champion" or "matchup"
 
     @property
     def scope(self) -> str:
-        who = ("adjusted for champion" if self.adjusted_n
+        who = (f"adjusted for {self.adjusted_for}" if self.adjusted_n
                else "same champion" if self.champion_id else "same role")
         return f"{self.tier_bucket.replace('_', ' ').title()} {self.role.lower()}, {who}"
 
-    def shifted(self, champion_id: int, delta: float, pooled_n: int) -> Baseline:
+    def shifted(self, champion_id: int, delta: float, pooled_n: int,
+                adjusted_for: str = "champion") -> Baseline:
         return replace(self, champion_id=champion_id, adjusted_n=pooled_n,
+                       adjusted_for=adjusted_for,
                        mean=self.mean + delta, p10=self.p10 + delta, p25=self.p25 + delta,
                        p50=self.p50 + delta, p75=self.p75 + delta, p90=self.p90 + delta)
 
@@ -250,6 +287,7 @@ class BaselineSet:
             (role, champion_id, champion_id, buckets),
         ).fetchall()]
         self._effects = champion_effects(rows, champion_id)
+        self._lane = lane_strengths(conn, role)
         self._rows: dict[tuple[str, int | None, str, int], Baseline] = {}
         for b in rows:
             if b.tier_bucket in buckets:
@@ -261,14 +299,29 @@ class BaselineSet:
     def __len__(self) -> int:
         return len(self._rows)
 
-    def get(self, metric: str, minute: int | None = None) -> Baseline | None:
+    def get(self, metric: str, minute: int | None = None,
+            opponent_champion_id: int | None = None) -> Baseline | None:
+        """``opponent_champion_id`` (lane-lead metrics only) judges the lead against the
+        matchup: the role baseline shifted by strength(you) - strength(them)."""
+        matchup = None
+        if opponent_champion_id and metric in LANE_LEAD_METRICS:
+            key = minute or 0
+            me = self._lane.get((metric, key, self.champion_id))
+            them = self._lane.get((metric, key, opponent_champion_id))
+            if me or them:
+                matchup = ((me[0] if me else 0.0) - (them[0] if them else 0.0),
+                           (me[1] if me else 0) + (them[1] if them else 0))
         for bucket, champ in self._order:
+            if champ and matchup is not None:
+                continue
             b = self._rows.get((metric, minute, bucket, champ))
             # A one-champion group must be big enough to beat the whole-role group as a
             # yardstick: 25 games of one champion is noisier than hundreds of the role.
             needed = max(self.min_n, CHAMPION_MIN_N) if champ else self.min_n
             if b is None or b.n < needed:
                 continue
+            if matchup is not None:
+                return b.shifted(self.champion_id, matchup[0], matchup[1], "matchup")
             effect = self._effects.get((metric, minute)) if not champ else None
             if effect is not None:
                 return b.shifted(self.champion_id, effect[0] * b.sd, effect[1])
@@ -282,6 +335,7 @@ class BaselineSet:
 # request scoring a game costs one tiny query instead of a scan of the baselines table.
 
 _cache: dict[tuple, BaselineSet] = {}
+_lanes: dict[str, dict[tuple, tuple[float, int]]] = {}
 _cache_generation: tuple | None = None
 _checked_at = float("-inf")
 # A rebuild is picked up within this many seconds; in between, cache hits cost no query.
@@ -308,6 +362,7 @@ def baselines_for(
         _checked_at = now
         if generation != _cache_generation:
             _cache.clear()
+            _lanes.clear()
             _cache_generation = generation
     key = (tier_bucket, role, champion_id, min_n, max_tier_distance)
     if key not in _cache:
@@ -315,8 +370,22 @@ def baselines_for(
     return _cache[key]
 
 
+def lane_strengths(conn: psycopg.Connection, role: str) -> dict[tuple, tuple[float, int]]:
+    """(metric, minute or 0, champion_id) -> (strength, games) for one role; shared by every
+    BaselineSet of the role and dropped with the baseline cache."""
+    if role not in _lanes:
+        _lanes[role] = {
+            (m, minute, champ): (strength, n)
+            for m, minute, champ, strength, n in conn.execute(
+                "SELECT metric, minute, champion_id, strength, n FROM lane_strength WHERE role = %s",
+                (role,))
+        }
+    return _lanes[role]
+
+
 def invalidate_cache() -> None:
     global _cache_generation, _checked_at
     _cache.clear()
+    _lanes.clear()
     _cache_generation = None
     _checked_at = float("-inf")

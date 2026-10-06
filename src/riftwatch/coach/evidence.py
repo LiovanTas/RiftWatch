@@ -163,8 +163,10 @@ def game_evidence(
     compared = (f" Comparison group unless a line says otherwise: {group.scope}, n={group.n} "
                 f"games, patches {any_baseline.baseline.patch_window}." if any_baseline else
                 " No rank baseline was available, so no percentile comparisons.")
+    opponent = game.participants.get(p.opponent_id) if p.opponent_id else None
+    against = f" against {opponent.champion_name}" if opponent else ""
     b.add("context", "context", "neutral",
-          f"Game {game.match_id}: {p.champion_name} {p.role.lower()}, "
+          f"Game {game.match_id}: {p.champion_name} {p.role.lower()}{against}, "
           f"{'win' if p.win else 'loss'}, length {clock(game.duration_min)}, patch {game.patch}; "
           f"final score {int(p.metrics.get('kills', 0))}/{int(p.metrics.get('deaths', 0))}/"
           f"{int(p.metrics.get('assists', 0))}.{compared}")
