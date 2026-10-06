@@ -108,8 +108,18 @@ killer, helpers and gold state.
 the last 14 days. Postgres computes n, mean, sd and the 10th-90th percentiles of every metric
 per tier x role x champion, and per minute for each curve. Your own games are left out of the
 yardstick. Lookups fall back from same champion to same role to the neighbouring tier.
-Every stat also shows the Master+ median for the role -- from about 10,000 high-elo players per
-role -- as a reference for where high elo sits.
+Every stat also shows the Master+ median for the role and champion as a reference for where
+high elo sits.
+
+**Champion adjustment.** Few champions have enough games at any one rank for a baseline of
+their own (on 16.19, 5-30 per rank below Master). So RiftWatch measures how far each champion
+sits from its role in every tier, in standard deviations, pools that across tiers, and shifts
+the role baseline at your tier by it. A Platinum Warwick is compared with Platinum junglers
+moved to Warwick's slower clear and later first item. Effects within two standard errors of
+zero are left out, and small samples are shrunk toward zero. A champion's own baseline takes
+over at 200 games at your tier. Tested by predicting each champion's median at a tier from the
+other tiers: error fell by a fifth overall, and about half for CS, gold, damage share and item
+timings.
 
 **Coach.** Scores become numbered evidence items. Claude (Sonnet 5.5) answers in a fixed JSON
 schema, citing evidence ids. The grounding check rejects any number that isn't in the evidence

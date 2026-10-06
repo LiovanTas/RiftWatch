@@ -162,6 +162,54 @@ def test_baseline_set_fallbacks(conn):
     assert bl.BaselineSet(conn, "DIAMOND", "TOP", 266).get("cs_at_10") is None
 
 
+def row(tier, champ, p50, n=100, sd=10.0, metric="cs_per_min", minute=None):
+    return bl.Baseline(metric, minute, tier, "JUNGLE", champ, "16.19", n, p50, sd,
+                       p50 - 12, p50 - 6, p50, p50 + 6, p50 + 12)
+
+
+def test_champion_effect_pools_tiers_and_gates_noise():
+    rows = [row("GOLD", 0, 50), row("GOLD", 64, 55, n=30),            # +0.5 sd on 30 games
+            row("DIAMOND", 0, 60), row("DIAMOND", 64, 65, n=90),      # +0.5 sd on 90 games
+            row("GOLD", 0, 5, metric="deaths"), row("GOLD", 64, 5.2, n=120, metric="deaths")]
+    effects = bl.champion_effects(rows, 64)
+    effect, n = effects[("cs_per_min", None)]
+    assert n == 120 and effect == pytest.approx(0.5 * 120 / (120 + bl.ADJUST_SHRINK))
+    # +0.02 sd is well inside the noise of 120 games: no adjustment.
+    assert ("deaths", None) not in effects
+    # Too few pooled games: nothing.
+    assert bl.champion_effects([row("GOLD", 0, 50), row("GOLD", 64, 80, n=40)], 64) == {}
+
+
+def test_adjusted_baseline_shifts_the_role_at_the_players_tier(conn):
+    rows = [row("GOLD", 0, 50, n=400), row("GOLD", 64, 56, n=30),
+            row("MASTER_PLUS", 0, 70, n=900), row("MASTER_PLUS", 64, 76, n=170)]
+    with conn.cursor() as cur:
+        for b in rows:
+            cur.execute(
+                """INSERT INTO baselines (tier_bucket, role, champion_id, patch_window, metric,
+                       minute, n, mean, sd, p10, p25, p50, p75, p90)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (b.tier_bucket, b.role, b.champion_id, b.patch_window, b.metric, b.minute,
+                 b.n, b.mean, b.sd, b.p10, b.p25, b.p50, b.p75, b.p90))
+    got = bl.BaselineSet(conn, "GOLD", "JUNGLE", 64).get("cs_per_min")
+    shift = 0.6 * 200 / (200 + bl.ADJUST_SHRINK) * 10
+    assert got.tier_bucket == "GOLD" and got.n == 400 and got.adjusted_n == 200
+    assert got.p50 == pytest.approx(50 + shift) and got.p90 == pytest.approx(62 + shift)
+    assert got.scope == "Gold jungle, adjusted for champion"
+    # Another champion, or the role itself, gets the plain role baseline.
+    assert bl.BaselineSet(conn, "GOLD", "JUNGLE", 0).get("cs_per_min").p50 == 50
+    plain = bl.BaselineSet(conn, "GOLD", "JUNGLE", 11).get("cs_per_min")
+    assert plain.adjusted_n == 0 and plain.scope == "Gold jungle, same role"
+    # Enough games of its own at the tier: the champion's real baseline wins.
+    assert bl.BaselineSet(conn, "MASTER_PLUS", "JUNGLE", 64).get("cs_per_min").adjusted_n
+    bl.CHAMPION_MIN_N, saved = 150, bl.CHAMPION_MIN_N
+    try:
+        own = bl.BaselineSet(conn, "MASTER_PLUS", "JUNGLE", 64).get("cs_per_min")
+        assert own.champion_id == 64 and own.adjusted_n == 0 and own.p50 == 76
+    finally:
+        bl.CHAMPION_MIN_N = saved
+
+
 def test_score_and_trend_end_to_end(conn):
     games = load_games(conn, 25)
     bl.build(conn, min_n=20)

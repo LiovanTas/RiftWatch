@@ -60,7 +60,8 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
 - [x] Objective timers as features (dragon, grubs, herald; spawn rules measured from 16.19 games).
       Measured gain was tiny (jungle 53.0% -> 53.4%): with one snapshot a minute the decision
       models are at their ceiling, so further gains need finer-grained data, not more features
-- [ ] Champion-specific comparisons once there's enough data per champion
+- [x] Champion-specific comparisons: role baselines shifted by a champion effect pooled
+      across tiers, tested against held-out tiers
 
 ## In-game data
 

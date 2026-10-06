@@ -198,12 +198,13 @@ HIGH_ELO_BUCKET = "MASTER_PLUS"
 
 
 def _add_reference(conn, score: GameScore, bucket: str, min_n: int) -> None:
-    """Attach Master+ medians for the same role (not champion: that's too thin) so each stat
-    can show where high elo sits. Skipped for Master+ players themselves."""
+    """Attach Master+ medians for the same role and champion (champion-adjusted unless the
+    champion has enough Master+ games of its own) so each stat can show where high elo sits.
+    Skipped for Master+ players themselves."""
     if bucket == HIGH_ELO_BUCKET:
         return
     p = score.participant
-    ref = baselines_for(conn, HIGH_ELO_BUCKET, p.role, 0, min_n, max_tier_distance=0)
+    ref = baselines_for(conn, HIGH_ELO_BUCKET, p.role, p.champion_id, min_n, max_tier_distance=0)
     for name in score.game:
         b = ref.get(name)
         if b is not None:

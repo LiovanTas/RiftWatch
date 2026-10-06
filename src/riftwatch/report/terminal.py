@@ -25,7 +25,9 @@ def scorecard(score: GameScore) -> list[str]:
         return ["  (no baselines for this tier/role yet -- run `riftwatch crawl` and "
                 "`riftwatch baselines`)"]
     first = next(iter(score.game.values()))
-    lines.append(f"  vs {first.baseline.scope}, patches {first.baseline.patch_window}")
+    adjusted = any(s.baseline.adjusted_n for s in score.game.values())
+    lines.append(f"  vs {first.baseline.scope.split(',')[0]}, patches {first.baseline.patch_window}"
+                 + ("; ~ = shifted for this champion" if adjusted else ""))
     for area in AREAS:
         if area not in by_area:
             continue
@@ -34,7 +36,7 @@ def scorecard(score: GameScore) -> list[str]:
             mark = "!" if s.goodness <= 25 else "+" if s.goodness >= 75 else " "
             lines.append(
                 f"   {mark} {s.metric.label[:44]:<44} {s.metric.show(s.value):>8}  "
-                f"{bar(s.goodness)} better than {round(s.goodness):>3}%  (median {s.metric.show(s.baseline.p50)}, n={s.baseline.n}"
+                f"{bar(s.goodness)} better than {round(s.goodness):>3}%  ({'~' if s.baseline.adjusted_n else ''}median {s.metric.show(s.baseline.p50)}, n={s.baseline.n}"
                 f"{', M+ ' + s.metric.show(score.reference[s.metric.name].p50) if s.metric.name in score.reference else ''})"
             )
     return lines

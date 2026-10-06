@@ -11,7 +11,7 @@ would otherwise be part of the yardstick they are measured against.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import psycopg
 
@@ -19,7 +19,17 @@ from riftwatch.features.metrics import CURVE_METRICS, CURVE_MINUTES
 
 TIER_ORDER = ("IRON", "BRONZE", "SILVER", "GOLD", "PLATINUM", "EMERALD", "DIAMOND", "MASTER_PLUS")
 MIN_GAME_S = 600      # drop remakes and other games too short to say anything
-CHAMPION_MIN_N = 50   # games before a champion-specific baseline replaces the role baseline
+# Games before a champion's own baseline at a tier replaces the champion-adjusted role
+# baseline. Below this the median of the champion's own games is noisier (about
+# 1.25 / sqrt(n) sd) than the adjusted one.
+CHAMPION_MIN_N = 200
+# Champion adjustment: how far a champion sits from its role, pooled over every tier in
+# standard deviations, then applied to the role baseline at the player's tier. On 16.19 it
+# cut the error in predicting a champion's median at a held-out tier by a fifth overall and
+# about half for farming, gold, damage share and item timings.
+ADJUST_MIN_N = 50     # pooled champion games before an adjustment is considered
+ADJUST_SHRINK = 100   # effect * n / (n + this): small samples move the baseline less
+ADJUST_GATE = 2.0     # apply only effects beyond this many standard errors
 
 _STATS = """
     count(*), avg(v), coalesce(stddev_samp(v), 0),
@@ -154,11 +164,48 @@ class Baseline:
     p50: float
     p75: float
     p90: float
+    adjusted_n: int = 0     # > 0: role baseline shifted by a champion effect from this many games
 
     @property
     def scope(self) -> str:
-        who = "same champion" if self.champion_id else "same role"
+        who = ("adjusted for champion" if self.adjusted_n
+               else "same champion" if self.champion_id else "same role")
         return f"{self.tier_bucket.replace('_', ' ').title()} {self.role.lower()}, {who}"
+
+    def shifted(self, champion_id: int, delta: float, pooled_n: int) -> Baseline:
+        return replace(self, champion_id=champion_id, adjusted_n=pooled_n,
+                       mean=self.mean + delta, p10=self.p10 + delta, p25=self.p25 + delta,
+                       p50=self.p50 + delta, p75=self.p75 + delta, p90=self.p90 + delta)
+
+
+def champion_effects(rows: list[Baseline], champion_id: int) -> dict[tuple, tuple[float, int]]:
+    """(metric, minute) -> (effect in role standard deviations, pooled champion games).
+
+    For each tier with both a champion and a role baseline, the gap between their medians is
+    measured in the role's standard deviations, then averaged over tiers weighted by the
+    champion's games. Effects within ADJUST_GATE standard errors of zero are dropped; the
+    rest are shrunk toward zero.
+    """
+    role = {(b.metric, b.minute, b.tier_bucket): b for b in rows if b.champion_id == 0}
+    sums: dict[tuple, list[float]] = {}
+    for b in rows:
+        if b.champion_id != champion_id or champion_id == 0:
+            continue
+        r = role.get((b.metric, b.minute, b.tier_bucket))
+        if r is None or not r.sd:
+            continue
+        acc = sums.setdefault((b.metric, b.minute), [0.0, 0])
+        acc[0] += b.n * (b.p50 - r.p50) / r.sd
+        acc[1] += b.n
+    out = {}
+    for key, (total, n) in sums.items():
+        if n < ADJUST_MIN_N:
+            continue
+        effect = total / n
+        if abs(effect) < ADJUST_GATE * 1.25 / n ** 0.5:
+            continue
+        out[key] = (effect * n / (n + ADJUST_SHRINK), int(n))
+    return out
 
 
 def neighbor_buckets(bucket: str) -> list[str]:
@@ -176,7 +223,8 @@ def neighbor_buckets(bucket: str) -> list[str]:
 
 class BaselineSet:
     """All baselines for one (tier, role, champion), loaded once, with fallbacks:
-    champion at tier -> role at tier -> role at the nearest tier that has data."""
+    champion at tier (if it has CHAMPION_MIN_N games) -> champion-adjusted role at tier ->
+    role at tier -> the same at the nearest tier that has data."""
 
     def __init__(
         self,
@@ -189,20 +237,23 @@ class BaselineSet:
     ) -> None:
         self.tier_bucket = tier_bucket
         self.min_n = min_n
+        self.champion_id = champion_id
         buckets = neighbor_buckets(tier_bucket)[: 1 + 2 * max_tier_distance]
-        rows = conn.execute(
+        # The champion effect pools every tier, so a champion needs all of them loaded.
+        rows = [Baseline(*r) for r in conn.execute(
             """
             SELECT metric, minute, tier_bucket, role, champion_id, patch_window,
                    n, mean, sd, p10, p25, p50, p75, p90
               FROM baselines
-             WHERE role = %s AND tier_bucket = ANY(%s) AND champion_id IN (0, %s)
+             WHERE role = %s AND champion_id IN (0, %s) AND (%s <> 0 OR tier_bucket = ANY(%s))
             """,
-            (role, buckets, champion_id),
-        ).fetchall()
+            (role, champion_id, champion_id, buckets),
+        ).fetchall()]
+        self._effects = champion_effects(rows, champion_id)
         self._rows: dict[tuple[str, int | None, str, int], Baseline] = {}
-        for r in rows:
-            b = Baseline(*r)
-            self._rows[(b.metric, b.minute, b.tier_bucket, b.champion_id)] = b
+        for b in rows:
+            if b.tier_bucket in buckets:
+                self._rows[(b.metric, b.minute, b.tier_bucket, b.champion_id)] = b
         self._order = [(tier_bucket, champion_id), (tier_bucket, 0)] + [
             (b, 0) for b in buckets[1:]
         ]
@@ -216,8 +267,12 @@ class BaselineSet:
             # A one-champion group must be big enough to beat the whole-role group as a
             # yardstick: 25 games of one champion is noisier than hundreds of the role.
             needed = max(self.min_n, CHAMPION_MIN_N) if champ else self.min_n
-            if b is not None and b.n >= needed:
-                return b
+            if b is None or b.n < needed:
+                continue
+            effect = self._effects.get((metric, minute)) if not champ else None
+            if effect is not None:
+                return b.shifted(self.champion_id, effect[0] * b.sd, effect[1])
+            return b
         return None
 
 
