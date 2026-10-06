@@ -213,6 +213,21 @@ def game_evidence(
                       severity=sum(abs(s.goodness - 50) for s in run) / len(run) + len(run),
                       metric=name, start=run[0].minute, end=last.minute)
 
+    # Deaths: the counts first, so the coach can cite totals instead of counting the itemised
+    # deaths itself (the grounding check rejects a number that isn't written in the evidence;
+    # on the coach eval, every first-answer violation was such a self-made count).
+    if len(p.deaths) >= 2:
+        killers = Counter(game.participants[d.killer_participant_id].champion_name
+                          for d in p.deaths if d.killer_participant_id in game.participants)
+        top = killers.most_common(1)
+        b.add("pattern", "survival", "neutral",
+              f"{len(p.deaths)} deaths in total: {sum(d.early for d in p.deaths)} before 14:00, "
+              f"{sum(d.ahead for d in p.deaths)} while 500+ gold ahead of the lane opponent, "
+              f"{sum(d.assisters == 0 and d.killer_participant_id > 0 for d in p.deaths)} with only "
+              f"the killer involved"
+              + (f"; {top[0][0]} got {top[0][1]} of the kills" if top and top[0][1] >= 2 else "")
+              + ".", severity=0)
+
     # Deaths: the ones most worth talking about first.
     ranked = sorted(p.deaths, key=lambda d: (not d.ahead, not d.early, d.assisters > 0, d.minute))
     for d in sorted(ranked[:max_deaths], key=lambda d: d.minute):

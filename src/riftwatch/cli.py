@@ -442,6 +442,38 @@ def cmd_scout(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_eval_coach(settings: Settings, args: argparse.Namespace) -> int:
+    import json
+    from pathlib import Path
+
+    from riftwatch.coach import evaluate as ev
+
+    if args.offline:
+        coach = ev.OfflineCoach()
+    else:
+        if not settings.anthropic_api_key:
+            raise ConfigError("ANTHROPIC_API_KEY is not set (or pass --offline)")
+        if settings.coach_model != ev.EVAL_MODEL and not args.any_model:
+            raise ConfigError(f"the coach is set to {settings.coach_model}, not {ev.EVAL_MODEL}; "
+                              "pass --any-model to evaluate it anyway")
+        coach = Coach(settings.coach_model, api_key=settings.anthropic_api_key,
+                      effort=settings.coach_effort, thinking=settings.coach_thinking)
+    print(f"coach: {coach.label}")
+    with connect(settings.database_url) as conn:
+        games = ev.sample_games(conn, args.games, seed=args.seed)
+        report = ev.evaluate(conn, coach, games, advisor=_advisor(settings), progress=print)
+    summary = report.summary()
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"coach-{datetime.now(UTC):%Y%m%d-%H%M%S}.json"
+    path.write_text(json.dumps(report.to_json(), indent=2), encoding="utf-8")
+    print()
+    for k, v in summary.items():
+        print(f"  {k:<26} {v}")
+    print(f"\nfull results: {path}")
+    return 0
+
+
 def cmd_serve(settings: Settings, args: argparse.Namespace) -> int:
     try:
         import uvicorn
@@ -574,6 +606,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_region(p)
     p.add_argument("--games", type=int, default=10, help="recent ranked games per player (max 100)")
     p.set_defaults(func=cmd_scout)
+
+    p = sub.add_parser("eval-coach", help="measure the coach's grounding, faithfulness and cost on sampled games")
+    p.add_argument("--games", type=int, default=20, help="games to sample (default 20)")
+    p.add_argument("--seed", type=int, default=1, help="sample seed; same seed, same games")
+    p.add_argument("--offline", action="store_true", help="evaluate the template coach (free)")
+    p.add_argument("--any-model", action="store_true",
+                   help="allow a coach model other than claude-sonnet-5-5")
+    p.add_argument("--out", default="out/eval", help="where to write the full results")
+    p.set_defaults(func=cmd_eval_coach)
 
     p = sub.add_parser("serve", help="run the web API")
     p.add_argument("--host", default="127.0.0.1")

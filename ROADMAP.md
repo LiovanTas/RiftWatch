@@ -48,6 +48,8 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
       several server processes can share the work
 - [x] **Baseline refresh** (`riftwatch refresh`): tops up every rank bucket on the live patch and
       rebuilds baselines; schedule it daily
+- [x] **Coach evaluation** (`eval-coach`): grounding, faithfulness, coverage, cost and latency
+      on a seeded sample of games across ranks and roles; led to the death-totals evidence item
 - [x] **Deploy prep**: Docker image (migrations on start, several workers), per-visitor
       limits in Postgres with `429`/`Retry-After`, a daily LLM coaching budget, Riot's legal
       notice, gzip and security headers, a deploy guide

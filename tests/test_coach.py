@@ -129,6 +129,9 @@ def test_game_evidence_contents():
     assert curve.data["start"] == 1 and curve.data["end"] == 6
     deaths = [e for e in ev.items if e.kind == "death"]
     assert len(deaths) == 2 and "own base" in deaths[1].text and "ahead" in deaths[1].text
+    # Totals are written out, so the coach never has to count the itemised deaths itself.
+    summary = next(e for e in ev.items if e.kind == "pattern" and e.area == "survival")
+    assert summary.text.startswith("2 deaths in total: 1 before 14:00, 1 while 500+ gold ahead")
     assert [e.id for e in ev.items] == [f"E{i}" for i in range(1, len(ev.items) + 1)]
 
 

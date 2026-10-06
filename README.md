@@ -72,6 +72,7 @@ riftwatch coach "Name#TAG" --last --html last-game.html
 | `features` | Extracts per-minute features from any cached games that still need it |
 | `coach Name#TAG` | Coaching on the last 20 games; `--last` or `--match ID` for one game |
 | `scout Name#TAG` | Rank, champion experience and recent form of all ten players in a live game |
+| `eval-coach` | Runs the coach on a fixed sample of crawled games and measures grounding, faithfulness, cost and latency |
 | `cache` | Cache size and hit rate |
 | `watchdog` | Arms the black-screen kill switch (Windows); `--record` also records each game |
 | `record` | Records games second by second from the game client; `--import` links recordings to matches |
@@ -140,6 +141,40 @@ told who you laned against.
 schema, citing evidence ids. The grounding check rejects any number that isn't in the evidence
 a point cites; Claude gets one retry with the exact violations, then failing points are
 dropped. Finished answers are cached in Postgres, so a repeat view costs nothing.
+
+## Coach evaluation
+
+```bash
+riftwatch eval-coach --games 20            # Sonnet 5.5, ~$0.30
+riftwatch eval-coach --games 20 --offline  # the template coach, free
+```
+
+Samples crawled games round-robin over rank buckets and roles (seeded, so the same seed
+gives the same games), builds each game's evidence, calls the coach directly without touching
+the coaching cache, and checks the answers. The grounding check already guarantees every
+delivered number is in the cited evidence. The eval also measures what it doesn't check: a
+weakness point citing evidence marked as a strength, a point filed under a different area
+than its evidence, numbers in advice, points that cite only the game summary, and whether
+the three most severe weaknesses were addressed. Full per-game results go to `out/eval/`.
+
+Sonnet 5.5 on 20 games across all eight rank buckets and five roles:
+
+| | First run | After the fix below |
+|---|---|---|
+| First answer passes grounding | 85% | 95% |
+| Games needing a retry | 15% | 5% |
+| Points dropped | 1 of 96 | 0 of 100 |
+| Strength/weakness mix-ups | 0 | 0 |
+| Point filed under another area | 1% | 2% |
+| Numbers in advice | 0 | 0 |
+| Top-3 weaknesses addressed | 85% | 92% |
+| Cost per game | $0.0152 | $0.0140 |
+| Latency, median / 90th percentile | 8.1 s / 13.6 s | 8.3 s / 11.3 s |
+
+Every first-run grounding failure was the model counting for itself ("6 deaths", "1 solo
+death") from deaths listed one by one, a number the evidence never states. Adding one
+evidence item with the death totals (early, while ahead, alone, and who got the most kills)
+removed them. The one remaining failure cited a real number from the wrong evidence item.
 
 ## Measured on real data
 
