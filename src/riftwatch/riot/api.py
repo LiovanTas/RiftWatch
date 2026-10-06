@@ -21,7 +21,31 @@ from riftwatch.riot.routing import (
 
 RANKED_SOLO_QUEUE_ID = 420
 RANKED_FLEX_QUEUE_ID = 440
+NORMAL_DRAFT_QUEUE_ID = 400
 RANKED_SOLO = "RANKED_SOLO_5x5"
+RANKED_FLEX = "RANKED_FLEX_SR"
+
+# The modes RiftWatch analyses: Summoner's Rift with drafted roles.
+QUEUE_NAMES = {RANKED_SOLO_QUEUE_ID: "Ranked Solo/Duo", RANKED_FLEX_QUEUE_ID: "Ranked Flex",
+               NORMAL_DRAFT_QUEUE_ID: "Normal Draft"}
+SUPPORTED_QUEUES = tuple(QUEUE_NAMES)
+QUEUE_ALIASES = {"solo": RANKED_SOLO_QUEUE_ID, "flex": RANKED_FLEX_QUEUE_ID,
+                 "draft": NORMAL_DRAFT_QUEUE_ID}
+
+
+def parse_queues(text: str) -> tuple[int, ...]:
+    """``"solo,flex"`` -> (420, 440)."""
+    out = []
+    for part in text.split(","):
+        key = part.strip().lower()
+        if not key:
+            continue
+        if key not in QUEUE_ALIASES:
+            raise ValueError(f"unknown mode {part!r}; expected solo, flex or draft")
+        out.append(QUEUE_ALIASES[key])
+    if not out:
+        raise ValueError("no modes given; expected solo, flex or draft")
+    return tuple(dict.fromkeys(out))
 
 TIERS = ("IRON", "BRONZE", "SILVER", "GOLD", "PLATINUM", "EMERALD", "DIAMOND",
          "MASTER", "GRANDMASTER", "CHALLENGER")

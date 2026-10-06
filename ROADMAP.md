@@ -77,8 +77,8 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
       all ten players, from the shared match cache (CLI and a website page)
 - [x] Matchup-specific lane comparisons: lane strength per champion and role, leads judged by
       strength(you) - strength(opponent); exact-pair tables tested and found to add nothing yet
-- [ ] Normal draft and ranked flex games: same map and roles as solo/duo, scored against the
-      solo/duo baselines for the player's rank (RiftWatch covers draft and ranked modes only)
+- [x] Normal draft and ranked flex games: synced and coached alongside solo/duo, scored against
+      the solo/duo baselines for the player's rank, flex rank as fallback (draft and ranked only)
 
 ## Riot API facts we design around
 

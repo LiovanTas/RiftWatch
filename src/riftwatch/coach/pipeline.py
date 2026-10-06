@@ -24,6 +24,7 @@ from riftwatch.db import repo
 from riftwatch.features import store
 from riftwatch.features.extract import GameFeatures, ParticipantFeatures
 from riftwatch.features.metrics import LANE_LEAD_METRICS
+from riftwatch.riot.api import RANKED_FLEX, SUPPORTED_QUEUES
 
 
 class ReportError(LookupError):
@@ -177,10 +178,10 @@ def _coach(conn, coach: Coach | None, puuid, scope, match_id, evidence, task, re
 def player_bucket(conn: psycopg.Connection, puuid: str, override: str | None = None) -> str:
     if override:
         return repo.tier_bucket(override)
-    rank = repo.latest_rank(conn, puuid)
+    rank = repo.latest_rank(conn, puuid) or repo.latest_rank(conn, puuid, RANKED_FLEX)
     if rank is None:
-        raise ReportError("no solo/duo rank on record for this player -- sync them first, "
-                          "or pass --tier (e.g. --tier gold)")
+        raise ReportError("no solo/duo or flex rank on record for this player -- sync them "
+                          "first, or pass --tier (e.g. --tier gold)")
     return repo.tier_bucket(rank["tier"])
 
 
@@ -262,7 +263,7 @@ def recent_report(
     tier: str | None = None,
     refresh: bool = False,
     min_n: int = 20,
-    queue_id: int = 420,
+    queue_id: int | tuple[int, ...] = SUPPORTED_QUEUES,
     generate: bool = True,
 ) -> CoachResult:
     bucket = player_bucket(conn, puuid, tier)
@@ -288,7 +289,7 @@ def recent_report(
     tier_label = bucket.replace("_", " ").title()
     evidence = trend_evidence(trends(scores, recent=games), loaded[:games], tier_label)
     output, model, cached, dropped, usage, pending = _coach(
-        conn, coach, puuid, "recent", None, evidence, "their recent ranked games", refresh,
+        conn, coach, puuid, "recent", None, evidence, "their recent games", refresh,
         generate=generate)
     return CoachResult("recent", puuid, bucket, evidence, output, model, cached, dropped,
                        usage, None, scores[:games], loaded[:games], pending)

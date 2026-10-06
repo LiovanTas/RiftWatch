@@ -21,7 +21,7 @@ from riftwatch.db.connection import connect
 from riftwatch.features import store as feature_store
 from riftwatch.ingest import Ingestor, NotFound
 from riftwatch.report.terminal import render
-from riftwatch.riot.api import RiotApi
+from riftwatch.riot.api import QUEUE_NAMES, RiotApi, parse_queues
 from riftwatch.riot.client import RiotApiError, RiotClient
 from riftwatch.riot.routing import account_region, match_region, parse_riot_id
 
@@ -125,7 +125,7 @@ def cmd_sync(settings: Settings, args: argparse.Namespace) -> int:
     with connect(settings.database_url) as conn:
         result = Ingestor(conn, api).sync(
             riot_id, _platform(settings, args), count=args.count,
-            queue=None if args.all_queues else 420,
+            queues=None if args.all_queues else parse_queues(args.queues),
             with_timeline=not args.no_timelines, progress=print,
         )
     print(f"{result.riot_id}: {_rank_text(result.rank)}")
@@ -235,15 +235,19 @@ def cmd_backfill(settings: Settings, args: argparse.Namespace) -> int:
     riot_id = parse_riot_id(args.riot_id)
     since = datetime.fromisoformat(args.since).replace(tzinfo=UTC) if args.since else None
     api = _api(settings)
+    queues = [None] if args.all_queues else list(parse_queues(args.queues))
     with connect(settings.database_url) as conn:
-        result = Ingestor(conn, api).backfill(
-            riot_id, _platform(settings, args),
-            queue=None if args.all_queues else 420, start_time=since,
-            with_timeline=not args.no_timelines, progress=print,
-        )
-    state = "complete" if result.finished else "paused (rerun the same command to resume)"
-    print(f"backfill job {result.job_id} {state}")
-    print(f"  {result.ids_seen} match ids, {result.fetched} downloaded, {result.cached} already cached")
+        for queue in queues:
+            if queue is not None:
+                print(f"{QUEUE_NAMES[queue]}:")
+            # One resumable job per queue: Riot filters match ids by one queue at a time.
+            result = Ingestor(conn, api).backfill(
+                riot_id, _platform(settings, args), queue=queue, start_time=since,
+                with_timeline=not args.no_timelines, progress=print,
+            )
+            state = "complete" if result.finished else "paused (rerun the same command to resume)"
+            print(f"  backfill job {result.job_id} {state}: {result.ids_seen} match ids, "
+                  f"{result.fetched} downloaded, {result.cached} already cached")
     print(f"  this run: {_client_stats(api)}")
     return 0
 
@@ -358,19 +362,21 @@ def cmd_coach(settings: Settings, args: argparse.Namespace) -> int:
         account = repo.find_account(conn, riot_id.game_name, riot_id.tag_line)
         if account is None or args.sync:
             api = _api(settings)
-            Ingestor(conn, api).sync(riot_id, _platform(settings, args), count=args.games)
+            Ingestor(conn, api).sync(riot_id, _platform(settings, args), count=args.games,
+                                     queues=parse_queues(args.queues))
             feature_store.extract_pending(conn)
             account = repo.find_account(conn, riot_id.game_name, riot_id.tag_line)
         puuid = account["puuid"]
         if args.match or args.last:
-            match_id = args.match or (repo.player_match_ids(conn, puuid, limit=1) or [None])[0]
+            match_id = args.match or (repo.player_match_ids(
+                conn, puuid, queue_id=parse_queues(args.queues), limit=1) or [None])[0]
             if match_id is None:
                 raise ReportError("no cached games for this player -- run sync first")
             result = game_report(conn, puuid, match_id, coach=coach, tier=args.tier,
                                  refresh=args.refresh, advisor=_advisor(settings))
         else:
             result = recent_report(conn, puuid, games=args.games, coach=coach, tier=args.tier,
-                                   refresh=args.refresh)
+                                   refresh=args.refresh, queue_id=parse_queues(args.queues))
     print(render(result, show_evidence=args.evidence))
     if args.html:
         from pathlib import Path
@@ -453,6 +459,11 @@ def _add_region(p: argparse.ArgumentParser) -> None:
     p.add_argument("--region", "-r", help="na, euw, eune, kr, ... (default: RIFTWATCH_DEFAULT_REGION)")
 
 
+def _add_queues(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--queues", default="solo,flex,draft",
+                   help="modes: solo, flex, draft, comma-separated (default all three)")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="riftwatch", description=__doc__)
     parser.add_argument("--version", action="version", version=__version__)
@@ -471,7 +482,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("riot_id", help="Name#TAG")
     _add_region(p)
     p.add_argument("--count", "-n", type=int, default=20, help="newest N games (max 100)")
-    p.add_argument("--all-queues", action="store_true", help="not just ranked solo/duo")
+    _add_queues(p)
+    p.add_argument("--all-queues", action="store_true", help="every mode, not just draft and ranked")
     p.add_argument("--no-timelines", action="store_true", help="skip per-minute timelines")
     p.set_defaults(func=cmd_sync)
 
@@ -479,7 +491,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("riot_id", help="Name#TAG")
     _add_region(p)
     p.add_argument("--since", help="oldest game date, YYYY-MM-DD")
-    p.add_argument("--all-queues", action="store_true")
+    _add_queues(p)
+    p.add_argument("--all-queues", action="store_true", help="every mode, not just draft and ranked")
     p.add_argument("--no-timelines", action="store_true")
     p.set_defaults(func=cmd_backfill)
 
@@ -509,6 +522,7 @@ def build_parser() -> argparse.ArgumentParser:
     which.add_argument("--last", action="store_true", help="coach the most recent game")
     p.add_argument("--games", type=int, default=20, help="recent games to analyse (default 20)")
     p.add_argument("--tier", help="compare against this tier instead of the player's rank")
+    _add_queues(p)
     p.add_argument("--sync", action="store_true", help="download new games first")
     p.add_argument("--offline", action="store_true", help="template coach, no LLM call")
     p.add_argument("--refresh", action="store_true", help="ignore the cached coaching")

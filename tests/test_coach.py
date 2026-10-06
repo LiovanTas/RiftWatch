@@ -296,8 +296,21 @@ def test_game_report_caches_llm_answer(conn):
     with pytest.raises(LookupError, match="rank"):
         game_report(conn, puuid, "NA1_2000")        # no rank on record and no --tier
 
+    # A draft game is labelled as one and compared with solo/duo players.
+    match, timeline = build_game("NA1_2100", queue=400, start_ms=1_791_000_000_000,
+                                 puuids=[puuid] + [f"d{p}" for p in range(2, 11)])
+    repo.insert_match(conn, match)
+    repo.insert_timeline(conn, "NA1_2100", timeline)
+    draft = game_report(conn, puuid, "NA1_2100", tier="gold")
+    context = draft.evidence.items[0].text
+    assert "(Normal Draft)" in context and "ranked solo/duo players at the same rank" in context
+    assert draft.scores[0].game["cs_at_10"].baseline.tier_bucket == "GOLD"
+
     recent = recent_report(conn, puuid, tier="gold")
-    assert recent.scope == "recent" and len(recent.games) == 1
+    assert recent.scope == "recent" and len(recent.games) == 2       # solo/duo and draft
+    assert "(Normal Draft 1, Ranked Solo/Duo 1)" in recent.evidence.items[0].text
+    solo_only = recent_report(conn, puuid, tier="gold", queue_id=(420,))
+    assert len(solo_only.games) == 1
 
 
 def test_master_plus_reference(conn):

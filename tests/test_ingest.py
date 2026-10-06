@@ -183,6 +183,67 @@ def test_player_match_ids_newest_first(conn):
     assert repo.player_match_ids(conn, "me", limit=2) == api.ids[:2]
 
 
+class ModesApi(FakeApi):
+    """Five solo, two flex and two draft games, interleaved in time, plus ARAM ids that must
+    never be fetched; the player has only a flex rank."""
+
+    def __init__(self):
+        super().__init__(9)
+        newest_first = self.ids
+        self.by_queue = {420: newest_first[0::2], 440: newest_first[1:4:2],
+                         400: newest_first[5:9:2], 450: ["NA1_9999999999"]}
+        self.asked = []
+
+    def match_ids(self, platform, puuid, *, start=0, count=20, queue=None, start_time=None,
+                  end_time=None):
+        self.calls.append("ids")
+        self.asked.append(queue)
+        ids = self.by_queue.get(queue, []) if queue is not None else self.ids
+        return ids[start:start + count]
+
+    def league_entries_by_puuid(self, platform, puuid):
+        self.calls.append("league")
+        return [{"queueType": "RANKED_FLEX_SR", "tier": "SILVER", "rank": "I",
+                 "leaguePoints": 10, "wins": 20, "losses": 18}]
+
+
+def test_sync_merges_draft_and_ranked_modes_newest_first(conn):
+    api = ModesApi()
+    result = Ingestor(conn, api).sync(RiotId("Me", "NA1"), "na", count=6)
+    assert sorted(a for a in api.asked if a) == [400, 420, 440]
+    # The six newest across all three modes, in time order, and never the ARAM game.
+    assert result.new_matches == api.ids[:6]
+    assert "NA1_9999999999" not in result.new_matches
+    # No solo/duo rank: the flex rank stands in.
+    assert result.rank["tier"] == "SILVER" and result.rank["queueType"] == "RANKED_FLEX_SR"
+
+
+def test_sync_one_mode_only(conn):
+    api = ModesApi()
+    result = Ingestor(conn, api).sync(RiotId("Me", "NA1"), "na", count=10, queues=(440,))
+    assert result.new_matches == api.by_queue[440]
+
+
+def test_player_match_ids_filters_by_queues(conn):
+    match, timeline = build_game("NA1_61", puuids=["me"] + [f"x{p}" for p in range(2, 11)], queue=440)
+    repo.insert_match(conn, match)
+    match, _ = build_game("NA1_62", puuids=["me"] + [f"x{p}" for p in range(2, 11)], queue=450,
+                          start_ms=1_790_100_000_000)
+    repo.insert_match(conn, match)
+    assert repo.player_match_ids(conn, "me", queue_id=(420, 440, 400)) == ["NA1_61"]
+    assert repo.player_match_ids(conn, "me", queue_id=450) == ["NA1_62"]
+    assert repo.player_match_ids(conn, "me") == ["NA1_62", "NA1_61"]
+
+
+def test_parse_queues():
+    from riftwatch.riot.api import parse_queues
+
+    assert parse_queues("solo,flex,draft") == (420, 440, 400)
+    assert parse_queues(" Draft , solo,draft") == (400, 420)
+    with pytest.raises(ValueError, match="aram"):
+        parse_queues("aram")
+
+
 def test_tier_bucket():
     assert repo.tier_bucket("grandmaster") == "MASTER_PLUS"
     assert repo.tier_bucket("GOLD") == "GOLD"

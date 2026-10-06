@@ -17,7 +17,7 @@ from typing import Any
 import psycopg
 
 from riftwatch.db import repo
-from riftwatch.riot.api import RANKED_SOLO, RiotApi
+from riftwatch.riot.api import RANKED_FLEX, RANKED_SOLO, SUPPORTED_QUEUES, RiotApi
 from riftwatch.riot.client import RiotApiError
 from riftwatch.riot.routing import RiotId, platform_for
 
@@ -28,6 +28,13 @@ Progress = Callable[[str], None]
 
 class NotFound(LookupError):
     pass
+
+
+def _match_number(match_id: str) -> int:
+    try:
+        return int(match_id.rsplit("_", 1)[1])
+    except (IndexError, ValueError):
+        return 0
 
 
 @dataclass
@@ -165,9 +172,23 @@ class Ingestor:
         return account
 
     def refresh_rank(self, puuid: str, platform: str) -> dict[str, Any] | None:
+        """Solo/duo rank, or flex rank for players with no solo/duo rank."""
         entries = self.api.league_entries_by_puuid(platform, puuid)
         repo.insert_rank_snapshots(self.conn, puuid, entries)
-        return next((e for e in entries if e["queueType"] == RANKED_SOLO), None)
+        return (next((e for e in entries if e["queueType"] == RANKED_SOLO), None)
+                or next((e for e in entries if e["queueType"] == RANKED_FLEX), None))
+
+    def recent_ids(self, platform: str, puuid: str, count: int,
+                   queues: tuple[int, ...] | None) -> list[str]:
+        """The newest ``count`` match ids across ``queues`` (None = every queue), newest first.
+        Riot filters by one queue per request, so this asks once per queue and merges; match
+        ids on a platform increase with time."""
+        if queues is None:
+            return self.api.match_ids(platform, puuid, count=min(count, 100))
+        ids: set[str] = set()
+        for q in queues:
+            ids.update(self.api.match_ids(platform, puuid, count=min(count, 100), queue=q))
+        return sorted(ids, key=_match_number, reverse=True)[:count]
 
     # -- sync: recent games ----------------------------------------------------------------
 
@@ -177,12 +198,13 @@ class Ingestor:
         platform: str,
         *,
         count: int = 20,
-        queue: int | None = 420,
+        queues: tuple[int, ...] | None = SUPPORTED_QUEUES,
         with_timeline: bool = True,
         progress: Progress | None = None,
     ) -> SyncResult:
-        """Fetch the player's newest ``count`` games, stopping early at the first one that is
-        already cached (everything older was cached by an earlier sync)."""
+        """Fetch the player's newest ``count`` games in ``queues`` (None = every queue),
+        stopping early at the first one that is already cached (everything older was cached
+        by an earlier sync)."""
         platform = platform_for(platform)
         account = self.resolve(riot_id, platform)
         puuid = account["puuid"]
@@ -190,7 +212,7 @@ class Ingestor:
         bucket = repo.tier_bucket(rank["tier"]) if rank else None
         result = SyncResult(puuid, f"{account['gameName']}#{account['tagLine']}", platform, rank)
 
-        ids = self.api.match_ids(platform, puuid, count=min(count, 100), queue=queue)
+        ids = self.recent_ids(platform, puuid, count, queues)
         # Newest first: everything from the first fully cached game on was cached by an
         # earlier sync.
         have = repo.known_match_ids(self.conn, ids)

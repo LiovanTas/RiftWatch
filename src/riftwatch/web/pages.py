@@ -96,7 +96,7 @@ def player_page(
         rows.append(
             f'<tr><td><a class="plain" href="{link}">{_esc(m["champion"] or "?")}</a>'
             f'<div class="small">{_esc((m["role"] or "").lower())}</div></td>'
-            f'<td>{"Win" if m["win"] else "Loss"}</td>'
+            f'<td>{"Win" if m["win"] else "Loss"}<div class="small">{_esc(m["mode"])}</div></td>'
             f'<td class="num">{m["kills"]}/{m["deaths"]}/{m["assists"]}</td>'
             f'<td class="num">{"" if m["cs_per_min"] is None else m["cs_per_min"]}</td>'
             f'<td class="num">{m["duration_s"] // 60}:{m["duration_s"] % 60:02d}</td>'

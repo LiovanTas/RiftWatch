@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from datetime import UTC, datetime
 from typing import Any
 
@@ -195,16 +197,18 @@ def mark_sample(conn: psycopg.Connection, match_id: str, bucket: str, source: st
 
 
 def player_match_ids(
-    conn: psycopg.Connection, puuid: str, *, queue_id: int | None = None, limit: int = 20
+    conn: psycopg.Connection, puuid: str, *, queue_id: int | Sequence[int] | None = None,
+    limit: int = 20,
 ) -> list[str]:
-    """This player's cached matches, newest first."""
+    """This player's cached matches in these queues (None = any), newest first."""
+    queues = None if queue_id is None else [queue_id] if isinstance(queue_id, int) else list(queue_id)
     rows = conn.execute(
         """
         SELECT m.match_id FROM match_participants p JOIN matches m USING (match_id)
-         WHERE p.puuid = %s AND (%s::int IS NULL OR m.queue_id = %s)
+         WHERE p.puuid = %s AND (%s::int[] IS NULL OR m.queue_id = ANY(%s))
          ORDER BY m.game_start DESC LIMIT %s
         """,
-        (puuid, queue_id, queue_id, limit),
+        (puuid, queues, queues, limit),
     )
     return [r[0] for r in rows]
 

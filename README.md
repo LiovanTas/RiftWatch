@@ -65,7 +65,7 @@ riftwatch coach "Name#TAG" --last --html last-game.html
 | Command | What it does |
 |---|---|
 | `lookup Name#TAG` | Resolves a Riot ID and shows its current rank |
-| `sync Name#TAG` | Downloads the newest games, stopping at the first one already cached |
+| `sync Name#TAG` | Downloads the newest ranked and draft games, stopping at the first one already cached |
 | `backfill Name#TAG --since 2026-01-01` | Downloads a whole match history; rerun the same command to resume |
 | `crawl --tiers ...` | Samples recent ranked games from each tier's ladder for baselines |
 | `baselines` | Rebuilds the per-tier, per-role, per-champion comparison tables |
@@ -77,6 +77,11 @@ riftwatch coach "Name#TAG" --last --html last-game.html
 | `record` | Records games second by second from the game client; `--import` links recordings to matches |
 | `serve` | Runs the website and JSON API on http://127.0.0.1:8000 |
 | `doctor`, `db migrate`, `db status` | Setup checks and schema migrations |
+
+`sync`, `backfill` and `coach` take `--queues` to choose modes: `solo`, `flex`, `draft`, comma-separated
+(default all three). RiftWatch covers these modes only. Every game is compared with ranked solo/duo players
+at the player's rank, since that's where the crawled baselines come from; a player with no solo/duo
+rank is placed by their flex rank.
 
 `coach` options: `--html FILE`, `--evidence` (print every fact the coach was given),
 `--offline` (template coach, no LLM), `--tier gold` (compare against another tier),

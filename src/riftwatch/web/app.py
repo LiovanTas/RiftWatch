@@ -26,7 +26,7 @@ from riftwatch.db import repo
 from riftwatch.features import store as feature_store
 from riftwatch.ingest import Ingestor, NotFound
 from riftwatch.report.html import game_html
-from riftwatch.riot.api import RiotApi
+from riftwatch.riot.api import QUEUE_NAMES, SUPPORTED_QUEUES, RiotApi
 from riftwatch.riot.client import RiotApiError, RiotClient
 from riftwatch.riot.routing import RiotId, UnknownRegion, parse_riot_id, platform_for
 from riftwatch.web import pages, serialize
@@ -167,15 +167,15 @@ def create_app(
               FROM match_participants p
               JOIN matches m USING (match_id)
               LEFT JOIN participant_game_summary s USING (match_id, participant_id)
-             WHERE p.puuid = %s
+             WHERE p.puuid = %s AND m.queue_id = ANY(%s)
              ORDER BY m.game_start DESC
              LIMIT %s OFFSET %s
             """,
-            (puuid, limit, offset),
+            (puuid, list(SUPPORTED_QUEUES), limit, offset),
         ).fetchall()
         return [{
             "match_id": r[0], "game_start": r[1].isoformat(), "duration_s": r[2], "patch": r[3],
-            "queue_id": r[4], "champion": r[5], "role": r[6], "win": r[7],
+            "queue_id": r[4], "mode": QUEUE_NAMES.get(r[4], "Other"), "champion": r[5], "role": r[6], "win": r[7],
             "kills": r[8], "deaths": r[9], "assists": r[10],
             "cs_per_min": round(r[11], 2) if r[11] is not None else None,
             "kill_participation": round(r[12], 3) if r[12] is not None else None,
@@ -194,7 +194,8 @@ def create_app(
     def player_data(conn, account: dict[str, Any]) -> dict[str, Any]:
         puuid = account["puuid"]
         total = conn.execute(
-            "SELECT count(*) FROM match_participants WHERE puuid = %s", (puuid,)
+            """SELECT count(*) FROM match_participants p JOIN matches m USING (match_id)
+                WHERE p.puuid = %s AND m.queue_id = ANY(%s)""", (puuid, list(SUPPORTED_QUEUES)),
         ).fetchone()[0]
         return {
             "riot_id": f"{account['game_name']}#{account['tag_line']}",

@@ -16,6 +16,7 @@ from riftwatch.analysis.score import GameScore, Score
 from riftwatch.analysis.trend import MetricTrend
 from riftwatch.features.extract import GameFeatures, ParticipantFeatures
 from riftwatch.features.metrics import Metric
+from riftwatch.riot.api import QUEUE_NAMES, RANKED_SOLO_QUEUE_ID
 
 WEAK = 25.0      # goodness at or below this is a weakness
 STRONG = 75.0    # at or above, a strength
@@ -165,8 +166,11 @@ def game_evidence(
                 " No rank baseline was available, so no percentile comparisons.")
     opponent = game.participants.get(p.opponent_id) if p.opponent_id else None
     against = f" against {opponent.champion_name}" if opponent else ""
+    mode = QUEUE_NAMES.get(game.queue_id, "other mode")
+    if game.queue_id != RANKED_SOLO_QUEUE_ID and any_baseline:
+        compared += " Comparisons are with ranked solo/duo players at the same rank."
     b.add("context", "context", "neutral",
-          f"Game {game.match_id}: {p.champion_name} {p.role.lower()}{against}, "
+          f"Game {game.match_id} ({mode}): {p.champion_name} {p.role.lower()}{against}, "
           f"{'win' if p.win else 'loss'}, length {clock(game.duration_min)}, patch {game.patch}; "
           f"final score {int(p.metrics.get('kills', 0))}/{int(p.metrics.get('deaths', 0))}/"
           f"{int(p.metrics.get('assists', 0))}.{compared}")
@@ -237,11 +241,13 @@ def trend_evidence(
     roles = Counter(p.role for _, p in recent_games)
     champs = Counter(p.champion_name for _, p in recent_games)
     wins = sum(p.win for _, p in recent_games)
+    modes = Counter(QUEUE_NAMES.get(g.queue_id, "other") for g, _ in recent_games)
     b.add("context", "context", "neutral",
-          f"Last {len(recent_games)} ranked games: {wins} wins, {len(recent_games) - wins} losses. "
+          f"Last {len(recent_games)} games ({', '.join(f'{m} {n}' for m, n in modes.most_common())}): "
+          f"{wins} wins, {len(recent_games) - wins} losses. "
           f"Roles: {', '.join(f'{r.lower()} {n}' for r, n in roles.most_common())}. "
           f"Most played: {', '.join(f'{c} {n}' for c, n in champs.most_common(3))}. "
-          f"Each game is compared against {tier_label} players in the role played; "
+          f"Each game is compared against {tier_label} ranked solo/duo players in the role played; "
           f"comparisons below are with that group.")
 
     found = []
