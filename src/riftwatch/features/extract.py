@@ -20,7 +20,7 @@ from riftwatch.features.map import readable, zone
 from riftwatch.riot.ddragon import patch_of
 
 # Bump when extraction logic changes; stored rows with an older version get re-extracted.
-EXTRACTOR_VERSION = 4
+EXTRACTOR_VERSION = 5
 
 ROLES = ("TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY")
 EPIC_MONSTERS = ("DRAGON", "BARON_NASHOR", "RIFTHERALD", "HORDE", "ATAKHAN", "ELDER_DRAGON")
@@ -149,6 +149,11 @@ def _cs(pf: dict[str, Any]) -> tuple[int, int]:
     return pf.get("minionsKilled", 0), pf.get("jungleMinionsKilled", 0)
 
 
+def _taken(p: dict[str, Any]) -> int:
+    """Damage the player soaked: taken plus mitigated, so tanks with armor count fully."""
+    return p.get("totalDamageTaken", 0) + p.get("damageSelfMitigated", 0)
+
+
 def extract(match: dict[str, Any], timeline: dict[str, Any], items=None) -> GameFeatures:
     """``items`` (features.items.ItemRules for the game's patch) adds build timings; without
     it -- e.g. offline -- those metrics are simply absent."""
@@ -254,9 +259,11 @@ def extract(match: dict[str, Any], timeline: dict[str, Any], items=None) -> Game
     # -- whole-game metrics ---------------------------------------------------------------------
     team_kills = {100: 0, 200: 0}
     team_damage = {100: 0, 200: 0}
+    team_taken = {100: 0, 200: 0}
     for p in info["participants"]:
         team_kills[p["teamId"]] += p["kills"]
         team_damage[p["teamId"]] += p.get("totalDamageDealtToChampions", 0)
+        team_taken[p["teamId"]] += _taken(p)
 
     team_epics = {100: [], 200: []}
     team_towers = {100: [], 200: []}
@@ -291,6 +298,11 @@ def extract(match: dict[str, Any], timeline: dict[str, Any], items=None) -> Game
                              if team_damage[f.team_id] else 0.0),
             "kill_participation": ((p["kills"] + p["assists"]) / team_kills[f.team_id]
                                    if team_kills[f.team_id] else 0.0),
+            "time_dead_share": min(1.0, p.get("totalTimeSpentDead", 0) / max(duration_s, 1)),
+            "heal_shield_per_min": (p.get("totalHealsOnTeammates", 0)
+                                    + p.get("totalDamageShieldedOnTeammates", 0)) / minutes_played,
+            "damage_taken_share": (_taken(p) / team_taken[f.team_id]
+                                   if team_taken[f.team_id] else 0.0),
             "vision_per_min": p.get("visionScore", 0) / minutes_played,
             "wards_placed_per_min": p.get("wardsPlaced", 0) / minutes_played,
             "wards_killed": p.get("wardsKilled", 0),

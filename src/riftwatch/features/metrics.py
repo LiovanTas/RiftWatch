@@ -66,6 +66,12 @@ _GAME = [
     Metric("deaths_while_ahead", "deaths while 500+ gold ahead of lane opponent", "survival",
            higher_is_better=False, fmt=INT),
     Metric("first_death_min", "minute of first death", "survival", fmt="{:.1f}", coachable=False),
+    Metric("time_dead_share", "share of the game spent dead", "survival", higher_is_better=False,
+           fmt=PCT),
+    Metric("heal_shield_per_min", "healing and shielding on teammates per minute", "fighting",
+           fmt=INT, skip_roles=("TOP", "JUNGLE", "MIDDLE", "BOTTOM")),   # ~0 outside support
+    Metric("damage_taken_share", "share of team damage taken", "fighting", fmt=PCT,
+           coachable=False),
     Metric("vision_per_min", "vision score per minute", "vision", fmt="{:.2f}"),
     Metric("wards_placed_per_min", "wards placed per minute", "vision", fmt="{:.2f}"),
     Metric("control_wards", "control wards placed", "vision", fmt=INT),

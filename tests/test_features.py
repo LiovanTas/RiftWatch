@@ -165,6 +165,22 @@ def test_catalogue_is_consistent():
     assert set(CURVE_METRICS) <= row_fields
 
 
+def test_team_play_metrics():
+    match, timeline = build_game("NA1_77")
+    for q in match["info"]["participants"]:
+        q.update(totalTimeSpentDead=0, totalHealsOnTeammates=0,
+                 totalDamageShieldedOnTeammates=0, totalDamageTaken=1000, damageSelfMitigated=0)
+    support = match["info"]["participants"][4]               # Thresh, blue
+    support.update(totalTimeSpentDead=159, totalHealsOnTeammates=1000,
+                   totalDamageShieldedOnTeammates=1500, totalDamageTaken=3000,
+                   damageSelfMitigated=3000)
+    m = extract(match, timeline).participants[5].metrics
+    duration_s = 26 * 60 + 34
+    assert m["time_dead_share"] == pytest.approx(159 / duration_s, abs=1e-4)
+    assert m["heal_shield_per_min"] == pytest.approx(2500 / (duration_s / 60), abs=0.01)
+    assert m["damage_taken_share"] == pytest.approx(6000 / 10000)
+
+
 # -- storage --------------------------------------------------------------------------------
 
 TEST_DB = os.environ.get("RIFTWATCH_TEST_DATABASE_URL")

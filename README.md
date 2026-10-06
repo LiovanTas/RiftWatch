@@ -101,7 +101,8 @@ from Postgres forever. Ranks are stored as snapshots.
 **Features.** Per player per minute: gold, XP, CS, damage, kills/deaths/assists, real wards
 (Riot also logs mushrooms and hundreds of "UNDEFINED" wards for some champions), and the gap
 to the lane opponent. Per game: about 40 metrics -- including when you finished your first and
-second legendary items and boots -- plus every death with its time, map zone,
+second legendary items and boots, the share of the game you spent dead, and healing and
+shielding on teammates -- plus every death with its time, map zone,
 killer, helpers and gold state.
 
 **Baselines.** `crawl` samples players from each tier's ladder and keeps only their games from
