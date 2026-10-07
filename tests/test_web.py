@@ -176,7 +176,7 @@ def test_scout_job_and_page(web):
     job = jobs.wait(r.json()["job"]["id"])
     assert job.status == "done", job.error
     assert len(job.result["players"]) == 10
-    html = client.get(f"/scout/na/Me-NA1?job={job.id}").text
+    html = client.get(f"/scout/na/Me-NA1?job={job.token}").text
     assert "Blue team" in html and "Red team" in html and "<strong>Me#NA1</strong>" in html
     assert 'href="/players/na/Player2-NA1"' in html
 
@@ -184,7 +184,7 @@ def test_scout_job_and_page(web):
     jobs.cooldown_s = 0
     failed = jobs.wait(client.post("/api/scout/na/Me-NA1").json()["job"]["id"])
     assert failed.status == "failed" and "isn't in a game" in failed.error
-    assert "isn&#x27;t in a game" in client.get(f"/scout/na/Me-NA1?job={failed.id}").text
+    assert "isn&#x27;t in a game" in client.get(f"/scout/na/Me-NA1?job={failed.token}").text
 
 
 def test_champion_pool_api_and_page_section(web):
@@ -238,6 +238,18 @@ def test_recent_coaching_streams_on_the_player_page(web):
              if line.startswith("data: ")]
     assert [e["type"] for e in again] == ["final"] and again[0]["cached"]
     assert len(coach_calls.calls) == 1
+
+
+def test_jobs_are_only_reachable_by_their_token(web):
+    client, api, _, jobs = web
+    body = client.post("/api/players/na/Me-NA1/sync").json()
+    token = body["job"]["id"]
+    assert len(token) == 32 and not token.isdigit()
+    job = jobs.wait(token)
+    assert client.get(f"/api/jobs/{token}").json()["status"] == "done"
+    # The sequential id is no way in.
+    assert client.get(f"/api/jobs/{job.id}").status_code == 404
+    assert client.get("/api/jobs/1").status_code == 404
 
 
 def test_page_escapes_riot_ids(web):

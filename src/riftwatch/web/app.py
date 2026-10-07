@@ -324,7 +324,7 @@ def create_app(
         return {"job": job.to_json(), "created": created}
 
     @app.get("/scout/{region}/{riot_id}", response_class=HTMLResponse)
-    def scout_page(region: str, riot_id: str, job: int | None = None) -> HTMLResponse:
+    def scout_page(region: str, riot_id: str, job: str | None = None) -> HTMLResponse:
         platform_for(region)
         parse_path_riot_id(riot_id)
         found = services.jobs.get(job) if job is not None else None
@@ -334,7 +334,7 @@ def create_app(
         return HTMLResponse(pages.scout_page(region, riot_id, None, error))
 
     @app.get("/api/jobs/{job_id}")
-    def job_status(job_id: int) -> dict[str, Any]:
+    def job_status(job_id: str) -> dict[str, Any]:
         job = services.jobs.get(job_id)
         if job is None:
             raise HTTPException(404, "no such job")

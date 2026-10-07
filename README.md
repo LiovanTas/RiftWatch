@@ -287,6 +287,8 @@ What makes it safe to put in public:
 - **Coaching budget.** AI coaching stops for the day once that day's coaching has cost
   `RIFTWATCH_COACH_DAILY_BUDGET_USD` (default 5; about 400 games at ~$0.012 each). Cached
   coaching and everything else keep working.
+- **Unguessable job ids.** Update and scouting jobs are reached by a random 128-bit token, so
+  nobody can step through other visitors' lookups (a scout result lists a whole lobby).
 - **One Riot rate limiter** per server process, sized from Riot's own response headers, and
   every page reads Postgres only.
 - Riot's required legal notice on every page, gzip for pages and JSON, and `nosniff`,

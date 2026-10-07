@@ -51,17 +51,18 @@ class Job:
     created: datetime | None
     started: datetime | None
     finished: datetime | None
+    token: str = ""             # the public id; ``id`` never leaves the server
 
     def to_json(self) -> dict[str, Any]:
         def iso(t):
             return t.isoformat() if t else None
-        return {"id": self.id, "kind": self.kind, "status": self.status,
+        return {"id": self.token, "kind": self.kind, "status": self.status,
                 "progress": self.progress, "result": self.result, "error": self.error,
                 "created": iso(self.created), "started": iso(self.started),
                 "finished": iso(self.finished)}
 
 
-_COLUMNS = "id, key, kind, status, progress, result, error, created, started, finished"
+_COLUMNS = "id, key, kind, status, progress, result, error, created, started, finished, token"
 
 
 def _job(row) -> Job:
@@ -110,9 +111,12 @@ class JobQueue:
             ).fetchone()
             return _job(row), True
 
-    def get(self, job_id: int) -> Job | None:
+    def get(self, job_id: int | str) -> Job | None:
+        """By internal id (int) or by public token (str), as the web API is given it."""
+        column = "token" if isinstance(job_id, str) else "id"
         with self.pool.connection() as conn:
-            row = conn.execute(f"SELECT {_COLUMNS} FROM jobs WHERE id = %s", (job_id,)).fetchone()
+            row = conn.execute(f"SELECT {_COLUMNS} FROM jobs WHERE {column} = %s",
+                               (job_id,)).fetchone()
         return _job(row) if row else None
 
     # -- working --------------------------------------------------------------------------
@@ -195,7 +199,7 @@ class JobQueue:
             t.start()
             self._threads.append(t)
 
-    def wait(self, job_id: int, timeout: float = 30.0) -> Job:
+    def wait(self, job_id: int | str, timeout: float = 30.0) -> Job:
         """Block until a job finishes (tests and the CLI; the web never waits)."""
         deadline = time.monotonic() + timeout
         while True:
