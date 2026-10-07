@@ -442,6 +442,21 @@ def cmd_scout(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_champions(settings: Settings, args: argparse.Namespace) -> int:
+    from riftwatch.coach.pipeline import champion_pool
+    from riftwatch.report.terminal import pool_text
+
+    riot_id = parse_riot_id(args.riot_id)
+    with connect(settings.database_url) as conn:
+        account = repo.find_account(conn, riot_id.game_name, riot_id.tag_line)
+        if account is None:
+            raise ReportError(f"{riot_id} isn't synced yet -- run `riftwatch sync` first")
+        report = champion_pool(conn, account["puuid"], games=args.games, tier=args.tier,
+                               queue_id=parse_queues(args.queues))
+    print(pool_text(report))
+    return 0
+
+
 def cmd_eval_coach(settings: Settings, args: argparse.Namespace) -> int:
     import json
     from pathlib import Path
@@ -606,6 +621,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_region(p)
     p.add_argument("--games", type=int, default=10, help="recent ranked games per player (max 100)")
     p.set_defaults(func=cmd_scout)
+
+    p = sub.add_parser("champions", help="how a player performs on each champion they play")
+    p.add_argument("riot_id", help="Name#TAG")
+    p.add_argument("--games", type=int, default=100, help="newest N games (default 100)")
+    p.add_argument("--tier", help="compare against this tier instead of the player's rank")
+    _add_queues(p)
+    p.set_defaults(func=cmd_champions)
 
     p = sub.add_parser("eval-coach", help="measure the coach's grounding, faithfulness and cost on sampled games")
     p.add_argument("--games", type=int, default=20, help="games to sample (default 20)")

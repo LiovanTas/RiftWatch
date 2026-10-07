@@ -103,13 +103,17 @@ def load_stored(conn: psycopg.Connection, match_id: str) -> GameFeatures | None:
 
 def load_stored_many(
     conn: psycopg.Connection, match_ids: list[str], minutes_for: str | None = None,
+    minutes: bool = True,
+    players_for: str | None = None,
 ) -> dict[str, GameFeatures]:
     """Rebuild several games at once: three queries in total, however many games -- the
     per-query round trip, not the data, dominates reading a 20-game history.
 
     ``minutes_for`` (a PUUID) loads per-minute rows for that player only; the other nine
     keep their summaries but no minute rows. A history view scores one player, and the
-    minute rows are ~90% of the data.
+    minute rows are ~90% of the data. ``minutes=False`` skips them altogether, for views
+    that only need whole-game stats. ``players_for`` (a PUUID) loads only that player and
+    their lane opponent, for views that score one player across many games.
     """
     if not match_ids:
         return {}
@@ -130,9 +134,15 @@ def load_stored_many(
                s.extractor_version
           FROM participant_game_summary s
           JOIN match_participants p USING (match_id, participant_id)
-         WHERE s.match_id = ANY(%s)
+         WHERE s.match_id = ANY(%(ids)s)
+           AND (%(who)s::text IS NULL OR p.puuid = %(who)s
+                OR (s.match_id, s.participant_id) IN (
+                    SELECT o.match_id, o.opponent_participant_id
+                      FROM participant_game_summary o
+                      JOIN match_participants op USING (match_id, participant_id)
+                     WHERE op.puuid = %(who)s AND o.match_id = ANY(%(ids)s)))
         """,
-        (match_ids,),
+        {"ids": match_ids, "who": players_for},
     ):
         if version != EXTRACTOR_VERSION:
             stale.add(mid)
@@ -142,19 +152,20 @@ def load_stored_many(
             deaths=[Death(**d) for d in deaths],
         )
     wanted = [m for m in players if m not in stale and m in heads]
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT f.match_id, f.participant_id, {", ".join("f." + c for c in _MINUTE_COLUMNS)}
-              FROM participant_minute_features f
-              JOIN match_participants p USING (match_id, participant_id)
-             WHERE f.match_id = ANY(%s) AND (%s::text IS NULL OR p.puuid = %s)
-             ORDER BY f.match_id, f.participant_id, f.minute
-            """,
-            (wanted, minutes_for, minutes_for),
-        )
-        for row in cur:
-            players[row[0]][row[1]].minutes.append(MinuteRow(*row[2:]))
+    if minutes:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT f.match_id, f.participant_id, {", ".join("f." + c for c in _MINUTE_COLUMNS)}
+                  FROM participant_minute_features f
+                  JOIN match_participants p USING (match_id, participant_id)
+                 WHERE f.match_id = ANY(%s) AND (%s::text IS NULL OR p.puuid = %s)
+                 ORDER BY f.match_id, f.participant_id, f.minute
+                """,
+                (wanted, minutes_for, minutes_for),
+            )
+            for row in cur:
+                players[row[0]][row[1]].minutes.append(MinuteRow(*row[2:]))
     return {
         mid: GameFeatures(mid, *heads[mid], dict(sorted(players[mid].items())))
         for mid in wanted

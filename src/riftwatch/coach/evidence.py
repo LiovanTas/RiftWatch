@@ -245,6 +245,27 @@ def game_evidence(
     return EvidenceSet(b.items)
 
 
+def add_pool_evidence(evidence: EvidenceSet, pool, max_lines: int = 3,
+                      min_games: int = 3) -> None:
+    """Append one item per champion the player played at least ``min_games`` times in these
+    games: record, average standing, best and worst area, and whether it is clearly stronger
+    or weaker than their other picks in that role."""
+    n = len(evidence.items)
+    for line in [l for l in pool.lines if l.games >= min_games][:max_lines]:
+        verdict = (f" That is clearly {line.verdict} than their other {line.role.lower()} picks "
+                   f"in these games." if line.verdict else "")
+        areas = (f" Strongest area {line.best_area}, weakest {line.worst_area}."
+                 if line.areas and line.best_area != line.worst_area else "")
+        n += 1
+        evidence.items.append(Evidence(
+            f"E{n}", "pattern", "context",
+            {"stronger": "strength", "weaker": "weakness"}.get(line.verdict, "neutral"),
+            f"On {line.champion} ({line.role.lower()}, {line.games} of these games): {line.wins} "
+            f"wins; on average better than {line.score:.0f}% of comparable players across "
+            f"all stats.{areas}{verdict}",
+            severity=abs(line.gap), data={"champion": line.champion, "role": line.role}))
+
+
 def trend_evidence(
     trends: list[MetricTrend],
     recent_games: list[tuple[GameFeatures, ParticipantFeatures]],

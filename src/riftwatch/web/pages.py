@@ -67,12 +67,35 @@ def search_page(error: str | None = None) -> str:
     return page("RiftWatch", "League of Legends coaching against your rank", body)
 
 
+def _pool_html(pool) -> str:
+    if pool is None or not pool.lines:
+        return ""
+    rows = []
+    for l in pool.lines[:12]:
+        verdict = {"stronger": "stronger than your other picks",
+                   "weaker": "weaker than your other picks"}.get(l.verdict, "")
+        spread = f" ±{l.score_se:.0f}" if l.games > 1 else ""
+        rows.append(
+            f"<tr><td>{_esc(l.champion)}<div class=\"small\">{_esc(l.role.lower())}</div></td>"
+            f'<td class="num">{l.games}</td><td class="num">{100 * l.win_rate:.0f}%</td>'
+            f'<td class="num">{l.kills}/{l.deaths}/{l.assists}</td>'
+            f'<td class="num">{l.score:.0f}%{spread}<div class="small">{_esc(verdict)}</div></td>'
+            f"<td>{_esc(l.best_area or '')}<div class=\"small\">weakest: {_esc(l.worst_area or '')}</div></td></tr>")
+    return (f"<h2>Champion pool</h2><p class=\"sub\">Last {pool.games} games. \"Better than\" is "
+            "the average share of players at your rank in the same role you beat across all "
+            "stats, adjusted for champion and matchup; ± is one standard error.</p>"
+            '<div class="card scroll"><table class="score"><tr class="area"><td>champion</td>'
+            "<td>games</td><td>win rate</td><td>K/D/A</td><td>better than</td><td>best area</td></tr>"
+            + "".join(rows) + "</table></div>")
+
+
 def player_page(
     region: str,
     riot_id: str,
     player: dict[str, Any] | None,
     recent: CoachResult | None,
     recent_coach_url: str | None,
+    pool=None,
 ) -> str:
     sync_url = f"/api/players/{_esc(region)}/{_esc(riot_id)}/sync"
     update = (f'<p><button class="action" id="sync" data-url="{sync_url}">Update</button>'
@@ -113,7 +136,7 @@ def player_page(
         links + f"<h1>{_esc(player['riot_id'])}</h1>"
         f'<p class="sub">{_esc(rank_text)} · {_esc(player["platform"].upper())} · '
         f"{player['games_cached']} games analysed</p>" + update
-        + coaching + "<h2>Recent games</h2>" + games
+        + coaching + _pool_html(pool) + "<h2>Recent games</h2>" + games
     )
     return page(f"{player['riot_id']} - RiftWatch", f"RiftWatch coaching for {player['riot_id']}",
                 body, extra_js=SYNC_JS)

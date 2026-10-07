@@ -22,7 +22,13 @@ from starlette.middleware.gzip import GZipMiddleware
 import riftwatch.db.connection  # noqa: F401  (installs the orjson jsonb codecs)
 from riftwatch import __version__
 from riftwatch.coach.llm import Coach, CoachError
-from riftwatch.coach.pipeline import ReportError, game_report, recent_report, stream_coaching
+from riftwatch.coach.pipeline import (
+    ReportError,
+    champion_pool,
+    game_report,
+    recent_report,
+    stream_coaching,
+)
 from riftwatch.config import ConfigError, Settings
 from riftwatch.db import repo
 from riftwatch.features import store as feature_store
@@ -371,6 +377,13 @@ def create_app(
                                    generate=generate)
             return serialize.recent_review(result)
 
+    @app.get("/api/players/{region}/{riot_id}/champions")
+    def champions(region: str, riot_id: str,
+                  games: int = Query(100, ge=5, le=300)) -> dict[str, Any]:
+        with pool.connection() as conn:
+            account = account_or_404(conn, region, riot_id)
+            return serialize.pool_json(champion_pool(conn, account["puuid"], games=games))
+
     @app.get("/api/players/{region}/{riot_id}/recent")
     def recent_review(region: str, riot_id: str,
                       games: int = Query(20, ge=5, le=50)) -> dict[str, Any]:
@@ -427,8 +440,12 @@ def create_app(
                 recent = recent_report(conn, account["puuid"], coach=coach, generate=False)
             except ReportError:
                 recent = None
+            try:
+                champs = champion_pool(conn, account["puuid"])
+            except ReportError:
+                champs = None
         coach_url = f"/api/players/{region}/{riot_id}/recent/coach" if coach is not None else None
-        return HTMLResponse(pages.player_page(region, riot_id, data, recent, coach_url))
+        return HTMLResponse(pages.player_page(region, riot_id, data, recent, coach_url, champs))
 
     return app
 

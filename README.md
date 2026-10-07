@@ -71,6 +71,7 @@ riftwatch coach "Name#TAG" --last --html last-game.html
 | `baselines` | Rebuilds the per-tier, per-role, per-champion comparison tables |
 | `features` | Extracts per-minute features from any cached games that still need it |
 | `coach Name#TAG` | Coaching on the last 20 games; `--last` or `--match ID` for one game |
+| `champions Name#TAG` | How the player performs on each champion and role over their last 100 games |
 | `scout Name#TAG` | Rank, champion experience and recent form of all ten players in a live game |
 | `eval-coach` | Runs the coach on a fixed sample of crawled games and measures grounding, faithfulness, cost and latency |
 | `cache` | Cache size and hit rate |
@@ -136,6 +137,12 @@ XP by 15 minutes counts as winning it. On held-out games this explained twice as
 lead as your champion alone (CS lead at 10 minutes: 13% of the variance against 7%).
 Averaging each exact champion pair on top added nothing at this sample size. The coach is
 told who you laned against.
+
+**Champion pool.** Each game is reduced to one number, the average "better than N%" across
+its coachable stats. Games are then grouped by champion and role, with a standard error, so a
+champion is only called stronger or weaker than the player's other picks in that role when
+the gap is more than two standard errors and there are at least 5 games. The recent-games
+coach gets a line for each champion played three or more times.
 
 **Coach.** Scores become numbered evidence items. Claude (Sonnet 5.5) answers in a fixed JSON
 schema, citing evidence ids. The grounding check rejects any number that isn't in the evidence
@@ -218,7 +225,8 @@ take the next one from whoever has the least work running, and retry a job whose
 | `GET /api/players/{region}/{Name-TAG}` | 9 ms |
 | `GET /api/players/.../matches?limit=100` | 7 ms |
 | `GET /api/players/.../matches/{match_id}` (scores, curves, evidence) | 18 ms |
-| `GET /api/players/.../recent` (trends over 40 games) | 85 ms |
+| `GET /api/players/.../recent` (trends over 40 games, champion- and matchup-adjusted) | 150 ms |
+| `GET /api/players/.../champions` (champion pool over 100 games) | 83 ms |
 | `POST /api/players/.../sync` | returns a job; `GET /api/jobs/{id}` for progress |
 | `POST /api/scout/{region}/{Name-TAG}` | scouts the player's live game as a job; the result is the report |
 | `POST /api/players/.../matches/{match_id}/coach` | generates and caches coaching |

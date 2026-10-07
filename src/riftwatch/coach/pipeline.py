@@ -14,10 +14,11 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
+from riftwatch.analysis.pool import PoolReport, summarize
 from riftwatch.analysis.score import GameScore, score_participant
 from riftwatch.analysis.trend import trends
 from riftwatch.baselines.build import baselines_for
-from riftwatch.coach.evidence import EvidenceSet, game_evidence, trend_evidence
+from riftwatch.coach.evidence import EvidenceSet, add_pool_evidence, game_evidence, trend_evidence
 from riftwatch.coach.grounding import CoachOutput, CoachPoint
 from riftwatch.coach.llm import Coach
 from riftwatch.db import repo
@@ -269,7 +270,7 @@ def recent_report(
     bucket = player_bucket(conn, puuid, tier)
     # Fetch older games too, for the "before" side of each trend.
     ids = repo.player_match_ids(conn, puuid, queue_id=queue_id, limit=games * 2)
-    stored = store.load_stored_many(conn, ids, minutes_for=puuid)
+    stored = store.load_stored_many(conn, ids, minutes_for=puuid, players_for=puuid)
     loaded: list[tuple[GameFeatures, ParticipantFeatures]] = []
     scores: list[GameScore] = []
     for match_id in ids:
@@ -288,11 +289,38 @@ def recent_report(
         raise ReportError("no analysable games cached for this player -- run sync first")
     tier_label = bucket.replace("_", " ").title()
     evidence = trend_evidence(trends(scores, recent=games), loaded[:games], tier_label)
+    add_pool_evidence(evidence, summarize(scores[:games], bucket))
     output, model, cached, dropped, usage, pending = _coach(
         conn, coach, puuid, "recent", None, evidence, "their recent games", refresh,
         generate=generate)
     return CoachResult("recent", puuid, bucket, evidence, output, model, cached, dropped,
                        usage, None, scores[:games], loaded[:games], pending)
+
+
+def champion_pool(
+    conn: psycopg.Connection,
+    puuid: str,
+    *,
+    games: int = 100,
+    tier: str | None = None,
+    min_n: int = 20,
+    queue_id: int | tuple[int, ...] = SUPPORTED_QUEUES,
+) -> PoolReport:
+    """The player's last ``games`` games, grouped by champion and role. Reads stored features
+    only (no extraction on this path) and skips per-minute rows: whole-game stats are enough."""
+    bucket = player_bucket(conn, puuid, tier)
+    ids = repo.player_match_ids(conn, puuid, queue_id=queue_id, limit=games)
+    stored = store.load_stored_many(conn, ids, minutes=False, players_for=puuid)
+    scores = []
+    for match_id in ids:
+        game = stored.get(match_id)
+        p = game.by_puuid(puuid) if game else None
+        if p is None or not p.role or game.duration_s < 600:
+            continue
+        scores.append(_score(conn, game, p, bucket, min_n))
+    if not scores:
+        raise ReportError("no analysed games cached for this player -- run sync first")
+    return summarize(scores, bucket)
 
 
 def stream_coaching(conn: psycopg.Connection, result: CoachResult, coach: Coach,

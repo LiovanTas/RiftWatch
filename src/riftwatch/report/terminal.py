@@ -127,3 +127,24 @@ def scout_text(report) -> str:
             if p.flags:
                 lines.append(f"   {'':<22} {', '.join(p.flags)}")
     return "\n".join(lines)
+
+
+def pool_text(report) -> str:
+    """A :class:`riftwatch.analysis.pool.PoolReport` as a table, most-played first."""
+    lines = [f"Champion pool over {report.games} games, vs "
+             f"{report.tier_bucket.replace('_', ' ').title()} players in the same role "
+             "(adjusted for champion and matchup)", "",
+             f"  {'champion':<14} {'role':<8} {'games':>5} {'win%':>5}  {'K/D/A':<14} "
+             f"{'better than':>11}  best area / worst area"]
+    for l in report.lines:
+        mark = {"stronger": "  + stronger than your other picks",
+                "weaker": "  - weaker than your other picks"}.get(l.verdict, "")
+        spread = f"{l.score:.0f}% +/-{l.score_se:.0f}" if l.games > 1 else f"{l.score:.0f}%"
+        kda = f"{l.kills}/{l.deaths}/{l.assists}"
+        lines.append(f"  {l.champion[:14]:<14} {l.role.lower():<8} {l.games:>5} "
+                     f"{100 * l.win_rate:>4.0f}%  {kda:<14} {spread:>11}  "
+                     f"{l.best_area or ''} / {l.worst_area or ''}{mark}")
+    lines.append("")
+    lines.append("  'better than' = average share of comparable players beaten across all stats; "
+                 "+/- is one standard error.")
+    return "\n".join(lines)

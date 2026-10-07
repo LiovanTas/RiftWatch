@@ -287,6 +287,7 @@ class BaselineSet:
             (role, champion_id, champion_id, buckets),
         ).fetchall()]
         self._effects = champion_effects(rows, champion_id)
+        self._memo: dict[tuple, Baseline | None] = {}
         self._lane = lane_strengths(conn, role)
         self._rows: dict[tuple[str, int | None, str, int], Baseline] = {}
         for b in rows:
@@ -302,7 +303,17 @@ class BaselineSet:
     def get(self, metric: str, minute: int | None = None,
             opponent_champion_id: int | None = None) -> Baseline | None:
         """``opponent_champion_id`` (lane-lead metrics only) judges the lead against the
-        matchup: the role baseline shifted by strength(you) - strength(them)."""
+        matchup: the role baseline shifted by strength(you) - strength(them).
+
+        Answers are memoised: sets are shared through the cache, and building an adjusted
+        baseline is most of the cost of scoring a game."""
+        key = (metric, minute, opponent_champion_id if metric in LANE_LEAD_METRICS else None)
+        if key not in self._memo:
+            self._memo[key] = self._get(metric, minute, key[2])
+        return self._memo[key]
+
+    def _get(self, metric: str, minute: int | None,
+             opponent_champion_id: int | None) -> Baseline | None:
         matchup = None
         if opponent_champion_id and metric in LANE_LEAD_METRICS:
             key = minute or 0

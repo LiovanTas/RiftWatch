@@ -115,3 +115,16 @@ def recent_review(result: CoachResult) -> dict[str, Any]:
         "evidence": result.evidence.to_json(),
         "coach": coach_json(result),
     }
+
+
+def pool_json(report) -> dict[str, Any]:
+    return {
+        "tier": report.tier_bucket, "games": report.games,
+        "champions": [{
+            "champion": l.champion, "champion_id": l.champion_id, "role": l.role,
+            "games": l.games, "wins": l.wins, "win_rate": round(l.win_rate, 3),
+            "kills": l.kills, "deaths": l.deaths, "assists": l.assists,
+            "better_than": l.score, "better_than_se": l.score_se, "areas": l.areas,
+            "verdict": l.verdict or None, "gap": l.gap,
+        } for l in report.lines],
+    }

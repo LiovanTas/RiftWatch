@@ -312,6 +312,8 @@ def test_game_report_caches_llm_answer(conn):
     recent = recent_report(conn, puuid, tier="gold")
     assert recent.scope == "recent" and len(recent.games) == 2       # solo/duo and draft
     assert "(Normal Draft 1, Ranked Solo/Duo 1)" in recent.evidence.items[0].text
+    # Champions played 3+ times get a pool line; here the player has only 2 games.
+    assert not any(e.text.startswith("On Aatrox") for e in recent.evidence.items)
     solo_only = recent_report(conn, puuid, tier="gold", queue_id=(420,))
     assert len(solo_only.games) == 1
 

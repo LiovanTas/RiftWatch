@@ -187,6 +187,15 @@ def test_scout_job_and_page(web):
     assert "isn&#x27;t in a game" in client.get(f"/scout/na/Me-NA1?job={failed.id}").text
 
 
+def test_champion_pool_api_and_page_section(web):
+    client, api, _, jobs = web
+    sync(client, jobs)
+    body = client.get("/api/players/na/Me-NA1/champions").json()
+    assert body["tier"] == "EMERALD" and body["champions"][0]["champion"] == "Aatrox"
+    assert body["champions"][0]["games"] == 5
+    assert "Champion pool" in client.get("/players/na/Me-NA1").text
+
+
 def test_page_escapes_riot_ids(web):
     client, *_ = web
     page = client.get("/players/na/%3Cscript%3Ealert(1)%3C%2Fscript%3E-NA1").text
