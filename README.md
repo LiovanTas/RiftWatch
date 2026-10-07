@@ -402,6 +402,38 @@ It shows your side of trades only: the client exposes your health, not your oppo
 positions. Everything is for after the game; nothing gives advice during a match, which Riot's
 policy doesn't allow.
 
+## Health bars from video (in progress)
+
+```bash
+pip install -e ".[cv]"
+riftwatch vision game.mp4 --recording <recording file>   # whole game
+riftwatch vision game.mp4 --frame 600                       # one frame, bars boxed, for checking
+riftwatch vision replay.mp4 --check-panel                   # measure it on replay footage
+```
+
+The live recorder only sees your own health. To see both sides of a trade, `vision` reads
+every champion's health bar from a video of the finished game -- after the game, from the
+file, never from the running client. A bar is a short run of one team colour (green you,
+blue allies, red enemies) inside a black outline that continues as a dark run of missing
+health; health is fill / (fill + dark). Where health ends is found by brightness, not
+colour, because video compression blurs colour at that edge.
+
+The video's timeline is lined up with game time by sliding your own bar's health curve
+along the recorder's until they match. That also makes your own bar an accuracy check: the
+detector against the recorder's exact numbers.
+
+**Measured on real footage.** Replay videos show the followed champion's health on the HUD
+panel, a second reading of the same health. On a 32-minute 720p Grandmaster replay
+(`--check-panel`, one frame a second), the followed champion's overhead bar was read in 71%
+of the seconds the panel showed health, with a median error of 0 health points, a mean of 2.3
+and 90% within 4.6. The misses are mostly recalls (the recall bar covers the health bar),
+deaths and fights where bars overlap. Tuning on that footage found what synthetic frames
+couldn't: the outline above a bar is dim brown rather than black, a thicker line marks every
+1000 health, at full health the dark scenery beyond a bar looks like missing health (so bar
+width is a constant, not measured), and compression drains colour from a bar's edge rows (so
+height is measured by brightness). Still to do: about one detected bar in six in spot-checked
+frames is not a champion's (structures, effects), and bars aren't yet tied to champions.
+
 ## Live-game scouting
 
 ```bash

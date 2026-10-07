@@ -79,7 +79,11 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
 - [x] **Live recorder** on Riot's Live Client Data API: own health, gold, items and events every
       second, linked to the match afterwards; trades, recalls and deaths in the review and coach
 - [ ] **Enemy health from the screen** (computer vision on health bars) to see both sides of a
-      trade -- start with a one-week spike on recorded games before committing
+      trade. Built: bar detector, video scanner, alignment to game time by matching your own
+      health curve, accuracy check against the recorder (`riftwatch vision`). Calibrated on a
+      real 720p replay: 71% coverage, median error 0, 90% within 4.6 health points against the
+      HUD panel. Next: cut false bars (structures, effects), tie bars to champions, align
+      replays by reading the game clock, then feed enemy health into trades and the coach
 
 ## Later
 

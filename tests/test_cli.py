@@ -12,7 +12,7 @@ def test_every_command_parses():
                  ["crawl", "--high-elo", "--regions", "na,euw,kr", "--players", "50"],
                  ["baselines"], ["features"], ["coach", "A#B", "--last", "--offline"],
                  ["cache"], ["watchdog", "--status"], ["watchdog", "--record"],
-                 ["record"], ["record", "--import"], ["ml", "dataset"], ["refresh", "--dry-run"], ["ml", "train", "--roles", "JUNGLE"], ["serve", "--port", "9000"], ["sessions", "A#B", "--games", "100"], ["progress", "A#B", "--weeks", "4"], ["champions", "A#B", "--games", "50"], ["eval-coach", "--offline", "--games", "3"], ["scout", "A#B", "--games", "5"],
+                 ["record"], ["record", "--import"], ["ml", "dataset"], ["refresh", "--dry-run"], ["ml", "train", "--roles", "JUNGLE"], ["serve", "--port", "9000"], ["vision", "game.mp4", "--recording", "r.jsonl.gz"], ["sessions", "A#B", "--games", "100"], ["progress", "A#B", "--weeks", "4"], ["champions", "A#B", "--games", "50"], ["eval-coach", "--offline", "--games", "3"], ["scout", "A#B", "--games", "5"],
                  ["db", "migrate"]):
         assert callable(parser.parse_args(argv).func)
 

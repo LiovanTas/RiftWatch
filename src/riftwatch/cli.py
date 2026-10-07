@@ -487,6 +487,71 @@ def cmd_sessions(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_vision(settings: Settings, args: argparse.Namespace) -> int:
+    import json
+    from pathlib import Path
+
+    try:
+        import cv2
+    except ImportError:
+        print("error: video analysis needs the cv extras: pip install -e \".[cv]\"",
+              file=sys.stderr)
+        return 2
+    from riftwatch.vision import healthbars, video
+
+    if args.check_panel:
+        from riftwatch.vision import spectator
+
+        result = spectator.check(args.video, progress=print)
+        s = result.summary()
+        print(f"{s['seconds']} seconds; followed champion's bar read in "
+              f"{100 * s['coverage']:.0f}% of the seconds the HUD panel showed health")
+        print(f"  overhead bar vs HUD panel: median error {s['error_median']}, mean "
+              f"{s['error_mean']}, 90th percentile {s['error_p90']} health points")
+        return 0
+
+    if args.frame is not None:
+        # One frame with every detected bar boxed: for checking and tuning the detector.
+        cap = cv2.VideoCapture(args.video)
+        cap.set(cv2.CAP_PROP_POS_MSEC, args.frame * 1000)
+        ok, img = cap.read()
+        cap.release()
+        if not ok:
+            raise ValueError(f"no frame at {args.frame}s in {args.video}")
+        bars = healthbars.find_bars(img)
+        out = Path(args.out) / f"frame-{args.frame:g}s.png"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(out), healthbars.draw(img, bars))
+        for b in bars:
+            print(f"  {b.team:<6} at ({b.x}, {b.y})  {100 * b.fraction:5.1f}%  "
+                  f"({b.fill}/{b.total} px, {b.height} px tall)")
+        print(f"{len(bars)} bar(s); annotated frame: {out}")
+        return 0
+
+    samples = None
+    if args.recording:
+        from riftwatch.live.recorder import read
+
+        _head, samples, _events = read(Path(args.recording))
+    scanned = list(video.frames(args.video, fps=args.fps, progress=print))
+    report = video.analyse(scanned, samples)
+    out = Path(args.out) / (Path(args.video).stem + ".json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report.to_json()), encoding="utf-8")
+    seen = sum(1 for s in report.seconds if s.enemies)
+    print(f"{len(scanned)} frames read; enemy bars seen in {seen} of {len(report.seconds)} seconds")
+    a = report.alignment
+    if a is None:
+        print("  not aligned" + ("" if samples else " (pass --recording to line up game time)"))
+    else:
+        print(f"  aligned: game time = video time {a.offset:+d} s ({a.overlap} s of overlap)")
+        error = "n/a" if report.own_error is None else f"{report.own_error:.1f} health %"
+        print(f"  your own bar vs the recorder: read in {100 * report.own_coverage:.0f}% of "
+              f"alive seconds, average error {error}")
+    print(f"  per-second results: {out}")
+    return 0
+
+
 def cmd_eval_coach(settings: Settings, args: argparse.Namespace) -> int:
     import json
     from pathlib import Path
@@ -672,6 +737,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tier", help="compare against this tier instead of the player's rank")
     _add_queues(p)
     p.set_defaults(func=cmd_sessions)
+
+    p = sub.add_parser("vision", help="read health bars from a recorded game video (after the game)")
+    p.add_argument("video", help="video file of a finished game")
+    p.add_argument("--recording", help="the live recording of the same game, to line up game "
+                                       "time and check accuracy against your own health")
+    p.add_argument("--fps", type=float, default=2.0, help="frames read per second (default 2)")
+    p.add_argument("--frame", type=float, help="just one frame at this many seconds: saves it "
+                                               "with detected bars boxed, for checking")
+    p.add_argument("--check-panel", action="store_true",
+                   help="replay/spectator footage: measure the reader against the HUD panel's "
+                        "health for the followed champion")
+    p.add_argument("--out", default="out/vision", help="where results go")
+    p.set_defaults(func=cmd_vision)
 
     p = sub.add_parser("eval-coach", help="measure the coach's grounding, faithfulness and cost on sampled games")
     p.add_argument("--games", type=int, default=20, help="games to sample (default 20)")
