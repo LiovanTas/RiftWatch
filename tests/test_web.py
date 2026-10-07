@@ -220,6 +220,26 @@ def test_progress_section_renders_chart_and_trend():
     assert "farming declining" in html and "Week of Sep 07: better than 44%" in html
 
 
+def test_recent_coaching_streams_on_the_player_page(web):
+    import json
+
+    client, api, coach_calls, jobs = web
+    sync(client, jobs)
+    page = client.get("/players/na/Me-NA1").text
+    assert 'data-stream="/api/players/na/Me-NA1/recent/coach/stream"' in page
+    r = client.post("/api/players/na/Me-NA1/recent/coach/stream")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
+    events = [json.loads(line[6:]) for line in r.text.split("\n\n") if line.startswith("data: ")]
+    assert [e["type"] for e in events if e["type"] in ("point", "final")][-1] == "final"
+    assert any(e["type"] == "point" for e in events) and len(coach_calls.calls) == 1
+    # Cached now: the page shows it, and streaming again is a single "final" event.
+    again = [json.loads(line[6:]) for line in
+             client.post("/api/players/na/Me-NA1/recent/coach/stream").text.split("\n\n")
+             if line.startswith("data: ")]
+    assert [e["type"] for e in again] == ["final"] and again[0]["cached"]
+    assert len(coach_calls.calls) == 1
+
+
 def test_page_escapes_riot_ids(web):
     client, *_ = web
     page = client.get("/players/na/%3Cscript%3Ealert(1)%3C%2Fscript%3E-NA1").text

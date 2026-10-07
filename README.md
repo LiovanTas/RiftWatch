@@ -262,6 +262,7 @@ take the next one from whoever has the least work running, and retry a job whose
 | `POST /api/scout/{region}/{Name-TAG}` | scouts the player's live game as a job; the result is the report |
 | `POST /api/players/.../matches/{match_id}/coach` | generates and caches coaching |
 | `POST /api/players/.../matches/{match_id}/coach/stream` | the same, as server-sent events: each point once it passes the grounding check, then the final answer |
+| `POST /api/players/.../recent/coach/stream` | recent-games coaching, streamed the same way (the player page uses it) |
 
 Interactive API docs are at `/docs`.
 

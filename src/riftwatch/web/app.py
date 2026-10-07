@@ -428,6 +428,30 @@ def create_app(
         require_coach_budget()
         return recent(region, riot_id, games, generate=True)
 
+    @app.post("/api/players/{region}/{riot_id}/recent/coach/stream")
+    def recent_coach_stream(request: Request, region: str, riot_id: str,
+                            games: int = Query(20, ge=5, le=50)) -> StreamingResponse:
+        """Recent-games coaching as server-sent events, like the single-game stream."""
+        if coach is None:
+            raise HTTPException(503, "LLM coach not configured on the server")
+        limit(request, "coach")
+        require_coach_budget()
+        with pool.connection() as conn:     # fail fast (404s) before the stream starts
+            account = account_or_404(conn, region, riot_id)
+
+        def events():
+            try:
+                with pool.connection() as conn:
+                    result = recent_report(conn, account["puuid"], games=games, coach=coach,
+                                           generate=False)
+                    for event in stream_coaching(conn, result, coach, "their recent games"):
+                        yield f"data: {json.dumps(event)}\n\n"
+            except (CoachError, ReportError) as exc:
+                yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+
+        return StreamingResponse(events(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-store"})
+
     @app.get("/players/{region}/{riot_id}/matches/{match_id}", response_class=HTMLResponse)
     def match_page(region: str, riot_id: str, match_id: str) -> HTMLResponse:
         with pool.connection() as conn:
@@ -482,7 +506,8 @@ def create_app(
                 session_data = sessions_report(conn, account["puuid"])
             except ReportError:
                 session_data = None
-        coach_url = f"/api/players/{region}/{riot_id}/recent/coach" if coach is not None else None
+        coach_url = (f"/api/players/{region}/{riot_id}/recent/coach/stream"
+                     if coach is not None else None)
         return HTMLResponse(pages.player_page(region, riot_id, data, recent, coach_url, champs,
                                               progress_data, session_data))
 
