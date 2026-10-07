@@ -155,10 +155,24 @@ def create_app(
 
     services.jobs.register("scout", scout_job)
 
+    def warm_baselines() -> None:
+        try:
+            from riftwatch.baselines import build as baseline_build
+
+            with pool.connection() as conn:
+                baseline_build.warm(conn)
+        except Exception:   # a cold cache is only slower, never wrong
+            pass
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if owns_pool:
             pool.open()
+        # In the background: the server answers at once, and the first player page finds the
+        # shared baselines already in memory.
+        import threading
+
+        threading.Thread(target=warm_baselines, name="warm-baselines", daemon=True).start()
         services.jobs.start()
         yield
         services.jobs.shutdown()

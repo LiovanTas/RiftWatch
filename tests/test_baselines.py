@@ -191,6 +191,7 @@ def test_adjusted_baseline_shifts_the_role_at_the_players_tier(conn):
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (b.tier_bucket, b.role, b.champion_id, b.patch_window, b.metric, b.minute,
                  b.n, b.mean, b.sd, b.p10, b.p25, b.p50, b.p75, b.p90))
+    bl.build_champion_effects(conn)
     got = bl.BaselineSet(conn, "GOLD", "JUNGLE", 64).get("cs_per_min")
     shift = 0.6 * 200 / (200 + bl.ADJUST_SHRINK) * 10
     assert got.tier_bucket == "GOLD" and got.n == 400 and got.adjusted_n == 200
@@ -254,6 +255,55 @@ def test_build_fills_lane_strength(conn):
         """SELECT strength FROM lane_strength WHERE role = 'TOP' AND champion_id = 86
            AND metric = 'gold_diff_at_10' AND minute = 0""").fetchone()[0]
     assert strength == pytest.approx(-garen)
+
+
+def test_stored_champion_effects_match_the_python_reference(conn):
+    import random
+
+    rng = random.Random(3)
+    rows = []
+    for tier in ("SILVER", "GOLD", "PLATINUM"):
+        for metric in ("cs_per_min", "deaths", "vision_per_min"):
+            rows.append(row(tier, 0, 50, n=500, metric=metric, sd=10.0))
+            for champ in (11, 64, 254):
+                rows.append(row(tier, champ, 50 + rng.uniform(-8, 8), n=rng.randint(10, 120),
+                                metric=metric))
+    with conn.cursor() as cur:
+        for b in rows:
+            cur.execute(
+                """INSERT INTO baselines (tier_bucket, role, champion_id, patch_window, metric,
+                       minute, n, mean, sd, p10, p25, p50, p75, p90)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (b.tier_bucket, b.role, b.champion_id, b.patch_window, b.metric, b.minute,
+                 b.n, b.mean, b.sd, b.p10, b.p25, b.p50, b.p75, b.p90))
+    assert bl.build_champion_effects(conn) > 0
+    for champ in (11, 64, 254):
+        expected = bl.champion_effects(rows, champ)
+        stored = {(m, minute or None): (e, n) for m, minute, e, n in conn.execute(
+            "SELECT metric, minute, effect, n FROM champion_effects WHERE champion_id = %s",
+            (champ,))}
+        assert stored.keys() == expected.keys()
+        for key, (e, n) in expected.items():
+            assert stored[key][0] == pytest.approx(e) and stored[key][1] == n
+
+
+def test_prefetched_sets_answer_like_sets_built_one_at_a_time(conn):
+    from riftwatch.features.metrics import CURVE_MINUTES, GAME_METRICS
+
+    load_games(conn, 25)
+    bl.build(conn, min_n=20)
+    picks = [("TOP", 266), ("TOP", 86), ("JUNGLE", 64), ("MIDDLE", 103), ("TOP", 0)]
+    direct = {p: bl.BaselineSet(conn, "GOLD", *p) for p in picks}
+    bl.invalidate_cache()
+    bl.warm(conn)
+    bl.prefetch(conn, "GOLD", picks)
+    for p in picks:
+        batched = bl.baselines_for(conn, "GOLD", *p)
+        for metric in GAME_METRICS:
+            assert batched.get(metric) == direct[p].get(metric), (p, metric)
+        for minute in (CURVE_MINUTES.start, 10, 20):
+            assert batched.get("cs", minute) == direct[p].get("cs", minute)
+            assert batched.get("gold_diff", minute, 86) == direct[p].get("gold_diff", minute, 86)
 
 
 def test_score_and_trend_end_to_end(conn):

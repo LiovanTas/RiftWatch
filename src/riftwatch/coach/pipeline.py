@@ -240,6 +240,9 @@ def _scored_games(
     if missing:
         stored = store.load_stored_many(conn, missing, minutes_for=puuid if minutes else None,
                                         minutes=minutes, players_for=puuid)
+        picks = {(p.role, p.champion_id) for g in stored.values()
+                 if (p := g.by_puuid(puuid)) is not None and p.role}
+        baseline_build.prefetch(conn, bucket, picks, min_n)
         for match_id in missing:
             game = stored.get(match_id)
             if game is None and extract_missing:

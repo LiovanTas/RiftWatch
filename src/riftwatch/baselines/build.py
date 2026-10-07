@@ -106,6 +106,30 @@ SELECT s.role, s.champion_id, c.metric, f.minute, count(*), sum(c.v) / (count(*)
 """
 
 
+# The same computation as champion_effects() below, in one statement over all champions.
+_EFFECTS_SQL = """
+INSERT INTO champion_effects (role, champion_id, metric, minute, effect, n)
+SELECT role, champion_id, metric, minute, raw * n / (n + %(shrink)s), n
+  FROM (SELECT c.role, c.champion_id, c.metric, coalesce(c.minute, 0) AS minute,
+               sum(c.n * (c.p50 - r.p50) / r.sd) / sum(c.n) AS raw, sum(c.n) AS n
+          FROM baselines c
+          JOIN baselines r
+            ON r.role = c.role AND r.champion_id = 0 AND r.tier_bucket = c.tier_bucket
+           AND r.metric = c.metric AND r.minute IS NOT DISTINCT FROM c.minute
+         WHERE c.champion_id <> 0 AND r.sd > 0
+         GROUP BY c.role, c.champion_id, c.metric, coalesce(c.minute, 0)) e
+ WHERE n >= %(min_n)s AND abs(raw) >= %(gate)s * 1.25 / sqrt(n)
+"""
+
+
+def build_champion_effects(conn: psycopg.Connection) -> int:
+    """Recompute the stored champion adjustments from the current baselines."""
+    conn.execute("DELETE FROM champion_effects")
+    conn.execute(_EFFECTS_SQL, {"shrink": ADJUST_SHRINK, "min_n": ADJUST_MIN_N,
+                                "gate": ADJUST_GATE})
+    return conn.execute("SELECT count(*) FROM champion_effects").fetchone()[0]
+
+
 @dataclass
 class BuildReport:
     patches: list[str]
@@ -163,6 +187,7 @@ def build(
         conn.execute("DELETE FROM lane_strength")
         for template in (_LANE_GAME_SQL, _LANE_CURVE_SQL):
             conn.execute(template.format(source=_SOURCE_FILTER), params)
+        build_champion_effects(conn)
         rows = conn.execute("SELECT count(*) FROM baselines").fetchone()[0]
         games = conn.execute(
             f"""
@@ -215,15 +240,18 @@ class Baseline:
                        p50=self.p50 + delta, p75=self.p75 + delta, p90=self.p90 + delta)
 
 
-def champion_effects(rows: list[Baseline], champion_id: int) -> dict[tuple, tuple[float, int]]:
+def champion_effects(rows: list[Baseline], champion_id: int,
+                     role: dict[tuple, Baseline] | None = None) -> dict[tuple, tuple[float, int]]:
     """(metric, minute) -> (effect in role standard deviations, pooled champion games).
 
-    For each tier with both a champion and a role baseline, the gap between their medians is
+    The reference implementation of what ``build`` stores in champion_effects (_EFFECTS_SQL);
+    a test keeps the two in agreement. For each tier with both a champion and a role baseline, the gap between their medians is
     measured in the role's standard deviations, then averaged over tiers weighted by the
     champion's games. Effects within ADJUST_GATE standard errors of zero are dropped; the
     rest are shrunk toward zero.
     """
-    role = {(b.metric, b.minute, b.tier_bucket): b for b in rows if b.champion_id == 0}
+    if role is None:
+        role = _index(b for b in rows if b.champion_id == 0)
     sums: dict[tuple, list[float]] = {}
     for b in rows:
         if b.champion_id != champion_id or champion_id == 0:
@@ -271,22 +299,33 @@ class BaselineSet:
         champion_id: int,
         min_n: int = 20,
         max_tier_distance: int = 1,
+        champ_rows: list[Baseline] | None = None,
+        effects: dict[tuple, tuple[float, int]] | None = None,
     ) -> None:
+        """``champ_rows`` and ``effects`` skip their queries when the caller already has
+        them, as :func:`prefetch` does for many champions at once."""
         self.tier_bucket = tier_bucket
         self.min_n = min_n
         self.champion_id = champion_id
         buckets = neighbor_buckets(tier_bucket)[: 1 + 2 * max_tier_distance]
-        # The champion effect pools every tier, so a champion needs all of them loaded.
-        rows = [Baseline(*r) for r in conn.execute(
-            """
-            SELECT metric, minute, tier_bucket, role, champion_id, patch_window,
-                   n, mean, sd, p10, p25, p50, p75, p90
-              FROM baselines
-             WHERE role = %s AND champion_id IN (0, %s) AND (%s <> 0 OR tier_bucket = ANY(%s))
-            """,
-            (role, champion_id, champion_id, buckets),
-        ).fetchall()]
-        self._effects = champion_effects(rows, champion_id)
+        # The role's own baselines are shared by all its champions and loaded once per role.
+        # A champion adds its stored adjustment and only those of its own rows big enough to
+        # replace the adjusted role baseline (CHAMPION_MIN_N games at a nearby tier).
+        role_rows, _ = role_baselines(conn, role)
+        if champ_rows is None:
+            champ_rows = [] if champion_id == 0 else [Baseline(*r) for r in conn.execute(
+                f"""SELECT {_BASELINE_COLUMNS} FROM baselines
+                     WHERE role = %s AND champion_id = %s AND tier_bucket = ANY(%s)
+                       AND n >= %s""",
+                (role, champion_id, buckets, max(min_n, CHAMPION_MIN_N)),
+            ).fetchall()]
+        if effects is None:
+            effects = {} if champion_id == 0 else {
+                (m, minute or None): (e, n) for m, minute, e, n in conn.execute(
+                    "SELECT metric, minute, effect, n FROM champion_effects "
+                    "WHERE role = %s AND champion_id = %s", (role, champion_id))}
+        rows = [b for b in role_rows if b.tier_bucket in buckets] + champ_rows
+        self._effects = effects
         self._memo: dict[tuple, Baseline | None] = {}
         self._lane = lane_strengths(conn, role)
         self._rows: dict[tuple[str, int | None, str, int], Baseline] = {}
@@ -373,6 +412,7 @@ def generation(conn: psycopg.Connection) -> tuple | None:
         if latest != _cache_generation:
             _cache.clear()
             _lanes.clear()
+            _roles.clear()
             _cache_generation = latest
     return _cache_generation
 
@@ -386,6 +426,98 @@ def baselines_for(
     if key not in _cache:
         _cache[key] = BaselineSet(conn, tier_bucket, role, champion_id, min_n, max_tier_distance)
     return _cache[key]
+
+
+_BASELINE_COLUMNS = ("metric, minute, tier_bucket, role, champion_id, patch_window, "
+                     "n, mean, sd, p10, p25, p50, p75, p90")
+_roles: dict[str, tuple[list[Baseline], dict[tuple, Baseline]]] = {}
+
+
+def _index(rows) -> dict[tuple, Baseline]:
+    return {(b.metric, b.minute, b.tier_bucket): b for b in rows}
+
+
+def role_baselines(conn: psycopg.Connection, role: str) -> tuple[list[Baseline], dict[tuple, Baseline]]:
+    """Every tier's whole-role baselines (champion 0) for one role, and an index by
+    (metric, minute, tier); shared by every BaselineSet of the role, dropped with the cache."""
+    if role not in _roles:
+        rows = [Baseline(*r) for r in conn.execute(
+            f"SELECT {_BASELINE_COLUMNS} FROM baselines WHERE role = %s AND champion_id = 0",
+            (role,),
+        ).fetchall()]
+        _roles[role] = (rows, _index(rows))
+    return _roles[role]
+
+
+ROLES = ("TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY")
+
+
+def _load_shared(conn: psycopg.Connection, roles) -> None:
+    """Load the per-role data every champion of a role shares -- whole-role baselines and
+    lane strengths -- for any of ``roles`` not loaded yet, one query each."""
+    missing = sorted(set(roles) - set(_roles))
+    if missing:
+        by_role: dict[str, list[Baseline]] = {r: [] for r in missing}
+        for r in conn.execute(
+            f"SELECT {_BASELINE_COLUMNS} FROM baselines WHERE role = ANY(%s) AND champion_id = 0",
+            (missing,),
+        ):
+            by_role[r[3]].append(Baseline(*r))
+        for role, rows in by_role.items():
+            _roles[role] = (rows, _index(rows))
+    missing = sorted(set(roles) - set(_lanes))
+    if missing:
+        lanes: dict[str, dict[tuple, tuple[float, int]]] = {r: {} for r in missing}
+        for role, m, minute, champ, strength, n in conn.execute(
+            "SELECT role, metric, minute, champion_id, strength, n FROM lane_strength "
+            "WHERE role = ANY(%s)", (missing,),
+        ):
+            lanes[role][(m, minute, champ)] = (strength, n)
+        _lanes.update(lanes)
+
+
+def warm(conn: psycopg.Connection) -> None:
+    """Load what every page shares (all roles' whole-role baselines and lane strengths), so
+    a server's first visitor doesn't pay for it. Servers call this once at startup."""
+    generation(conn)
+    _load_shared(conn, ROLES)
+
+
+def prefetch(
+    conn: psycopg.Connection, tier_bucket: str, picks, min_n: int = 20,
+    max_tier_distance: int = 1,
+) -> None:
+    """Build the BaselineSets for many (role, champion) picks with a handful of queries
+    instead of one or two per pick -- a history page touches dozens of champions."""
+    generation(conn)
+    todo = {(role, champ) for role, champ in picks
+            if (tier_bucket, role, champ, min_n, max_tier_distance) not in _cache}
+    if not todo:
+        return
+    _load_shared(conn, {role for role, _ in todo})
+    champs = sorted((r, c) for r, c in todo if c)
+    grouped: dict[tuple[str, int], list[Baseline]] = {p: [] for p in champs}
+    effects: dict[tuple[str, int], dict[tuple, tuple[float, int]]] = {p: {} for p in champs}
+    if champs:
+        pairs = ([r for r, _ in champs], [c for _, c in champs])
+        buckets = neighbor_buckets(tier_bucket)[: 1 + 2 * max_tier_distance]
+        for r in conn.execute(
+            f"""SELECT {_BASELINE_COLUMNS} FROM baselines
+                 WHERE (role, champion_id) IN (SELECT * FROM unnest(%s::text[], %s::int[]))
+                   AND tier_bucket = ANY(%s) AND n >= %s""",
+            (*pairs, buckets, max(min_n, CHAMPION_MIN_N)),
+        ):
+            grouped[(r[3], r[4])].append(Baseline(*r))
+        for role, champ, m, minute, e, n in conn.execute(
+            """SELECT role, champion_id, metric, minute, effect, n FROM champion_effects
+                WHERE (role, champion_id) IN (SELECT * FROM unnest(%s::text[], %s::int[]))""",
+            pairs,
+        ):
+            effects[(role, champ)][(m, minute or None)] = (e, n)
+    for role, champ in todo:
+        _cache[(tier_bucket, role, champ, min_n, max_tier_distance)] = BaselineSet(
+            conn, tier_bucket, role, champ, min_n, max_tier_distance,
+            champ_rows=grouped.get((role, champ), []), effects=effects.get((role, champ), {}))
 
 
 def lane_strengths(conn: psycopg.Connection, role: str) -> dict[tuple, tuple[float, int]]:
@@ -405,5 +537,6 @@ def invalidate_cache() -> None:
     global _cache_generation, _checked_at
     _cache.clear()
     _lanes.clear()
+    _roles.clear()
     _cache_generation = None
     _checked_at = float("-inf")

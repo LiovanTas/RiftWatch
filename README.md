@@ -208,6 +208,11 @@ author's Platinum II NA account.
 
 Things measurement changed along the way:
 
+- A server's first player page took 4.3 s: every champion's baseline set re-read its whole
+  role across all eight tiers (~5,000 rows, by a full-table scan) to compute the champion
+  adjustment. Now the adjustment is computed once per baseline build and stored, role rows
+  are shared and loaded at startup, the remaining reads are indexed and batched for all of a
+  page's champions, and the first page takes 640 ms with identical results.
 - `localhost` resolved to IPv6, which Docker Desktop on Windows forwards with a ~50 ms stall on
   mid-sized writes. Using `127.0.0.1` cut saving a game's features from 134 ms to 22 ms.
 - Importing the Anthropic SDK took ~3 s; it now loads only when the LLM is actually called.
@@ -235,8 +240,9 @@ take the next one from whoever has the least work running, and retry a job whose
 | `GET /api/players/.../matches/{match_id}` (scores, curves, evidence) | 18 ms |
 | `GET /api/players/.../recent` (trends over 40 games, champion- and matchup-adjusted) | 150 ms |
 | `GET /api/players/.../champions` (champion pool over 100 games) | 83 ms |
-| `GET /api/players/.../progress` (12 weeks, ~300 games) | 200 ms first view |
-| Player page's three reports (recent, champion pool, progress), repeat view | 122 ms |
+| `GET /api/players/.../progress` (12 weeks, ~300 games) | 200 ms |
+| Player page's three reports (recent, champion pool, progress), first view after a server starts | 640 ms |
+| The same, repeat view | 122 ms |
 | `POST /api/players/.../sync` | returns a job; `GET /api/jobs/{id}` for progress |
 | `POST /api/scout/{region}/{Name-TAG}` | scouts the player's live game as a job; the result is the report |
 | `POST /api/players/.../matches/{match_id}/coach` | generates and caches coaching |
