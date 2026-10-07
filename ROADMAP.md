@@ -81,9 +81,10 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
 - [ ] **Enemy health from the screen** (computer vision on health bars) to see both sides of a
       trade. Built: bar detector, video scanner, alignment to game time by matching your own
       health curve, accuracy check against the recorder (`riftwatch vision`). Calibrated on a
-      real 720p replay: 71% coverage, median error 0, 90% within 4.6 health points against the
-      HUD panel. Next: cut false bars (structures, effects), tie bars to champions, align
-      replays by reading the game clock, then feed enemy health into trades and the coach
+      real 720p replay: 70% coverage, median error 0, 90% within 4.3 health points against the
+      HUD panel; false bars cut by the level-box check; a 32-minute video in 54 s. Next: tie
+      bars to champions, align replays by reading the game clock, then feed enemy health
+      into trades and the coach
 
 ## Later
 

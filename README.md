@@ -424,15 +424,19 @@ detector against the recorder's exact numbers.
 
 **Measured on real footage.** Replay videos show the followed champion's health on the HUD
 panel, a second reading of the same health. On a 32-minute 720p Grandmaster replay
-(`--check-panel`, one frame a second), the followed champion's overhead bar was read in 71%
-of the seconds the panel showed health, with a median error of 0 health points, a mean of 2.3
-and 90% within 4.6. The misses are mostly recalls (the recall bar covers the health bar),
-deaths and fights where bars overlap. Tuning on that footage found what synthetic frames
+(`--check-panel`, one frame a second), the followed champion's overhead bar was read in 70%
+of the seconds the panel showed health, with a median error of 0 health points, a mean of 1.7
+and 90% within 4.3. The misses are mostly recalls (the recall bar covers the health bar),
+deaths and fights where bars overlap. The whole 32 minutes takes 54 seconds: the video is
+split into segments read in parallel, and each frame's search costs 36 ms. Tuning on that footage found what synthetic frames
 couldn't: the outline above a bar is dim brown rather than black, a thicker line marks every
 1000 health, at full health the dark scenery beyond a bar looks like missing health (so bar
 width is a constant, not measured), and compression drains colour from a bar's edge rows (so
-height is measured by brightness). Still to do: about one detected bar in six in spot-checked
-frames is not a champion's (structures, effects), and bars aren't yet tied to champions.
+height is measured by brightness). Turret, monster and minion bars and spell effects are
+told apart by the level box every champion bar has on its left (dark, with the level in
+white): in spot-checked frames that removed every false bar and kept every real one. Still to
+do: bars aren't yet tied to champions, and replays need the game clock read off the screen to
+line up with the match.
 
 ## Live-game scouting
 

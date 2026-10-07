@@ -72,40 +72,22 @@ class PanelCheck:
 
 def check(path: str, calibration: Calibration | None = None, every_s: float = 1.0,
           progress: Callable[[str], None] | None = None) -> PanelCheck:
-    import cv2
+    from riftwatch.vision.video import scan
 
-    cap = cv2.VideoCapture(str(path))
-    if not cap.isOpened():
-        raise OSError(f"can't open video {path}")
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    step = max(1, round(fps * every_s))
     votes: dict[str, int] = {}
     readings: list[tuple[float | None, int | None]] = []
-    index = 0
-    try:
-        while cap.grab():
-            if index % step == 0:
-                ok, img = cap.retrieve()
-                if not ok:
-                    break
-                h, w = img.shape[:2]
-                bars = find_bars(img, calibration)
-                target = (w / 2, h / 2 - 0.12 * h)
-                near = _nearest(bars, target)
-                if near is not None:
-                    votes[near.team] = votes.get(near.team, 0) + 1
-                team = max(votes, key=votes.get) if votes else None
-                followed = _nearest([b for b in bars if b.team == team], target)
-                if followed is not None and ((followed.center[0] - target[0]) ** 2
-                                             + (followed.center[1] - target[1]) ** 2) ** 0.5 > 0.2 * h:
-                    followed = None
-                readings.append((None if followed is None else followed.fraction, panel_fill(img)))
-                if progress and total and index % (step * 300) == 0:
-                    progress(f"video {100 * index / total:.0f}%")
-            index += 1
-    finally:
-        cap.release()
+    for _t, w, h, bars, panel in scan(path, 1 / every_s, calibration, panel_fill,
+                                     progress=progress):
+        target = (w / 2, h / 2 - 0.12 * h)
+        near = _nearest(bars, target)
+        if near is not None:
+            votes[near.team] = votes.get(near.team, 0) + 1
+        team = max(votes, key=votes.get) if votes else None
+        followed = _nearest([b for b in bars if b.team == team], target)
+        if followed is not None and ((followed.center[0] - target[0]) ** 2
+                                     + (followed.center[1] - target[1]) ** 2) ** 0.5 > 0.2 * h:
+            followed = None
+        readings.append((None if followed is None else followed.fraction, panel))
     fills = [p for _, p in readings if p]
     full = float(np.percentile(fills, FULL_PERCENTILE)) if fills else 0.0
     result = PanelCheck(len(readings), 0, 0)

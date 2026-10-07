@@ -14,6 +14,8 @@ def draw_bar(frame, x, y, fraction, team, width=105, height=10, tick_every=10):
     coloured fill, dark missing part, dark ticks across the fill."""
     cv2.rectangle(frame, (x - 22, y - 2), (x + width + 1, y + height + 1), (8, 8, 8), -1)
     cv2.rectangle(frame, (x - 20, y), (x - 4, y + height - 1), (40, 40, 40), -1)    # level box
+    cv2.putText(frame, "9", (x - 16, y + height - 2), cv2.FONT_HERSHEY_PLAIN,
+                height / 14, (235, 235, 235), 1)                                    # level
     fill = round(width * fraction)
     if fill:
         cv2.rectangle(frame, (x, y), (x + fill - 1, y + height - 1), FILL[team], -1)
@@ -45,6 +47,10 @@ def test_reads_each_bar_and_its_fill():
 
 def test_ignores_red_things_that_are_not_bars():
     frame = background(1)
+    # A bar-shaped red strip with outline but no level box: a turret or minion bar.
+    cv2.rectangle(frame, (1198, 198), (1306, 211), (8, 8, 8), -1)
+    cv2.rectangle(frame, (1200, 200), (1270, 209), FILL["enemy"], -1)
+    cv2.rectangle(frame, (1271, 200), (1304, 209), (25, 25, 25), -1)
     cv2.circle(frame, (400, 400), 30, FILL["enemy"], -1)                     # a spell effect
     cv2.rectangle(frame, (800, 800), (905, 809), FILL["enemy"], -1)          # no outline
     cv2.rectangle(frame, (100, 900), (600, 940), FILL["enemy"], -1)          # too tall
@@ -149,3 +155,20 @@ def test_slivers_under_the_minimum_fill_are_skipped():
     draw_bar(frame, 700, 500, 0.03, "enemy")
     draw_bar(frame, 700, 700, 0.06, "enemy")
     assert [round(b.fraction, 2) for b in find_bars(frame)] == [0.06]
+
+
+def test_parallel_scan_matches_a_single_pass(tmp_path):
+    from riftwatch.vision.video import scan
+
+    path = tmp_path / "clip.avi"
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 10, (1280, 720))
+    for i in range(10 * 40):                     # 40 s at 10 fps, health falling steadily
+        frame = background(1, h=720, w=1280)
+        draw_bar(frame, 500, 300, 1 - i / 450, "enemy", width=70, height=7, tick_every=7)
+        writer.write(frame)
+    writer.release()
+    single = scan(path, fps=2, workers=1)
+    parallel = scan(path, fps=2, workers=3)
+    assert len(single) == 80
+    assert [(t, [b.fill for b in bars]) for t, _, _, bars, _ in parallel] == \
+           [(t, [b.fill for b in bars]) for t, _, _, bars, _ in single]

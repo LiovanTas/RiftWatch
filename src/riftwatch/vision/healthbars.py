@@ -23,6 +23,13 @@ TEAMS = ("self", "ally", "enemy")
 # dim (up to ~0.6), so the bottom is the stricter test.
 FRAME_RATIO = 0.65
 BELOW_RATIO = 0.45
+# Every champion bar has a level box on its left: dark, with the level in white. Turret and
+# minion bars and spell effects don't. Measured on a real replay: real boxes were 66-84% dark
+# with 5-16 white digit pixels; the false bars failed one or the other.
+LEVEL_BOX_SHARE = 0.23     # box width as a share of the bar width
+LEVEL_DARK_RATIO = 0.55    # "dark" in the box: at most this share of the fill's brightness
+LEVEL_MIN_DARK = 0.55
+LEVEL_MIN_WHITE = 0.02
 
 
 @dataclass(frozen=True)
@@ -141,7 +148,8 @@ def find_bars(frame_bgr: np.ndarray, calibration: Calibration | None = None) -> 
     cal = calibration or Calibration()
     (h_min, h_max), (width, tol), tick, outline = cal.scaled(frame_bgr.shape[0])
     hsv = _hsv(frame_bgr)
-    dark = hsv[..., 2] <= cal.dark_max
+    value = hsv[..., 2]
+    dark = value <= cal.dark_max
     bars: list[Bar] = []
     for team, color in cal.colors.items():
         raw = color.mask(hsv)
@@ -154,19 +162,23 @@ def find_bars(frame_bgr: np.ndarray, calibration: Calibration | None = None) -> 
             x, y, w, h, _area = stats[i]
             if not h_min - 2 <= h <= h_max:     # loose: colour can be a row or two short
                 continue
+            if w > width + tol + 4 * tick:      # wider than any bar: an effect, not health
+                continue
             mid = y + h // 2
             row_c, row_d = raw[mid], dark[mid]
             # "Frame dark": clearly darker than this bar's own fill. The outline and level box
             # are dim rather than black in real footage (and shading varies), so they're
             # judged against the fill, not an absolute cut.
-            fill_v = float(np.median(hsv[mid, x:x + w, 2]))
-            framing = hsv[..., 2] <= max(cal.dark_max, FRAME_RATIO * fill_v)
+            # (Thresholds are applied to the rows each check needs, never the whole frame:
+            # a frame has dozens of candidates.)
+            fill_v = float(np.median(value[mid, x:x + w]))
+            frame_dark = max(cal.dark_max, FRAME_RATIO * fill_v)
             # The fill starts right after the level box / outline on its left.
             start = next((p for p in range(x, x + w)
-                          if row_c[p] and p > 0 and framing[mid, p - 1]), None)
+                          if row_c[p] and p > 0 and value[mid, p - 1] <= frame_dark), None)
             if start is None:
                 continue
-            framed = framing[y - 1] if y > 0 else np.zeros_like(row_d)
+            framed = value[y - 1] <= frame_dark if y > 0 else np.zeros_like(row_d)
             end = _walk_fill(row_d, framed, start, tick, limit=width + tol)
             fill = end - start
             # Mostly the team's colour, or it's something else bright next to a dark edge.
@@ -193,10 +205,19 @@ def find_bars(frame_bgr: np.ndarray, calibration: Calibration | None = None) -> 
             mx, my = cal.edge_margin * fw, cal.edge_margin * fh
             if start < mx or start + width > fw - mx or y < my or y + h > fh - my:
                 continue
+            # The level box on the left: mostly dark, with a white number in it.
+            box_w = max(4, round(LEVEL_BOX_SHARE * width))
+            box = hsv[max(0, y - 1):y + h + 1, max(0, start - box_w - 2):max(0, start - 2)]
+            if box.size == 0:
+                continue
+            box_v, box_s = box[..., 2].astype(int), box[..., 1].astype(int)
+            if ((box_v <= LEVEL_DARK_RATIO * fill_v).mean() < LEVEL_MIN_DARK
+                    or ((box_v >= 160) & (box_s <= 100)).mean() < LEVEL_MIN_WHITE):
+                continue
             # A real bar has a dark outline just above and below the fill. Look a few rows
             # out: compression drains colour from the fill's edge rows, so the coloured part
             # can be a row short of the bright part.
-            above = framing[max(0, y - 3):y, start:end]
+            above = value[max(0, y - 3):y, start:end] <= frame_dark
             below = (hsv[y + h:y + h + 3, start:end, 2]
                      <= max(cal.dark_max, BELOW_RATIO * fill_v))
             if (above.size == 0 or below.size == 0 or above.mean(axis=1).max() < 0.6

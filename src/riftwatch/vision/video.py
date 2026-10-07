@@ -10,7 +10,7 @@ every enemy bar gets a game time.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import fmean, median
@@ -39,9 +39,41 @@ class Frame:
         return min(mine, key=lambda b: (b.center[0] - cx) ** 2 + (b.center[1] - cy) ** 2)
 
 
-def frames(path: str | Path, fps: float = 2.0, calibration: Calibration | None = None,
-           progress: Callable[[str], None] | None = None) -> Iterator[Frame]:
-    """Bars in ``fps`` frames per second of the video, decoding only the frames it reads."""
+def _segment(path: str, first: int, last: int, step: int, calibration: Calibration | None,
+             extra: Callable | None) -> list[tuple]:
+    """Scan frames [first, last) of the video, keeping every ``step``-th. Runs in a worker
+    process; each opens the file itself and seeks to its first frame."""
+    import cv2
+
+    cap = cv2.VideoCapture(path)
+    native = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    if first:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, first)
+    out, index = [], first
+    try:
+        while index < last and cap.grab():
+            if index % step == 0:
+                ok, img = cap.retrieve()
+                if ok:
+                    out.append((index / native, img.shape[1], img.shape[0],
+                                find_bars(img, calibration), extra(img) if extra else None))
+            index += 1
+    finally:
+        cap.release()
+    return out
+
+
+def scan(path: str | Path, fps: float = 2.0, calibration: Calibration | None = None,
+         extra: Callable | None = None, workers: int | None = None,
+         progress: Callable[[str], None] | None = None) -> list[tuple]:
+    """(t, width, height, bars, extra(frame)) for ``fps`` frames a second of the video.
+
+    Decoding is the slow part (every frame is decoded, kept or not), so the video is split
+    into segments decoded in parallel processes. ``extra`` must be a module-level function
+    (it is sent to the workers)."""
+    import os
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
     import cv2
 
     cap = cv2.VideoCapture(str(path))
@@ -49,22 +81,35 @@ def frames(path: str | Path, fps: float = 2.0, calibration: Calibration | None =
         raise OSError(f"can't open video {path}")
     native = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    cap.release()
     step = max(1, round(native / fps))
-    index = 0
-    try:
-        while True:
-            if not cap.grab():
-                break
-            if index % step == 0:
-                ok, img = cap.retrieve()
-                if not ok:
-                    break
-                yield Frame(index / native, img.shape[1], img.shape[0], find_bars(img, calibration))
-                if progress and total and index % (step * 120) == 0:
-                    progress(f"video {100 * index / total:.0f}%")
-            index += 1
-    finally:
-        cap.release()
+    if workers is None:
+        # Spawning processes costs about a second each: not worth it for short clips.
+        workers = 1 if total < native * 120 else min(8, os.cpu_count() or 1)
+    if workers <= 1 or total <= 0:
+        return _segment(str(path), 0, total if total > 0 else 1 << 62, step, calibration, extra)
+    # Segment boundaries on multiples of ``step``, so the kept frames are the same as a
+    # single pass would keep.
+    parts = workers * 3
+    size = max(step, -(-total // parts // step) * step)
+    bounds = [(a, min(total, a + size)) for a in range(0, total, size)]
+    results: dict[int, list[tuple]] = {}
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_segment, str(path), a, b, step, calibration, extra): a
+                   for a, b in bounds}
+        for done, future in enumerate(as_completed(futures), 1):
+            results[futures[future]] = future.result()
+            if progress:
+                progress(f"video {100 * done / len(bounds):.0f}%")
+    return [row for a, _ in bounds for row in results[a]]
+
+
+def frames(path: str | Path, fps: float = 2.0, calibration: Calibration | None = None,
+           progress: Callable[[str], None] | None = None,
+           workers: int | None = None) -> list[Frame]:
+    """Bars in ``fps`` frames per second of the video."""
+    return [Frame(t, w, h, bars)
+            for t, w, h, bars, _ in scan(path, fps, calibration, None, workers, progress)]
 
 
 def per_second(values: list[tuple[float, float]]) -> dict[int, float]:
