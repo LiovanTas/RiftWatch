@@ -79,20 +79,30 @@ def load(conn: psycopg.Connection, match_id: str) -> GameFeatures | None:
     timeline = repo.get_timeline(conn, match_id)
     if match is None or timeline is None:
         return None
-    return extract(match, timeline, items=_item_rules(match["info"]["gameVersion"]))
+    version = match["info"]["gameVersion"]
+    return extract(match, timeline, items=_item_rules(version), names=_champion_names(version))
 
 
 _ddragon = None
 
 
-def _item_rules(game_version: str):
-    """Item rules for a patch, from Data Dragon (cached on disk per version)."""
+def _data_dragon():
     global _ddragon
     if _ddragon is None:
         from riftwatch.riot.ddragon import DataDragon
 
         _ddragon = DataDragon()
-    return _ddragon.item_rules(game_version)
+    return _ddragon
+
+
+def _item_rules(game_version: str):
+    """Item rules for a patch, from Data Dragon (cached on disk per version)."""
+    return _data_dragon().item_rules(game_version)
+
+
+def _champion_names(game_version: str) -> dict[int, str] | None:
+    """Champion display names for a patch, from Data Dragon (None if offline)."""
+    return _data_dragon().champion_names(game_version)
 
 
 def load_stored(conn: psycopg.Connection, match_id: str) -> GameFeatures | None:

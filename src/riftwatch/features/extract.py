@@ -20,7 +20,7 @@ from riftwatch.features.map import readable, zone
 from riftwatch.riot.ddragon import patch_of
 
 # Bump when extraction logic changes; stored rows with an older version get re-extracted.
-EXTRACTOR_VERSION = 5
+EXTRACTOR_VERSION = 6
 
 ROLES = ("TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY")
 EPIC_MONSTERS = ("DRAGON", "BARON_NASHOR", "RIFTHERALD", "HORDE", "ATAKHAN", "ELDER_DRAGON")
@@ -154,9 +154,12 @@ def _taken(p: dict[str, Any]) -> int:
     return p.get("totalDamageTaken", 0) + p.get("damageSelfMitigated", 0)
 
 
-def extract(match: dict[str, Any], timeline: dict[str, Any], items=None) -> GameFeatures:
+def extract(match: dict[str, Any], timeline: dict[str, Any], items=None,
+            names: dict[int, str] | None = None) -> GameFeatures:
     """``items`` (features.items.ItemRules for the game's patch) adds build timings; without
-    it -- e.g. offline -- those metrics are simply absent."""
+    it -- e.g. offline -- those metrics are simply absent. ``names`` (champion id -> display
+    name, from Data Dragon) replaces Riot's internal names: "Miss Fortune", not "MissFortune";
+    "Wukong", not "MonkeyKing". Without it the internal name is kept."""
     info = match["info"]
     match_id = match["metadata"]["matchId"]
     duration_s = int(info["gameDuration"]) if "gameEndTimestamp" in info else int(info["gameDuration"] // 1000)
@@ -174,7 +177,7 @@ def extract(match: dict[str, Any], timeline: dict[str, Any], items=None) -> Game
             team_id=p["teamId"],
             role=p.get("teamPosition") or "",
             champion_id=p["championId"],
-            champion_name=p.get("championName", ""),
+            champion_name=(names or {}).get(p["championId"]) or p.get("championName", ""),
             win=bool(p["win"]),
             opponent_id=opponents[pid],
         )

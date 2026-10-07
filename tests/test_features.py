@@ -181,6 +181,18 @@ def test_team_play_metrics():
     assert m["damage_taken_share"] == pytest.approx(6000 / 10000)
 
 
+def test_display_names_replace_internal_ones_when_given():
+    match, timeline = build_game("NA1_79")
+    match["info"]["participants"][0]["championName"] = "MonkeyKing"
+    match["info"]["participants"][0]["championId"] = 62
+    names = {62: "Wukong", 64: "Lee Sin"}
+    game = extract(match, timeline, names=names)
+    assert game.participants[1].champion_name == "Wukong"
+    assert game.participants[2].champion_name == "Lee Sin"
+    assert game.participants[3].champion_name == "Ahri"          # not in the map: kept as is
+    assert extract(match, timeline).participants[1].champion_name == "MonkeyKing"
+
+
 # -- storage --------------------------------------------------------------------------------
 
 TEST_DB = os.environ.get("RIFTWATCH_TEST_DATABASE_URL")

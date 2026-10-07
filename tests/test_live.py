@@ -186,6 +186,31 @@ def test_import_links_to_the_synced_match(tmp_path):
         assert rec["hp_series"][0] == [0.0, 1.0] and len(rec["hp_series"]) > 150
 
 
+@pytest.mark.skipif(not TEST_DB, reason="RIFTWATCH_TEST_DATABASE_URL not set")
+def test_link_ignores_punctuation_in_champion_names():
+    from datetime import UTC, datetime
+
+    from riftwatch.db import migrate, repo
+    from riftwatch.db.connection import connect
+    from riftwatch.features import store as feature_store
+    from riftwatch.live.store import link
+    from tests.fixtures import build_game
+
+    with connect(TEST_DB) as conn:
+        conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
+        migrate.migrate(conn)
+        puuids = ["me-puuid"] + [f"p{i}" for i in range(2, 11)]
+        match, timeline = build_game("NA1_778", puuids=puuids, start_ms=1_790_000_000_000)
+        match["info"]["participants"][0]["championName"] = "Kaisa"     # Riot's internal name
+        repo.insert_match(conn, match)
+        repo.insert_timeline(conn, "NA1_778", timeline)
+        repo.upsert_account(conn, {"puuid": "me-puuid", "gameName": "Liovan", "tagLine": "G2EU"}, "na1")
+        feature_store.extract_pending(conn)
+        start = datetime.fromtimestamp(1_790_000_000, UTC)
+        assert link(conn, "Liovan#G2EU", "Kai'Sa", start) == "NA1_778"   # as the client names it
+        assert link(conn, "Liovan#G2EU", "Warwick", start) is None
+
+
 def live_result(tmp_path):
     from riftwatch.live.store import _hp_series
     from tests.test_report import result

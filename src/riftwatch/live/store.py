@@ -50,13 +50,13 @@ def link(conn: psycopg.Connection, riot_id: str, champion: str, game_start: date
           LEFT JOIN participant_game_summary s USING (match_id, participant_id)
          WHERE lower(a.game_name) = lower(%s) AND lower(a.tag_line) = lower(%s)
            AND m.game_start BETWEEN %s AND %s
-           AND (s.champion_name IS NULL OR lower(s.champion_name) = lower(%s)
-                OR lower(replace(s.champion_name, ' ', '')) = lower(replace(%s, ' ', '')))
+           AND (s.champion_name IS NULL
+                OR lower(regexp_replace(s.champion_name, '[^[:alnum:]]', '', 'g'))
+                 = lower(regexp_replace(%s, '[^[:alnum:]]', '', 'g')))
          ORDER BY abs(extract(epoch FROM m.game_start - %s))
          LIMIT 1
         """,
-        (name, tag, game_start - LINK_WINDOW, game_start + LINK_WINDOW, champion, champion,
-         game_start),
+        (name, tag, game_start - LINK_WINDOW, game_start + LINK_WINDOW, champion, game_start),
     ).fetchone()
     return row[0] if row else None
 

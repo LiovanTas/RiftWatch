@@ -98,5 +98,8 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
   region, plus per-endpoint limits. RiftWatch reads the real values from response headers.
 - A timeline has one frame per minute plus a final frame at game end, which can land just
   before a minute mark. Events with no assists omit `assistingParticipantIds` entirely.
+- `championName` in match data is an internal id, not what players see (`MonkeyKing` is
+  Wukong, `Kaisa` is Kai'Sa); display names come from Data Dragon's `champion.json`, while
+  the Live Client Data API already uses display names.
 - `WARD_PLACED` also fires for Teemo mushrooms and an `UNDEFINED` type some champions emit by
   the hundred; only trinkets, sight and control wards are wards.

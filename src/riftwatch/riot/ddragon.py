@@ -97,6 +97,13 @@ class DataDragon:
         except (httpx.HTTPError, OSError, KeyError, ValueError):
             return None
 
+    def champion_names(self, game_version: str) -> dict[int, str] | None:
+        """Display names for the patch a game was played on (None if offline)."""
+        try:
+            return self.champions(self.version_for(game_version))
+        except (httpx.HTTPError, OSError, KeyError, ValueError):
+            return None
+
     def items(self, version: str) -> dict[int, str]:
         if version not in self._items:
             data = self._cached_json(version, "item.json", f"/cdn/{version}/data/en_US/item.json")
