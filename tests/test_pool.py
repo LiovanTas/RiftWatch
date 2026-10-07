@@ -102,3 +102,68 @@ def test_champion_pool_end_to_end_and_narrow_loading(conn):
     line = report.lines[0]
     assert (line.champion, line.role, line.games) == ("Aatrox", "TOP", 25)
     assert 0 < line.score < 100 and line.score_se > 0
+
+
+def _load_player(conn, n=25):
+    from riftwatch.baselines import build as bl
+    from riftwatch.db import repo
+    from riftwatch.features import store
+    from tests.fixtures import build_game
+
+    for i in range(n):
+        mid = f"NA1_{7500 + i}"
+        puuids = ["me"] + [f"q{i}-{p}" for p in range(2, 11)]
+        match, timeline = build_game(mid, puuids=puuids, cs_bonus=i * 0.1,
+                                     start_ms=1_790_000_000_000 + i * 3_600_000)
+        repo.insert_match(conn, match)
+        repo.insert_timeline(conn, mid, timeline)
+        repo.mark_sample(conn, mid, "GOLD", "crawl")
+    store.extract_pending(conn)
+    bl.build(conn)
+
+
+def test_caches_stay_bounded_without_losing_a_requests_results(conn, monkeypatch):
+    from riftwatch.baselines import build as bl
+    from riftwatch.coach import pipeline
+
+    _load_player(conn)
+    pipeline._SCORED.clear()
+    monkeypatch.setattr(pipeline, "SCORED_CACHE_MAX", 3)
+    report = pipeline.champion_pool(conn, "me", tier="gold")
+    assert report.games == 25                       # all 25, though only 3 can be cached
+    assert len(pipeline._SCORED) == 3
+
+    monkeypatch.setattr(bl, "BASELINE_SETS_MAX", 2)
+    bl.invalidate_cache()
+    for champ in (266, 86, 0):
+        bl.baselines_for(conn, "GOLD", "TOP", champ)
+    assert [k[2] for k in bl._cache] == [86, 0]     # least recently used went first
+
+
+def test_concurrent_history_requests_agree(conn, monkeypatch):
+    import threading
+
+    from riftwatch.coach import pipeline
+    from riftwatch.db.connection import connect
+
+    _load_player(conn)
+    pipeline._SCORED.clear()
+    monkeypatch.setattr(pipeline, "SCORED_CACHE_MAX", 10)    # force eviction under load
+    expected = pipeline.champion_pool(conn, "me", tier="gold").lines[0].score
+    results, errors = [], []
+
+    def worker():
+        try:
+            with connect(TEST_DB) as c:
+                for _ in range(5):
+                    results.append(pipeline.champion_pool(c, "me", tier="gold").lines[0].score)
+                    pipeline.progress_report(c, "me", tier="gold", weeks=520)
+        except Exception as exc:     # surfaced below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == [] and results == [expected] * 30

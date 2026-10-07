@@ -12,7 +12,6 @@ past the ends using the neighbouring quantile gap.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from functools import cached_property
 
 from riftwatch.baselines.build import Baseline, BaselineSet
 from riftwatch.features.extract import ParticipantFeatures
@@ -47,23 +46,22 @@ def percentile(value: float, b: Baseline) -> float:
     return 50.0  # unreachable for well-formed quantiles; keeps the type honest
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Score:
     metric: Metric
     value: float
     baseline: Baseline
     minute: int | None = None
+    # Computed once: history views read each score's standing many times (weekly, per area,
+    # per champion). Slots, not a per-object dict: a cached player history holds tens of
+    # thousands of these.
+    percentile: float = field(init=False, repr=False, compare=False)
+    goodness: float = field(init=False, repr=False, compare=False)
 
-    # Cached: history views read each score's standing many times (weekly, per area, per
-    # champion). The dataclass is frozen, so the inputs can't change underneath.
-    @cached_property
-    def percentile(self) -> float:
-        return percentile(self.value, self.baseline)
-
-    @cached_property
-    def goodness(self) -> float:
-        p = self.percentile
-        return p if self.metric.higher_is_better else 100 - p
+    def __post_init__(self) -> None:
+        p = percentile(self.value, self.baseline)
+        object.__setattr__(self, "percentile", p)
+        object.__setattr__(self, "goodness", p if self.metric.higher_is_better else 100 - p)
 
     @property
     def z(self) -> float:

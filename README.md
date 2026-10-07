@@ -213,6 +213,11 @@ Things measurement changed along the way:
   adjustment. Now the adjustment is computed once per baseline build and stored, role rows
   are shared and loaded at startup, the remaining reads are indexed and batched for all of a
   page's champions, and the first page takes 640 ms with identical results.
+- The in-memory caches behind those numbers were measured too: 32 KB per scored game (up to
+  20,000 of them) and 183 KB per baseline set (no limit), over 1.5 GB per server process at
+  worst. Slotted score and baseline objects and a shared per-role index brought them to 23 KB
+  and 79 KB, and least-recently-used limits (5,000 games, 1,000 sets) cap a process at about
+  200 MB. Both caches are locked, since web requests run on several threads.
 - `localhost` resolved to IPv6, which Docker Desktop on Windows forwards with a ~50 ms stall on
   mid-sized writes. Using `127.0.0.1` cut saving a game's features from 134 ms to 22 ms.
 - Importing the Anthropic SDK took ~3 s; it now loads only when the LLM is actually called.

@@ -10,7 +10,9 @@ would otherwise be part of the yardstick they are measured against.
 
 from __future__ import annotations
 
+import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, replace
 
 import psycopg
@@ -207,7 +209,7 @@ def build(
 
 # -- lookup -------------------------------------------------------------------------------
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Baseline:
     metric: str
     minute: int | None
@@ -311,7 +313,7 @@ class BaselineSet:
         # The role's own baselines are shared by all its champions and loaded once per role.
         # A champion adds its stored adjustment and only those of its own rows big enough to
         # replace the adjusted role baseline (CHAMPION_MIN_N games at a nearby tier).
-        role_rows, _ = role_baselines(conn, role)
+        role_rows, role_index = role_baselines(conn, role)
         if champ_rows is None:
             champ_rows = [] if champion_id == 0 else [Baseline(*r) for r in conn.execute(
                 f"""SELECT {_BASELINE_COLUMNS} FROM baselines
@@ -324,20 +326,21 @@ class BaselineSet:
                 (m, minute or None): (e, n) for m, minute, e, n in conn.execute(
                     "SELECT metric, minute, effect, n FROM champion_effects "
                     "WHERE role = %s AND champion_id = %s", (role, champion_id))}
-        rows = [b for b in role_rows if b.tier_bucket in buckets] + champ_rows
         self._effects = effects
         self._memo: dict[tuple, Baseline | None] = {}
         self._lane = lane_strengths(conn, role)
-        self._rows: dict[tuple[str, int | None, str, int], Baseline] = {}
-        for b in rows:
-            if b.tier_bucket in buckets:
-                self._rows[(b.metric, b.minute, b.tier_bucket, b.champion_id)] = b
+        # Role rows are looked up in the role's shared index rather than copied per set:
+        # sets are cached per tier, role and champion, so copies would add up fast.
+        self._role_index = role_index
+        self._champ = {(b.metric, b.minute, b.tier_bucket): b
+                       for b in champ_rows if b.tier_bucket in buckets}
+        self._size = len(self._champ) + sum(1 for b in role_rows if b.tier_bucket in buckets)
         self._order = [(tier_bucket, champion_id), (tier_bucket, 0)] + [
             (b, 0) for b in buckets[1:]
         ]
 
     def __len__(self) -> int:
-        return len(self._rows)
+        return self._size
 
     def get(self, metric: str, minute: int | None = None,
             opponent_champion_id: int | None = None) -> Baseline | None:
@@ -364,7 +367,7 @@ class BaselineSet:
         for bucket, champ in self._order:
             if champ and matchup is not None:
                 continue
-            b = self._rows.get((metric, minute, bucket, champ))
+            b = (self._champ if champ else self._role_index).get((metric, minute, bucket))
             # A one-champion group must be big enough to beat the whole-role group as a
             # yardstick: 25 games of one champion is noisier than hundreds of the role.
             needed = max(self.min_n, CHAMPION_MIN_N) if champ else self.min_n
@@ -384,7 +387,11 @@ class BaselineSet:
 # keep loaded sets in memory and re-check that one primary-key value per call, so a web
 # request scoring a game costs one tiny query instead of a scan of the baselines table.
 
-_cache: dict[tuple, BaselineSet] = {}
+# Least recently used sets go first past BASELINE_SETS_MAX (~80 KB each, measured: a player
+# page touches ~60, so this holds many pages for ~80 MB).
+_cache: OrderedDict[tuple, BaselineSet] = OrderedDict()
+BASELINE_SETS_MAX = 1_000
+_cache_lock = threading.Lock()
 _lanes: dict[str, dict[tuple, tuple[float, int]]] = {}
 _cache_generation: tuple | None = None
 _checked_at = float("-inf")
@@ -410,7 +417,8 @@ def generation(conn: psycopg.Connection) -> tuple | None:
         latest = current_generation(conn)
         _checked_at = now
         if latest != _cache_generation:
-            _cache.clear()
+            with _cache_lock:
+                _cache.clear()
             _lanes.clear()
             _roles.clear()
             _cache_generation = latest
@@ -423,9 +431,23 @@ def baselines_for(
 ) -> BaselineSet:
     generation(conn)
     key = (tier_bucket, role, champion_id, min_n, max_tier_distance)
-    if key not in _cache:
-        _cache[key] = BaselineSet(conn, tier_bucket, role, champion_id, min_n, max_tier_distance)
-    return _cache[key]
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit is not None:
+            _cache.move_to_end(key)
+            return hit
+    # Built outside the lock (it queries); two threads may both build the same set, which
+    # costs a little time once and is otherwise harmless.
+    return _remember(key, BaselineSet(conn, tier_bucket, role, champion_id, min_n,
+                                      max_tier_distance))
+
+
+def _remember(key: tuple, baselines: BaselineSet) -> BaselineSet:
+    with _cache_lock:
+        _cache[key] = baselines
+        while len(_cache) > BASELINE_SETS_MAX:
+            _cache.popitem(last=False)
+    return baselines
 
 
 _BASELINE_COLUMNS = ("metric, minute, tier_bucket, role, champion_id, patch_window, "
@@ -515,9 +537,9 @@ def prefetch(
         ):
             effects[(role, champ)][(m, minute or None)] = (e, n)
     for role, champ in todo:
-        _cache[(tier_bucket, role, champ, min_n, max_tier_distance)] = BaselineSet(
+        _remember((tier_bucket, role, champ, min_n, max_tier_distance), BaselineSet(
             conn, tier_bucket, role, champ, min_n, max_tier_distance,
-            champ_rows=grouped.get((role, champ), []), effects=effects.get((role, champ), {}))
+            champ_rows=grouped.get((role, champ), []), effects=effects.get((role, champ), {})))
 
 
 def lane_strengths(conn: psycopg.Connection, role: str) -> dict[tuple, tuple[float, int]]:
@@ -535,7 +557,8 @@ def lane_strengths(conn: psycopg.Connection, role: str) -> dict[tuple, tuple[flo
 
 def invalidate_cache() -> None:
     global _cache_generation, _checked_at
-    _cache.clear()
+    with _cache_lock:
+        _cache.clear()
     _lanes.clear()
     _roles.clear()
     _cache_generation = None

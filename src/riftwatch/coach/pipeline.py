@@ -8,6 +8,7 @@ evidence fingerprint + model, so only the first view of a given game pays for th
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import threading
 from collections import OrderedDict
 from collections.abc import Iterator
 from typing import Any
@@ -223,7 +224,10 @@ def _add_reference(conn, score: GameScore, bucket: str, min_n: int) -> None:
 # were scored -- so a rebuild or a rank change simply misses. None marks a game that can't be
 # scored (remake, no role), so it isn't reloaded either.
 _SCORED: OrderedDict[tuple, tuple[GameFeatures, ParticipantFeatures, GameScore] | None] = OrderedDict()
-SCORED_CACHE_MAX = 20_000
+SCORED_CACHE_MAX = 5_000      # ~23 KB each, measured: ~115 MB per server process
+# Web requests run on several threads; the cache's order and eviction must not interleave.
+_SCORED_LOCK = threading.Lock()
+_MISSING = object()
 
 
 def _scored_games(
@@ -236,7 +240,12 @@ def _scored_games(
     def key(match_id: str) -> tuple:
         return (match_id, puuid, bucket, min_n, minutes, gen)
 
-    missing = [m for m in ids if key(m) not in _SCORED]
+    with _SCORED_LOCK:
+        found = {m: _SCORED.get(key(m), _MISSING) for m in ids}
+        for m, hit in found.items():
+            if hit is not _MISSING:
+                _SCORED.move_to_end(key(m))
+    missing = [m for m, hit in found.items() if hit is _MISSING]
     if missing:
         stored = store.load_stored_many(conn, missing, minutes_for=puuid if minutes else None,
                                         minutes=minutes, players_for=puuid)
@@ -253,18 +262,18 @@ def _scored_games(
             p = game.by_puuid(puuid) if game else None
             if p is None or not p.role or game.duration_s < 600:
                 if game is not None:
-                    _SCORED[key(match_id)] = None
+                    found[match_id] = None      # remembered, so it isn't reloaded
                 continue
-            _SCORED[key(match_id)] = (game, p, _score(conn, game, p, bucket, min_n))
-        while len(_SCORED) > SCORED_CACHE_MAX:
-            _SCORED.popitem(last=False)
-    out = []
-    for match_id in ids:
-        hit = _SCORED.get(key(match_id))
-        if hit is not None:
-            _SCORED.move_to_end(key(match_id))
-            out.append(hit)
-    return out
+            found[match_id] = (game, p, _score(conn, game, p, bucket, min_n))
+        with _SCORED_LOCK:
+            for match_id in missing:
+                if found[match_id] is not _MISSING:
+                    _SCORED[key(match_id)] = found[match_id]
+            while len(_SCORED) > SCORED_CACHE_MAX:
+                _SCORED.popitem(last=False)
+    # From this request's own results, never re-read from the cache: another request (or
+    # this one, past SCORED_CACHE_MAX games) may already have evicted them.
+    return [hit for m in ids if (hit := found[m]) is not None and hit is not _MISSING]
 
 
 def _score(conn, game: GameFeatures, p: ParticipantFeatures, bucket: str, min_n: int) -> GameScore:
