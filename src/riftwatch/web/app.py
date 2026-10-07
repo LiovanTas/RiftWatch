@@ -26,6 +26,7 @@ from riftwatch.coach.pipeline import (
     ReportError,
     champion_pool,
     game_report,
+    progress_report,
     recent_report,
     stream_coaching,
 )
@@ -384,6 +385,13 @@ def create_app(
             account = account_or_404(conn, region, riot_id)
             return serialize.pool_json(champion_pool(conn, account["puuid"], games=games))
 
+    @app.get("/api/players/{region}/{riot_id}/progress")
+    def progress(region: str, riot_id: str,
+                 weeks: int = Query(12, ge=1, le=52)) -> dict[str, Any]:
+        with pool.connection() as conn:
+            account = account_or_404(conn, region, riot_id)
+            return serialize.progress_json(progress_report(conn, account["puuid"], weeks=weeks))
+
     @app.get("/api/players/{region}/{riot_id}/recent")
     def recent_review(region: str, riot_id: str,
                       games: int = Query(20, ge=5, le=50)) -> dict[str, Any]:
@@ -444,8 +452,13 @@ def create_app(
                 champs = champion_pool(conn, account["puuid"])
             except ReportError:
                 champs = None
+            try:
+                progress_data = progress_report(conn, account["puuid"])
+            except ReportError:
+                progress_data = None
         coach_url = f"/api/players/{region}/{riot_id}/recent/coach" if coach is not None else None
-        return HTMLResponse(pages.player_page(region, riot_id, data, recent, coach_url, champs))
+        return HTMLResponse(pages.player_page(region, riot_id, data, recent, coach_url, champs,
+                                              progress_data))
 
     return app
 

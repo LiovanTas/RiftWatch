@@ -12,6 +12,7 @@ past the ends using the neighbouring quantile gap.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import cached_property
 
 from riftwatch.baselines.build import Baseline, BaselineSet
 from riftwatch.features.extract import ParticipantFeatures
@@ -53,11 +54,13 @@ class Score:
     baseline: Baseline
     minute: int | None = None
 
-    @property
+    # Cached: history views read each score's standing many times (weekly, per area, per
+    # champion). The dataclass is frozen, so the inputs can't change underneath.
+    @cached_property
     def percentile(self) -> float:
         return percentile(self.value, self.baseline)
 
-    @property
+    @cached_property
     def goodness(self) -> float:
         p = self.percentile
         return p if self.metric.higher_is_better else 100 - p

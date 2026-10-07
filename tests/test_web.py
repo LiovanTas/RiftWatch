@@ -196,6 +196,30 @@ def test_champion_pool_api_and_page_section(web):
     assert "Champion pool" in client.get("/players/na/Me-NA1").text
 
 
+def test_progress_api(web):
+    client, api, _, jobs = web
+    sync(client, jobs)
+    # FakeApi games are from late September 2026; 52 weeks reaches them.
+    body = client.get("/api/players/na/Me-NA1/progress", params={"weeks": 52}).json()
+    assert body["games"] == 5 and body["tier"] == "EMERALD"
+    assert body["trend"]["verdict"] in ("steady", "improving", "declining")
+    assert sum(w["games"] for w in body["weeks"]) == 5
+
+
+def test_progress_section_renders_chart_and_trend():
+    from datetime import date
+
+    from riftwatch.analysis.progress import ProgressReport, Trend, Week
+    from riftwatch.web.pages import _progress_html
+
+    weeks = [Week(date(2026, 9, 7), 10, 6, 44.0, {"farming": 40.0}),
+             Week(date(2026, 9, 14), 8, 3, 39.5, {"farming": 35.0})]
+    html = _progress_html(ProgressReport("PLATINUM", weeks, Trend(-0.4, 0.1, 18), [],
+                                         {"farming": Trend(-0.6, 0.2, 18)}))
+    assert "<h2>Progress</h2>" in html and "<polyline" in html and "declining" in html
+    assert "farming declining" in html and "Week of Sep 07: better than 44%" in html
+
+
 def test_page_escapes_riot_ids(web):
     client, *_ = web
     page = client.get("/players/na/%3Cscript%3Ealert(1)%3C%2Fscript%3E-NA1").text

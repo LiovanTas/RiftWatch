@@ -148,3 +148,31 @@ def pool_text(report) -> str:
     lines.append("  'better than' = average share of comparable players beaten across all stats; "
                  "+/- is one standard error.")
     return "\n".join(lines)
+
+
+PROGRESS_AREAS = ("farming", "laning", "fighting", "survival", "vision", "objectives", "economy")
+
+
+def progress_text(report) -> str:
+    """A :class:`riftwatch.analysis.progress.ProgressReport`, one line per week."""
+    t = report.trend
+    lines = [f"Progress over {len(report.weeks)} weeks ({report.games} games), each game vs "
+             f"{report.tier_bucket.replace('_', ' ').title()} players in its role",
+             f"  trend: {t.verdict} ({t.slope:+.1f} +/-{t.se:.1f} points per 10 games)", "",
+             f"  {'week of':<10} {'games':>5} {'win%':>5} {'better than':>11}  "
+             + " ".join(f"{a[:8]:>8}" for a in PROGRESS_AREAS)]
+    for w in report.weeks:
+        lines.append(f"  {w.start.isoformat():<10} {w.games:>5} {100 * w.win_rate:>4.0f}% "
+                     f"{w.score:>10.0f}%  "
+                     + " ".join(f"{w.areas[a]:>7.0f}%" if a in w.areas else f"{'':>8}"
+                                for a in PROGRESS_AREAS))
+    moving = [(a, tr) for a, tr in report.area_trends.items() if tr.verdict != "steady"]
+    if moving:
+        lines.append("")
+        lines.append("  areas moving: " + ", ".join(
+            f"{a} {tr.verdict} ({tr.slope:+.1f} per 10 games)" for a, tr in moving))
+    if report.ranks:
+        lines.append("")
+        lines.append("  solo/duo rank when synced: " + "  ->  ".join(
+            f"{r.at:%b %d} {r.label}" for r in report.ranks))
+    return "\n".join(lines)

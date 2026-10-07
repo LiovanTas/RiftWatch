@@ -71,6 +71,7 @@ riftwatch coach "Name#TAG" --last --html last-game.html
 | `baselines` | Rebuilds the per-tier, per-role, per-champion comparison tables |
 | `features` | Extracts per-minute features from any cached games that still need it |
 | `coach Name#TAG` | Coaching on the last 20 games; `--last` or `--match ID` for one game |
+| `progress Name#TAG` | The player's games week by week against one fixed yardstick, with a trend and rank snapshots |
 | `champions Name#TAG` | How the player performs on each champion and role over their last 100 games |
 | `scout Name#TAG` | Rank, champion experience and recent form of all ten players in a live game |
 | `eval-coach` | Runs the coach on a fixed sample of crawled games and measures grounding, faithfulness, cost and latency |
@@ -143,6 +144,13 @@ its coachable stats. Games are then grouped by champion and role, with a standar
 champion is only called stronger or weaker than the player's other picks in that role when
 the gap is more than two standard errors and there are at least 5 games. The recent-games
 coach gets a line for each champion played three or more times.
+
+**Progress.** Every game of the last 12 weeks is scored against the player's *current* rank,
+so weeks are comparable, then averaged per week and per area. A least-squares line through
+the per-game numbers is called improving or declining only when its slope is more than two
+standard errors from flat. Rank snapshots (one per sync; Riot keeps no LP history) are shown
+alongside. Scored games are cached in memory per game, player, rank bucket and baseline
+build, so the player page's three history views score each game once.
 
 **Coach.** Scores become numbered evidence items. Claude (Sonnet 5.5) answers in a fixed JSON
 schema, citing evidence ids. The grounding check rejects any number that isn't in the evidence
@@ -227,6 +235,8 @@ take the next one from whoever has the least work running, and retry a job whose
 | `GET /api/players/.../matches/{match_id}` (scores, curves, evidence) | 18 ms |
 | `GET /api/players/.../recent` (trends over 40 games, champion- and matchup-adjusted) | 150 ms |
 | `GET /api/players/.../champions` (champion pool over 100 games) | 83 ms |
+| `GET /api/players/.../progress` (12 weeks, ~300 games) | 200 ms first view |
+| Player page's three reports (recent, champion pool, progress), repeat view | 122 ms |
 | `POST /api/players/.../sync` | returns a job; `GET /api/jobs/{id}` for progress |
 | `POST /api/scout/{region}/{Name-TAG}` | scouts the player's live game as a job; the result is the report |
 | `POST /api/players/.../matches/{match_id}/coach` | generates and caches coaching |

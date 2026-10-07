@@ -48,6 +48,8 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
       several server processes can share the work
 - [x] **Baseline refresh** (`riftwatch refresh`): tops up every rank bucket on the live patch and
       rebuilds baselines; schedule it daily
+- [x] **Progress over time**: weekly standing and areas against a fixed yardstick, a trend
+      called only past two standard errors, rank snapshots; CLI, page chart, API
 - [x] **Champion pool**: per champion and role, average standing against the player's rank,
       areas, and a stronger/weaker call only when the gap beats the noise; CLI, page, coach
 - [x] **Coach evaluation** (`eval-coach`): grounding, faithfulness, coverage, cost and latency

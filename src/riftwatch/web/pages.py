@@ -67,6 +67,61 @@ def search_page(error: str | None = None) -> str:
     return page("RiftWatch", "League of Legends coaching against your rank", body)
 
 
+def _progress_chart(weeks) -> str:
+    """Weekly "better than N%" as a line, with the 50% (typical) line for reference.
+    Inline SVG in the page's own colour tokens, so it follows light and dark mode."""
+    w, h, left, right, top, bottom = 640, 180, 36, 12, 12, 26
+    n = len(weeks)
+
+    def x(i: int) -> float:
+        return left + (w - left - right) * (i / (n - 1) if n > 1 else 0.5)
+
+    def y(v: float) -> float:
+        return top + (h - top - bottom) * (1 - v / 100)
+
+    pts = " ".join(f"{x(i):.1f},{y(wk.score):.1f}" for i, wk in enumerate(weeks))
+    ticks = "".join(
+        f'<line x1="{left}" x2="{w - right}" y1="{y(v):.1f}" y2="{y(v):.1f}" '
+        f'stroke="var(--grid)" stroke-width="1"/>'
+        f'<text x="{left - 6}" y="{y(v) + 4:.1f}" text-anchor="end" font-size="11" '
+        f'fill="var(--muted)">{v}%</text>' for v in (25, 75))
+    typical = (f'<line x1="{left}" x2="{w - right}" y1="{y(50):.1f}" y2="{y(50):.1f}" '
+               f'stroke="var(--group)" stroke-width="1.5" stroke-dasharray="4 4"/>'
+               f'<text x="{left - 6}" y="{y(50) + 4:.1f}" text-anchor="end" font-size="11" '
+               f'fill="var(--group)">50%</text>')
+    dots = "".join(
+        f'<circle cx="{x(i):.1f}" cy="{y(wk.score):.1f}" r="3.5" fill="var(--you)">'
+        f"<title>Week of {wk.start:%b %d}: better than {wk.score:.0f}% "
+        f"({wk.games} games, {100 * wk.win_rate:.0f}% wins)</title></circle>"
+        for i, wk in enumerate(weeks))
+    labels = "".join(
+        f'<text x="{x(i):.1f}" y="{h - 8}" text-anchor="middle" font-size="11" '
+        f'fill="var(--muted)">{wk.start:%b %d}</text>'
+        for i, wk in enumerate(weeks) if i % max(1, n // 6) == 0 or i == n - 1)
+    return (f'<svg viewBox="0 0 {w} {h}" role="img" style="width:100%;height:auto" '
+            f'aria-label="Weekly average standing against players at your rank">'
+            f"{ticks}{typical}"
+            f'<polyline points="{pts}" fill="none" stroke="var(--you)" stroke-width="2"/>'
+            f"{dots}{labels}</svg>")
+
+
+def _progress_html(progress) -> str:
+    if progress is None or not progress.weeks:
+        return ""
+    t = progress.trend
+    trend = {"improving": "improving", "declining": "declining", "steady": "steady"}[t.verdict]
+    moving = [f"{a} {tr.verdict}" for a, tr in progress.area_trends.items() if tr.verdict != "steady"]
+    ranks = (" · Rank when synced: " + " → ".join(f"{r.at:%b %d} {r.label}" for r in progress.ranks)
+             if progress.ranks else "")
+    return (f"<h2>Progress</h2><p class=\"sub\">Last {len(progress.weeks)} weeks, "
+            f"{progress.games} games, each against players at your current rank in its role. "
+            f"Trend: <strong>{trend}</strong> ({t.slope:+.1f} ±{t.se:.1f} points per 10 games)"
+            + (f"; {_esc(', '.join(moving))}" if moving else "") + f".{_esc(ranks)}</p>"
+            f'<div class="card">{_progress_chart(progress.weeks)}'
+            '<p class="small" style="margin:6px 0 0">Blue: your weekly average \u201cbetter than\u201d '
+            "across all stats. Dashed: a typical player at your rank (50%).</p></div>")
+
+
 def _pool_html(pool) -> str:
     if pool is None or not pool.lines:
         return ""
@@ -96,6 +151,7 @@ def player_page(
     recent: CoachResult | None,
     recent_coach_url: str | None,
     pool=None,
+    progress=None,
 ) -> str:
     sync_url = f"/api/players/{_esc(region)}/{_esc(riot_id)}/sync"
     update = (f'<p><button class="action" id="sync" data-url="{sync_url}">Update</button>'
@@ -136,7 +192,7 @@ def player_page(
         links + f"<h1>{_esc(player['riot_id'])}</h1>"
         f'<p class="sub">{_esc(rank_text)} · {_esc(player["platform"].upper())} · '
         f"{player['games_cached']} games analysed</p>" + update
-        + coaching + _pool_html(pool) + "<h2>Recent games</h2>" + games
+        + coaching + _progress_html(progress) + _pool_html(pool) + "<h2>Recent games</h2>" + games
     )
     return page(f"{player['riot_id']} - RiftWatch", f"RiftWatch coaching for {player['riot_id']}",
                 body, extra_js=SYNC_JS)

@@ -8,15 +8,18 @@ evidence fingerprint + model, so only the first view of a given game pays for th
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections import OrderedDict
 from collections.abc import Iterator
 from typing import Any
 
 import psycopg
 from psycopg.types.json import Jsonb
 
+from riftwatch.analysis import progress as progress_mod
 from riftwatch.analysis.pool import PoolReport, summarize
 from riftwatch.analysis.score import GameScore, score_participant
 from riftwatch.analysis.trend import trends
+from riftwatch.baselines import build as baseline_build
 from riftwatch.baselines.build import baselines_for
 from riftwatch.coach.evidence import EvidenceSet, add_pool_evidence, game_evidence, trend_evidence
 from riftwatch.coach.grounding import CoachOutput, CoachPoint
@@ -214,6 +217,53 @@ def _add_reference(conn, score: GameScore, bucket: str, min_n: int) -> None:
             score.reference[name] = b
 
 
+# Scored games, shared by the history views (recent games, champion pool, progress), which
+# overlap heavily: a player page asks for all three. Keyed on what decides the result -- the
+# game, the player, the comparison bucket, the baseline build, and whether per-minute curves
+# were scored -- so a rebuild or a rank change simply misses. None marks a game that can't be
+# scored (remake, no role), so it isn't reloaded either.
+_SCORED: OrderedDict[tuple, tuple[GameFeatures, ParticipantFeatures, GameScore] | None] = OrderedDict()
+SCORED_CACHE_MAX = 20_000
+
+
+def _scored_games(
+    conn, puuid: str, ids: list[str], bucket: str, min_n: int, *, minutes: bool,
+    extract_missing: bool = False,
+) -> list[tuple[GameFeatures, ParticipantFeatures, GameScore]]:
+    """(game, player, score) for each scorable game in ``ids``, in order."""
+    gen = baseline_build.generation(conn)
+
+    def key(match_id: str) -> tuple:
+        return (match_id, puuid, bucket, min_n, minutes, gen)
+
+    missing = [m for m in ids if key(m) not in _SCORED]
+    if missing:
+        stored = store.load_stored_many(conn, missing, minutes_for=puuid if minutes else None,
+                                        minutes=minutes, players_for=puuid)
+        for match_id in missing:
+            game = stored.get(match_id)
+            if game is None and extract_missing:
+                try:
+                    game = _game(conn, match_id)    # not extracted yet: extract once, then stored
+                except ReportError:
+                    game = None
+            p = game.by_puuid(puuid) if game else None
+            if p is None or not p.role or game.duration_s < 600:
+                if game is not None:
+                    _SCORED[key(match_id)] = None
+                continue
+            _SCORED[key(match_id)] = (game, p, _score(conn, game, p, bucket, min_n))
+        while len(_SCORED) > SCORED_CACHE_MAX:
+            _SCORED.popitem(last=False)
+    out = []
+    for match_id in ids:
+        hit = _SCORED.get(key(match_id))
+        if hit is not None:
+            _SCORED.move_to_end(key(match_id))
+            out.append(hit)
+    return out
+
+
 def _score(conn, game: GameFeatures, p: ParticipantFeatures, bucket: str, min_n: int) -> GameScore:
     opponent = game.participants.get(p.opponent_id) if p.opponent_id else None
     return score_participant(p, baselines_for(conn, bucket, p.role, p.champion_id, min_n),
@@ -270,21 +320,9 @@ def recent_report(
     bucket = player_bucket(conn, puuid, tier)
     # Fetch older games too, for the "before" side of each trend.
     ids = repo.player_match_ids(conn, puuid, queue_id=queue_id, limit=games * 2)
-    stored = store.load_stored_many(conn, ids, minutes_for=puuid, players_for=puuid)
-    loaded: list[tuple[GameFeatures, ParticipantFeatures]] = []
-    scores: list[GameScore] = []
-    for match_id in ids:
-        game = stored.get(match_id)
-        if game is None:
-            try:
-                game = _game(conn, match_id)    # not extracted yet: extract once, then stored
-            except ReportError:
-                continue
-        p = game.by_puuid(puuid)
-        if p is None or not p.role or game.duration_s < 600:
-            continue
-        loaded.append((game, p))
-        scores.append(_score(conn, game, p, bucket, min_n))
+    scored = _scored_games(conn, puuid, ids, bucket, min_n, minutes=True, extract_missing=True)
+    loaded = [(game, p) for game, p, _ in scored]
+    scores = [s for _, _, s in scored]
     if not loaded:
         raise ReportError("no analysable games cached for this player -- run sync first")
     tier_label = bucket.replace("_", " ").title()
@@ -310,17 +348,52 @@ def champion_pool(
     only (no extraction on this path) and skips per-minute rows: whole-game stats are enough."""
     bucket = player_bucket(conn, puuid, tier)
     ids = repo.player_match_ids(conn, puuid, queue_id=queue_id, limit=games)
-    stored = store.load_stored_many(conn, ids, minutes=False, players_for=puuid)
-    scores = []
-    for match_id in ids:
-        game = stored.get(match_id)
-        p = game.by_puuid(puuid) if game else None
-        if p is None or not p.role or game.duration_s < 600:
-            continue
-        scores.append(_score(conn, game, p, bucket, min_n))
+    scores = [s for _, _, s in _scored_games(conn, puuid, ids, bucket, min_n, minutes=False)]
     if not scores:
         raise ReportError("no analysed games cached for this player -- run sync first")
     return summarize(scores, bucket)
+
+
+def progress_report(
+    conn: psycopg.Connection,
+    puuid: str,
+    *,
+    weeks: int = 12,
+    tier: str | None = None,
+    min_n: int = 20,
+    queue_id: tuple[int, ...] = SUPPORTED_QUEUES,
+) -> progress_mod.ProgressReport:
+    """The last ``weeks`` weeks of games, all scored against the player's current rank, plus
+    the rank snapshots taken in that time (one per sync; Riot keeps no LP history)."""
+    bucket = player_bucket(conn, puuid, tier)
+    rows = conn.execute(
+        """
+        SELECT m.match_id, m.game_start FROM match_participants p JOIN matches m USING (match_id)
+         WHERE p.puuid = %s AND m.queue_id = ANY(%s)
+           AND m.game_start >= now() - make_interval(weeks => %s)
+         ORDER BY m.game_start
+        """,
+        (puuid, list(queue_id), weeks),
+    ).fetchall()
+    starts = dict(rows)
+    dated = [(starts[game.match_id], s) for game, _, s in
+             _scored_games(conn, puuid, list(starts), bucket, min_n, minutes=False)]
+    if not dated:
+        raise ReportError(f"no analysed games in the last {weeks} weeks -- run sync first")
+    ranks, last = [], None
+    for at, tier_, division, lp in conn.execute(
+        """
+        SELECT captured_at, tier, division, lp FROM rank_snapshots
+         WHERE puuid = %s AND queue = 'RANKED_SOLO_5x5'
+           AND captured_at >= now() - make_interval(weeks => %s)
+         ORDER BY captured_at
+        """,
+        (puuid, weeks),
+    ):
+        if (tier_, division, lp) != last:          # one point per change, not per sync
+            ranks.append(progress_mod.RankPoint(at, tier_, division, lp))
+            last = (tier_, division, lp)
+    return progress_mod.summarize(dated, bucket, ranks)
 
 
 def stream_coaching(conn: psycopg.Connection, result: CoachResult, coach: Coach,

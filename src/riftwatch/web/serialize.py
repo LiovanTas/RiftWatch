@@ -128,3 +128,17 @@ def pool_json(report) -> dict[str, Any]:
             "verdict": l.verdict or None, "gap": l.gap,
         } for l in report.lines],
     }
+
+
+def progress_json(report) -> dict[str, Any]:
+    t = report.trend
+    return {
+        "tier": report.tier_bucket, "games": report.games,
+        "trend": {"verdict": t.verdict, "slope_per_10_games": t.slope, "se": t.se},
+        "area_trends": {a: {"verdict": tr.verdict, "slope_per_10_games": tr.slope, "se": tr.se}
+                        for a, tr in report.area_trends.items()},
+        "weeks": [{"start": w.start.isoformat(), "games": w.games, "wins": w.wins,
+                   "better_than": w.score, "areas": w.areas} for w in report.weeks],
+        "ranks": [{"at": r.at.isoformat(), "tier": r.tier, "division": r.division, "lp": r.lp}
+                  for r in report.ranks],
+    }

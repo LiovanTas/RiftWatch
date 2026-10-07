@@ -362,19 +362,26 @@ def current_generation(conn: psycopg.Connection) -> tuple:
     return tuple(row) if row else (0, None)
 
 
+def generation(conn: psycopg.Connection) -> tuple | None:
+    """The baseline build this process is using, re-checked at most every
+    STALENESS_CHECK_S; anything cached on top of baselines keys on it."""
+    global _cache_generation, _checked_at
+    now = time.monotonic()
+    if now - _checked_at >= STALENESS_CHECK_S:
+        latest = current_generation(conn)
+        _checked_at = now
+        if latest != _cache_generation:
+            _cache.clear()
+            _lanes.clear()
+            _cache_generation = latest
+    return _cache_generation
+
+
 def baselines_for(
     conn: psycopg.Connection, tier_bucket: str, role: str, champion_id: int,
     min_n: int = 20, max_tier_distance: int = 1,
 ) -> BaselineSet:
-    global _cache_generation, _checked_at
-    now = time.monotonic()
-    if now - _checked_at >= STALENESS_CHECK_S:
-        generation = current_generation(conn)
-        _checked_at = now
-        if generation != _cache_generation:
-            _cache.clear()
-            _lanes.clear()
-            _cache_generation = generation
+    generation(conn)
     key = (tier_bucket, role, champion_id, min_n, max_tier_distance)
     if key not in _cache:
         _cache[key] = BaselineSet(conn, tier_bucket, role, champion_id, min_n, max_tier_distance)
