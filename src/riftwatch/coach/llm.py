@@ -65,6 +65,9 @@ How to read the evidence:
   the same role -- a reference for where high elo sits, not the player's comparison group.
 - "lane opponent" means the enemy player in the same role. For a jungler that is the enemy
   jungler; for a support, the enemy support.
+- Session items compare the player's games by their place in a play session or by the
+  losses just before them. They are associations across the player's own games, not
+  proof of cause: suggest habits such as taking a break, never claim the session caused it.
 - Per-minute patterns ("from minute A to minute B ...") mean the gap persisted the whole
   stretch, which matters more than a single moment.
 - Death items describe one death: time, map area relative to the player's team, who got

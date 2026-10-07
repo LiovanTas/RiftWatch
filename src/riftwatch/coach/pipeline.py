@@ -17,12 +17,19 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from riftwatch.analysis import progress as progress_mod
-from riftwatch.analysis.pool import PoolReport, summarize
+from riftwatch.analysis import sessions as sessions_mod
+from riftwatch.analysis.pool import PoolReport, game_score, summarize
 from riftwatch.analysis.score import GameScore, score_participant
 from riftwatch.analysis.trend import trends
 from riftwatch.baselines import build as baseline_build
 from riftwatch.baselines.build import baselines_for
-from riftwatch.coach.evidence import EvidenceSet, add_pool_evidence, game_evidence, trend_evidence
+from riftwatch.coach.evidence import (
+    EvidenceSet,
+    add_pool_evidence,
+    add_session_evidence,
+    game_evidence,
+    trend_evidence,
+)
 from riftwatch.coach.grounding import CoachOutput, CoachPoint
 from riftwatch.coach.llm import Coach
 from riftwatch.db import repo
@@ -340,6 +347,11 @@ def recent_report(
     tier_label = bucket.replace("_", " ").title()
     evidence = trend_evidence(trends(scores, recent=games), loaded[:games], tier_label)
     add_pool_evidence(evidence, summarize(scores[:games], bucket))
+    try:
+        add_session_evidence(evidence, sessions_report(conn, puuid, tier=tier, min_n=min_n,
+                                                       queue_id=queue_id))
+    except ReportError:
+        pass
     output, model, cached, dropped, usage, pending = _coach(
         conn, coach, puuid, "recent", None, evidence, "their recent games", refresh,
         generate=generate)
@@ -406,6 +418,35 @@ def progress_report(
             ranks.append(progress_mod.RankPoint(at, tier_, division, lp))
             last = (tier_, division, lp)
     return progress_mod.summarize(dated, bucket, ranks)
+
+
+def sessions_report(
+    conn: psycopg.Connection,
+    puuid: str,
+    *,
+    games: int = 200,
+    tier: str | None = None,
+    min_n: int = 20,
+    queue_id: int | tuple[int, ...] = SUPPORTED_QUEUES,
+) -> sessions_mod.SessionReport:
+    """The last ``games`` games grouped into play sessions: standing by place in the session
+    and after losses."""
+    bucket = player_bucket(conn, puuid, tier)
+    queues = [queue_id] if isinstance(queue_id, int) else list(queue_id)
+    starts = dict(conn.execute(
+        """
+        SELECT m.match_id, m.game_start FROM match_participants p JOIN matches m USING (match_id)
+         WHERE p.puuid = %s AND m.queue_id = ANY(%s)
+         ORDER BY m.game_start DESC LIMIT %s
+        """,
+        (puuid, queues, games),
+    ).fetchall())
+    data = [(starts[g.match_id], g.duration_s, p.win, value)
+            for g, p, s in _scored_games(conn, puuid, list(starts), bucket, min_n, minutes=False)
+            if (value := game_score(s)) is not None]
+    if not data:
+        raise ReportError("no analysed games cached for this player -- run sync first")
+    return sessions_mod.summarize(data)
 
 
 def stream_coaching(conn: psycopg.Connection, result: CoachResult, coach: Coach,

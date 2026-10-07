@@ -122,6 +122,37 @@ def _progress_html(progress) -> str:
             "across all stats. Dashed: a typical player at your rank (50%).</p></div>")
 
 
+def _sessions_html(report) -> str:
+    if report is None or not report.games:
+        return ""
+    notes = []
+    for f in report.findings:
+        if f.kind == "session_length":
+            notes.append(f"Within a session, your games from the 4th on average {abs(f.gap):.0f} "
+                         f"points {'lower' if f.worse else 'higher'} than that session's first.")
+        else:
+            notes.append(f"Within a session, games right after two or more losses average "
+                         f"{abs(f.gap):.0f} points {'lower' if f.worse else 'higher'} than "
+                         "games right after a win.")
+    if not notes:
+        notes.append("Compared within the same session, neither late games nor games after "
+                     "losses differ clearly from the rest.")
+
+    def rows(groups):
+        return "".join(
+            f'<tr><td>{_esc(g.label)}</td><td class="num">{g.games}</td>'
+            f'<td class="num">{100 * g.win_rate:.0f}%</td>'
+            f'<td class="num">{g.score:.0f}% ±{g.se:.0f}</td></tr>' for g in groups)
+
+    head = ('<tr class="area"><td>{}</td><td>games</td><td>win rate</td>'
+            "<td>better than</td></tr>")
+    return (f"<h2>Sessions</h2><p class=\"sub\">Last {report.games} games in {report.sessions} "
+            f"sessions (an hour's break starts a new one). {_esc(' '.join(notes))}</p>"
+            '<div class="card scroll"><table class="score">'
+            + head.format("game in session") + rows(report.by_position)
+            + head.format("previous game") + rows(report.by_streak) + "</table></div>")
+
+
 def _pool_html(pool) -> str:
     if pool is None or not pool.lines:
         return ""
@@ -152,6 +183,7 @@ def player_page(
     recent_coach_url: str | None,
     pool=None,
     progress=None,
+    sessions=None,
 ) -> str:
     sync_url = f"/api/players/{_esc(region)}/{_esc(riot_id)}/sync"
     update = (f'<p><button class="action" id="sync" data-url="{sync_url}">Update</button>'
@@ -192,7 +224,8 @@ def player_page(
         links + f"<h1>{_esc(player['riot_id'])}</h1>"
         f'<p class="sub">{_esc(rank_text)} · {_esc(player["platform"].upper())} · '
         f"{player['games_cached']} games analysed</p>" + update
-        + coaching + _progress_html(progress) + _pool_html(pool) + "<h2>Recent games</h2>" + games
+        + coaching + _progress_html(progress) + _sessions_html(sessions) + _pool_html(pool)
+        + "<h2>Recent games</h2>" + games
     )
     return page(f"{player['riot_id']} - RiftWatch", f"RiftWatch coaching for {player['riot_id']}",
                 body, extra_js=SYNC_JS)

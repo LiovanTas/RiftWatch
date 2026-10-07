@@ -266,6 +266,16 @@ def add_pool_evidence(evidence: EvidenceSet, pool, max_lines: int = 3,
             severity=abs(line.gap), data={"champion": line.champion, "role": line.role}))
 
 
+def add_session_evidence(evidence: EvidenceSet, report) -> None:
+    """Append the session patterns that cleared the noise bar (see analysis.sessions)."""
+    n = len(evidence.items)
+    for f in report.findings:
+        n += 1
+        evidence.items.append(Evidence(
+            f"E{n}", "pattern", "context", "weakness" if f.worse else "neutral", f.text,
+            severity=abs(f.gap), data={"session": f.kind}))
+
+
 def trend_evidence(
     trends: list[MetricTrend],
     recent_games: list[tuple[GameFeatures, ParticipantFeatures]],

@@ -72,6 +72,7 @@ riftwatch coach "Name#TAG" --last --html last-game.html
 | `features` | Extracts per-minute features from any cached games that still need it |
 | `coach Name#TAG` | Coaching on the last 20 games; `--last` or `--match ID` for one game |
 | `progress Name#TAG` | The player's games week by week against one fixed yardstick, with a trend and rank snapshots |
+| `sessions Name#TAG` | Whether play changes late in a session or after losses, compared within the same session |
 | `champions Name#TAG` | How the player performs on each champion and role over their last 100 games |
 | `scout Name#TAG` | Rank, champion experience and recent form of all ten players in a live game |
 | `eval-coach` | Runs the coach on a fixed sample of crawled games and measures grounding, faithfulness, cost and latency |
@@ -151,6 +152,15 @@ the per-game numbers is called improving or declining only when its slope is mor
 standard errors from flat. Rank snapshots (one per sync; Riot keeps no LP history) are shown
 alongside. Scored games are cached in memory per game, player, rank bucket and baseline
 build, so the player page's three history views score each game once.
+
+**Sessions.** Games are grouped into play sessions (an hour's break starts a new one), then
+compared *within* a session: a session's fourth-and-later games against its first, and games
+right after two or more losses against games right after a win, averaged over the sessions
+that have both. Comparing all first games with all late games instead mixes in which days
+had long sessions: on the author's games that pooled gap was 7 points, while the
+within-session one was 2 ± 2 -- long sessions had simply become more common as form dipped.
+A pattern needs 10 such sessions and a gap beyond two standard errors; then the coach gets it
+as evidence, framed as an association to build a habit around, not a cause.
 
 **Coach.** Scores become numbered evidence items. Claude (Sonnet 5.5) answers in a fixed JSON
 schema, citing evidence ids. The grounding check rejects any number that isn't in the evidence

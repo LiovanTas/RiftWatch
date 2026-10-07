@@ -176,3 +176,31 @@ def progress_text(report) -> str:
         lines.append("  solo/duo rank when synced: " + "  ->  ".join(
             f"{r.at:%b %d} {r.label}" for r in report.ranks))
     return "\n".join(lines)
+
+
+def sessions_text(report) -> str:
+    """A :class:`riftwatch.analysis.sessions.SessionReport`."""
+    lines = [f"Sessions over the last {report.games} games: {report.sessions} sessions, "
+             f"{report.games_per_session:.1f} games each on average "
+             "(a break of an hour or more starts a new one)", ""]
+
+    def table(title, groups):
+        lines.append(f"  {title:<18} {'games':>5} {'win%':>5} {'better than':>14}")
+        for g in groups:
+            lines.append(f"  {g.label:<18} {g.games:>5} {100 * g.win_rate:>4.0f}% "
+                         f"{g.score:>8.0f}% +/-{g.se:.0f}")
+        lines.append("")
+
+    table("game in session", report.by_position)
+    table("previous game", report.by_streak)
+    lines.append("  within the same session (what the verdicts use):")
+    for label, paired in (("4th+ game vs the session's first", report.late_vs_first),
+                          ("after 2+ losses vs after a win", report.losses_vs_win)):
+        if paired is None:
+            lines.append(f"    {label}: not enough sessions")
+            continue
+        verdict = (("worse" if paired.gap < 0 else "better") if paired.clear
+                   else "no clear difference")
+        lines.append(f"    {label}: {paired.gap:+.1f} +/-{paired.se:.1f} points over "
+                     f"{paired.sessions} sessions -- {verdict}")
+    return "\n".join(lines)

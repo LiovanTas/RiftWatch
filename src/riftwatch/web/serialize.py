@@ -142,3 +142,20 @@ def progress_json(report) -> dict[str, Any]:
         "ranks": [{"at": r.at.isoformat(), "tier": r.tier, "division": r.division, "lp": r.lp}
                   for r in report.ranks],
     }
+
+
+def sessions_json(report) -> dict[str, Any]:
+    def groups(gs):
+        return [{"label": g.label, "games": g.games, "wins": g.wins, "better_than": g.score,
+                 "se": g.se} for g in gs]
+    return {
+        "games": report.games, "sessions": report.sessions,
+        "games_per_session": round(report.games_per_session, 2),
+        "by_position": groups(report.by_position), "by_streak": groups(report.by_streak),
+        "within_session": {
+            name: None if p is None else {"sessions": p.sessions, "gap": p.gap, "se": p.se,
+                                          "clear": p.clear}
+            for name, p in (("late_vs_first", report.late_vs_first),
+                            ("after_losses_vs_after_win", report.losses_vs_win))},
+        "findings": [{"kind": f.kind, "worse": f.worse, "gap": f.gap} for f in report.findings],
+    }
