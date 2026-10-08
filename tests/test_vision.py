@@ -25,6 +25,13 @@ def draw_bar(frame, x, y, fraction, team, width=105, height=10, tick_every=10):
     return fill
 
 
+def in_hud(x, y, w=1920, h=1080, bar=105):
+    from riftwatch.vision.healthbars import Calibration
+
+    cx, cy = (x + bar / 2) / w, (y + 5) / h
+    return any(x0 <= cx <= x1 and y0 <= cy <= y1 for x0, y0, x1, y1 in Calibration().hud_boxes)
+
+
 def background(seed=0, h=1080, w=1920):
     rng = np.random.default_rng(seed)
     base = rng.integers(60, 140, size=(h // 8, w // 8, 3), dtype=np.uint8)
@@ -76,9 +83,11 @@ def test_worst_case_error_over_many_random_bars():
         frame = background(k)
         placed = []
         for _ in range(10):
-            # Inside the 3% edge margin, where the HUD is and bars are skipped.
-            x, y = int(rng.integers(80, 1730)), int(rng.integers(40, 1020))
+            # Inside the edge margins (5% of width, 3% of height), where bars are skipped.
+            x, y = int(rng.integers(120, 1690)), int(rng.integers(40, 1020))
             if any(abs(x - px) < 160 and abs(y - py) < 30 for px, py, _ in placed):
+                continue
+            if in_hud(x, y):
                 continue
             frac = float(rng.uniform(0.05, 1.0))     # under ~4%: see the test below
             draw_bar(frame, x, y, frac, str(rng.choice(["self", "ally", "enemy"])))
@@ -88,7 +97,7 @@ def test_worst_case_error_over_many_random_bars():
             assert (x, y) in found, (k, x, y)
             errors.append(abs(found[(x, y)].fraction - frac))
     # Pixel rounding: half a pixel of fill plus the outline, on a 105 px bar.
-    assert len(errors) > 250 and max(errors) < 0.015 and np.mean(errors) < 0.006
+    assert len(errors) > 200 and max(errors) < 0.015 and np.mean(errors) < 0.006
 
 
 # -- video and alignment ------------------------------------------------------------------------
@@ -172,3 +181,69 @@ def test_parallel_scan_matches_a_single_pass(tmp_path):
     assert len(single) == 80
     assert [(t, [b.fill for b in bars]) for t, _, _, bars, _ in parallel] == \
            [(t, [b.fill for b in bars]) for t, _, _, bars, _ in single]
+
+
+# -- game clock -----------------------------------------------------------------------------------
+
+def clock_frame(seconds, seed=0, h=720, w=1280):
+    """A frame with the replay clock drawn where the HUD puts it."""
+    frame = background(seed, h=h, w=w)
+    k = h / 720
+    cv2.rectangle(frame, (round(600 * k), round(48 * k)), (round(690 * k), round(64 * k)), (30, 28, 24), -1)
+    m, s = divmod(seconds, 60)
+    cv2.putText(frame, f"{m:02d}:{s:02d}", (round(626 * k), round(61 * k)), cv2.FONT_HERSHEY_PLAIN,
+                0.85 * k, (235, 235, 235), 1, cv2.LINE_AA)
+    return frame
+
+
+def test_clock_learns_digits_and_reads_unseen_times():
+    from riftwatch.vision import clock
+
+    templates = clock.learn([(clock_frame(t, seed=t % 7), t) for t in range(60, 700, 7)])
+    for t in (75, 389, 1203, 2059, 3599):
+        assert clock.read(clock_frame(t, seed=3), templates) == t
+
+
+def test_clock_offset_outvotes_misreads():
+    from riftwatch.vision import clock
+
+    readings = [(float(t), t + 60) for t in range(0, 600, 15)]
+    readings[3] = (45.0, 9999)                 # a misread
+    readings[7] = (105.0, None)                # unreadable
+    off, agree = clock.offset(readings)
+    assert off == pytest.approx(60.5) and agree == pytest.approx(38 / 40)
+
+
+def test_shipped_clock_templates_exist():
+    from riftwatch.vision import clock
+
+    templates = clock.load_templates()
+    assert templates is not None and templates.shape == (10, clock.GLYPH[0] * clock.GLYPH[1])
+
+
+# -- minions --------------------------------------------------------------------------------------
+
+def draw_minion_bar(frame, x, y, fraction, team, width=62, height=4):
+    """A minion's bar: outline, fill, dark remainder; no level box."""
+    cv2.rectangle(frame, (x - 2, y - 2), (x + width + 1, y + height + 1), (8, 8, 8), -1)
+    fill = round(width * fraction)
+    if fill:
+        cv2.rectangle(frame, (x, y), (x + fill - 1, y + height - 1), FILL[team], -1)
+    cv2.rectangle(frame, (x + fill, y), (x + width - 1, y + height - 1), (25, 25, 25), -1)
+
+
+def test_minion_bars_are_found_separately_from_champion_bars():
+    from riftwatch.vision.healthbars import find_minion_bars
+
+    frame = background(8)
+    draw_bar(frame, 900, 400, 0.7, "enemy")                          # a champion
+    cv2.rectangle(frame, (900, 412), (1004, 415), (200, 160, 40), -1)  # its mana bar, just under
+    for i, frac in enumerate((1.0, 0.6, 0.25)):
+        draw_minion_bar(frame, 500 + 90 * i, 650, frac, "ally")
+    draw_minion_bar(frame, 1200, 300, 0.8, "enemy")
+    minions = sorted(find_minion_bars(frame), key=lambda b: b.x)
+    assert [(b.team, b.x) for b in minions] == [("ally", 500), ("ally", 590), ("ally", 680),
+                                                ("enemy", 1200)]
+    assert [b.fraction for b in minions] == pytest.approx([1.0, 0.6, 0.25, 0.8], abs=0.02)
+    # Minion bars aren't champion bars (no level box), and the champion still is one.
+    assert [(b.team, b.x) for b in find_bars(frame)] == [("enemy", 900)]

@@ -65,7 +65,8 @@ def _segment(path: str, first: int, last: int, step: int, calibration: Calibrati
 
 def scan(path: str | Path, fps: float = 2.0, calibration: Calibration | None = None,
          extra: Callable | None = None, workers: int | None = None,
-         progress: Callable[[str], None] | None = None) -> list[tuple]:
+         progress: Callable[[str], None] | None = None,
+         start_s: float = 0.0, end_s: float | None = None) -> list[tuple]:
     """(t, width, height, bars, extra(frame)) for ``fps`` frames a second of the video.
 
     Decoding is the slow part (every frame is decoded, kept or not), so the video is split
@@ -83,16 +84,21 @@ def scan(path: str | Path, fps: float = 2.0, calibration: Calibration | None = N
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     cap.release()
     step = max(1, round(native / fps))
+    first = int(start_s * native) // step * step
+    last = total if end_s is None or total <= 0 else min(total, int(end_s * native))
+    if total <= 0:
+        last = 1 << 62 if end_s is None else int(end_s * native)
+    span = last - first
     if workers is None:
         # Spawning processes costs about a second each: not worth it for short clips.
-        workers = 1 if total < native * 120 else min(8, os.cpu_count() or 1)
+        workers = 1 if span < native * 120 else min(8, os.cpu_count() or 1)
     if workers <= 1 or total <= 0:
-        return _segment(str(path), 0, total if total > 0 else 1 << 62, step, calibration, extra)
+        return _segment(str(path), first, last, step, calibration, extra)
     # Segment boundaries on multiples of ``step``, so the kept frames are the same as a
     # single pass would keep.
     parts = workers * 3
-    size = max(step, -(-total // parts // step) * step)
-    bounds = [(a, min(total, a + size)) for a in range(0, total, size)]
+    size = max(step, -(-span // parts // step) * step)
+    bounds = [(a, min(last, a + size)) for a in range(first, last, size)]
     results: dict[int, list[tuple]] = {}
     with ProcessPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(_segment, str(path), a, b, step, calibration, extra): a

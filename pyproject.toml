@@ -29,6 +29,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "riftwatch.db" = ["migrations/*.sql"]
+"riftwatch.vision" = ["data/*.npz"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

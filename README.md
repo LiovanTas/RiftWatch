@@ -409,6 +409,7 @@ pip install -e ".[cv]"
 riftwatch vision game.mp4 --recording <recording file>   # whole game
 riftwatch vision game.mp4 --frame 600                       # one frame, bars boxed, for checking
 riftwatch vision replay.mp4 --check-panel                   # measure it on replay footage
+riftwatch vision game.mp4 --lane                           # trades and spacing in lane
 ```
 
 The live recorder only sees your own health. To see both sides of a trade, `vision` reads
@@ -425,8 +426,10 @@ detector against the recorder's exact numbers.
 **Measured on real footage.** Replay videos show the followed champion's health on the HUD
 panel, a second reading of the same health. On a 32-minute 720p Grandmaster replay
 (`--check-panel`, one frame a second), the followed champion's overhead bar was read in 70%
-of the seconds the panel showed health, with a median error of 0 health points, a mean of 1.7
-and 90% within 4.3. The misses are mostly recalls (the recall bar covers the health bar),
+of the seconds the panel showed health, with a median error of 0 health points, a mean of 1.3
+and 90% within 1.9. (The panel is read by its green, not its brightness: the numbers printed
+on it are white, and an earlier brightness reading ran on through them -- it made the bar
+reader look twice as wrong as it was.) The misses are mostly recalls (the recall bar covers the health bar),
 deaths and fights where bars overlap. The whole 32 minutes takes 54 seconds: the video is
 split into segments read in parallel, and each frame's search costs 36 ms. Tuning on that footage found what synthetic frames
 couldn't: the outline above a bar is dim brown rather than black, a thicker line marks every
@@ -437,6 +440,58 @@ told apart by the level box every champion bar has on its left (dark, with the l
 white): in spot-checked frames that removed every false bar and kept every real one. Still to
 do: bars aren't yet tied to champions, and replays need the game clock read off the screen to
 line up with the match.
+
+**Laning: trades and spacing.** `--lane` follows your champion and its lane opponent (the
+nearest enemy bar, tracked from moment to moment so a passing jungler doesn't take its place)
+four times a second through the laning phase. A trade is a stretch within trading range where
+either of you loses health, ending after two quiet seconds; bars that flicker out under spell
+effects don't cut a fight in two. Each trade records what each side lost, who was hit first,
+the result (5 health points either way is even) and whether another enemy was close (a
+skirmish). On the Irelia replay it found 16 trades before 14:00 -- 5 won, 6 lost, 5 even --
+and the largest, checked frame by frame, matched: at 2:00 Irelia lost 73 health points to the
+opponent's 80; at 10:06 she lost 49 to 24.
+
+**Game clock.** Game time is read off the replay's clock: each character is cut out, scaled to
+a fixed size and matched against digit shapes learned from video whose time was known (and
+shipped with the package). A colon is told from a "1" by shape, not width. On the held-out
+half of the training replay it read 821 of 960 seconds right, 2 wrong and 137 not at all
+(something bright over the clock); for a whole video only the offset matters, and the value
+most readings agree on was right to the half-second frame. 41 readings take 3.5 s.
+
+**Minions.** Minion bars are champion bars in miniature -- no level box, no 1000-health line,
+about 41 x 3 px at 720p -- and a thin bar just under a champion's is its mana bar, not a
+minion. Each laning moment counts your minions and theirs near you, and each trade records
+the wave edge it started with.
+
+## Learning from gameplay videos
+
+```bash
+riftwatch videos add "D:/replays"              # register a folder (or files); safe to repeat
+riftwatch videos process                       # clock, laning scan, trades -- new or outdated videos
+riftwatch videos list
+riftwatch videos stats --role top              # how the library's players trade
+riftwatch videos dataset                       # laning situations -> out/ml/data/lane_situations.parquet
+riftwatch videos train                         # the laning models (needs 5+ processed games)
+riftwatch videos add mygame.mp4 --view player --match NA1_5653891812   # your own game
+```
+
+Videos are registered once (by a fingerprint of the file, so a moved file is the same video)
+with champion, opponent, role, region, tier and patch read from names like "IRELIA vs
+RENEKTON (TOP) NA Grandmaster 26.1". `process` reads each video's clock, scans its laning
+phase four times a second, and stores every moment and every trade in Postgres. It is
+versioned: when the analysis improves, every video is re-processed, so the training data never
+mixes old and new readings.
+
+Every moment a player stands within trading range of their opponent, outside a trade, is a
+situation (time, both health bars, distance, minions on each side, other enemies close). Two
+models are learned from them: whether a high-elo player starts a trade from a spot like this,
+and how the trades they start go. Whole games are held out for testing, and each model has to
+beat the plain base rate; `train` refuses with fewer than five games.
+
+When one of your own game videos is processed and linked to its match, the coach's review of
+that game gets three more evidence items: your trades from the video, how high-elo players in
+your role trade in the library (once it has five of their games), and what the model expected
+from the spots where you started trades against how yours went.
 
 ## Live-game scouting
 

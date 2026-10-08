@@ -266,6 +266,46 @@ def add_pool_evidence(evidence: EvidenceSet, pool, max_lines: int = 3,
             severity=abs(line.gap), data={"champion": line.champion, "role": line.role}))
 
 
+def add_video_evidence(evidence: EvidenceSet, mine, library=None, model=None) -> None:
+    """Laning from the player's own gameplay video of this game, against the high-elo video
+    library and the laning model when there are enough games behind them."""
+    s = mine.summary()
+    if not s["trades"]:
+        return
+    items = [("pattern", "laning", "neutral",
+              f"From the player's gameplay video of this game, laning until 14:00: {s['trades']} "
+              f"trades with the lane opponent -- {s['won']} won, {s['lost']} lost, {s['even']} "
+              f"even (won means taking at least 5 health points more than they lost); net "
+              f"{s['net']:+.1f} health points per trade; the player started {s['started']} of "
+              f"them.", 5.0)]
+    if library is not None and library.trades:
+        worse = s["net"] < library.net_per_trade - 5
+        items.append(("pattern", "laning", "weakness" if worse else "neutral",
+                      f"High-elo {(mine.role or 'laners').lower()} players in the video library "
+                      f"({library.videos} games): {library.trades_per_10_min:.1f} trades per 10 "
+                      f"minutes of laning, won {library.won} and lost {library.lost} of "
+                      f"{library.trades}, net {library.net_per_trade:+.1f} health points per "
+                      f"trade.", abs(s["net"] - library.net_per_trade)))
+    if model is not None and mine.situations and model.get("outcome") is not None:
+        from riftwatch.vision.learn import judge
+
+        expected = [net for _, net in judge(model, mine.situations) if net is not None]
+        started = [t for t in mine.trades if t[3] in ("you", "both")]
+        if expected and started:
+            exp = 100 * sum(expected) / len(expected)
+            got = 100 * sum(t[2] - t[1] for t in started) / len(started)
+            items.append(("pattern", "laning", "weakness" if got < exp - 5 else "neutral",
+                          f"From the spots where the player started trades, the laning model "
+                          f"(trained on high-elo videos) expected a net of {exp:+.1f} health "
+                          f"points per trade; the player's trades from those spots netted "
+                          f"{got:+.1f}.", abs(got - exp)))
+    n = len(evidence.items)
+    for kind, area, polarity, text, severity in items:
+        n += 1
+        evidence.items.append(Evidence(f"E{n}", kind, area, polarity, text, severity=severity,
+                                       data={"source": "video"}))
+
+
 def add_session_evidence(evidence: EvidenceSet, report) -> None:
     """Append the session patterns that cleared the noise bar (see analysis.sessions)."""
     n = len(evidence.items)

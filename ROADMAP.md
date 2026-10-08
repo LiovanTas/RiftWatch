@@ -82,9 +82,16 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
       trade. Built: bar detector, video scanner, alignment to game time by matching your own
       health curve, accuracy check against the recorder (`riftwatch vision`). Calibrated on a
       real 720p replay: 70% coverage, median error 0, 90% within 4.3 health points against the
-      HUD panel; false bars cut by the level-box check; a 32-minute video in 54 s. Next: tie
-      bars to champions, align replays by reading the game clock, then feed enemy health
-      into trades and the coach
+      HUD panel; false bars cut by the level-box check; a 32-minute video in 54 s.
+- [x] **Laning from video** (`riftwatch vision --lane`): trades with the lane opponent (who lost
+      what, who started, skirmish or not) and spacing, checked frame by frame on a real replay
+- [x] Game clock read off the replay HUD (offset right to the half-second); minion bars and
+      wave edge at each trade
+- [x] **Video library and laning models** (`riftwatch videos`): add, versioned processing,
+      stats, situation dataset, decision and outcome models held out by game, coach evidence
+      from your own game videos against the library and the model
+- [ ] Fill the library: high-elo videos per role (and your own games, linked to their matches);
+      then tie bars to champions and read the player-view HUD clock
 
 ## Later
 

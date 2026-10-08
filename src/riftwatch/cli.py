@@ -352,6 +352,18 @@ def _advisor(settings: Settings):
     return Advisor(directory)
 
 
+def _lane_model(settings: Settings):
+    """The laning model trained on the video library, if one has been trained."""
+    from pathlib import Path
+
+    try:
+        from riftwatch.vision import learn
+
+        return learn.load(Path(settings.models_dir))
+    except ImportError:
+        return None
+
+
 def cmd_coach(settings: Settings, args: argparse.Namespace) -> int:
     riot_id = parse_riot_id(args.riot_id)
     coach = None
@@ -373,7 +385,8 @@ def cmd_coach(settings: Settings, args: argparse.Namespace) -> int:
             if match_id is None:
                 raise ReportError("no cached games for this player -- run sync first")
             result = game_report(conn, puuid, match_id, coach=coach, tier=args.tier,
-                                 refresh=args.refresh, advisor=_advisor(settings))
+                                 refresh=args.refresh, advisor=_advisor(settings),
+                                 lane_model=_lane_model(settings))
         else:
             result = recent_report(conn, puuid, games=args.games, coach=coach, tier=args.tier,
                                    refresh=args.refresh, queue_id=parse_queues(args.queues))
@@ -510,6 +523,44 @@ def cmd_vision(settings: Settings, args: argparse.Namespace) -> int:
               f"{s['error_mean']}, 90th percentile {s['error_p90']} health points")
         return 0
 
+    if args.lane:
+        from riftwatch.vision import clock, lane
+
+        if args.game_offset is None:
+            found = clock.video_offset(args.video)
+            if found is None or found[1] < 0.5:
+                raise ValueError("couldn't read the game clock in this video; pass --game-offset "
+                                 "(game time at the video's 0:00, in seconds)")
+            args.game_offset = round(found[0], 1)
+            print(f"game clock: game time = video time {args.game_offset:+.1f} s "
+                  f"({100 * found[1]:.0f}% of clock readings agree)")
+        until = lane.LANE_END_S if args.until is None else args.until * 60
+        rows = video.scan(args.video, fps=4, extra=lane.frame_extra, progress=print,
+                          end_s=max(0.0, until - args.game_offset))
+        report = lane.trades(lane.samples(rows, game_offset=args.game_offset), until=until)
+        s = report.summary()
+        print(f"Laning until {until // 60:.0f}:00 game time: {s['trades']} trades "
+              f"({s['won']} won, {s['lost']} lost, {s['even']} even), "
+              f"{s['skirmishes']} skirmishes with another enemy close")
+        if s["trades"]:
+            print(f"  net per trade {s['net_per_trade']:+.1f} health points; you started "
+                  f"{s['you_started']} and won {s['won_when_you_started']} of those")
+        print(f"  within trading range of your opponent {100 * s['in_range_share']:.0f}% of "
+              "the time they were on screen")
+        for label, key in (("bigger wave", "with_minion_advantage"),
+                           ("smaller wave", "with_minion_disadvantage")):
+            tally = s[key]
+            if tally["trades"]:
+                print(f"  with the {label} (2+ minions): {tally['trades']} trades, "
+                      f"{tally['won']} won, {tally['lost']} lost")
+        for t in report.trades:
+            m, sec = divmod(int(t.start), 60)
+            edge = "" if t.minion_edge is None else f"  minions {t.minion_edge:+d}"
+            print(f"  {m:>2}:{sec:02d}  you -{100 * t.me_lost:3.0f}  them -{100 * t.opponent_lost:3.0f}"
+                  f"  {t.result:<5} started by {t.started_by}{edge}"
+                  f"{'  (skirmish)' if t.skirmish else ''}")
+        return 0
+
     if args.frame is not None:
         # One frame with every detected bar boxed: for checking and tuning the detector.
         cap = cv2.VideoCapture(args.video)
@@ -549,6 +600,64 @@ def cmd_vision(settings: Settings, args: argparse.Namespace) -> int:
         print(f"  your own bar vs the recorder: read in {100 * report.own_coverage:.0f}% of "
               f"alive seconds, average error {error}")
     print(f"  per-second results: {out}")
+    return 0
+
+
+def cmd_videos(settings: Settings, args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from riftwatch.vision import library
+
+    with connect(settings.database_url) as conn:
+        if args.videos_command == "add":
+            added, known = library.add(
+                conn, [Path(p) for p in args.paths], view=args.view, match_id=args.match,
+                overrides={"champion": args.champion, "opponent": args.opponent,
+                           "role": args.role and args.role.upper(), "tier": args.tier and args.tier.upper()})
+            print(f"{added} video(s) added, {known} already in the library")
+        elif args.videos_command == "process":
+            done, failed = library.process(conn, limit=args.limit, progress=print)
+            print(f"{done} video(s) processed, {len(failed)} failed")
+            for path, error in failed:
+                print(f"  {Path(path).name}: {error}")
+        elif args.videos_command == "list":
+            for row in conn.execute(
+                    """SELECT id, status, view, champion, opponent, role, tier, patch,
+                              game_offset_s, (SELECT count(*) FROM video_trades t WHERE t.video_id = v.id),
+                              title, error FROM videos v ORDER BY id"""):
+                (vid, status, view, champ, opp, role, tier, patch, offset, trades, title, error) = row
+                who = f"{champ or '?'} vs {opp or '?'} {role or ''} {tier or ''} {patch or ''}".strip()
+                extra = (f"offset {offset:+.1f}s, {trades} trades" if status == "done"
+                         else (error or ""))
+                print(f"  {vid:>4} {status:<7} {view:<9} {who:<45} {extra}")
+        elif args.videos_command == "stats":
+            st = library.stats(conn, role=args.role and args.role.upper(), champion=args.champion,
+                               tier=args.tier and args.tier.upper())
+            print(f"{st.group}: {st.videos} video(s), {st.lane_minutes:.0f} minutes of laning")
+            if st.trades:
+                print(f"  {st.trades} trades ({st.trades_per_10_min:.1f} per 10 minutes); "
+                      f"won {st.won}, lost {st.lost}; net {st.net_per_trade:+.1f} health points "
+                      f"per trade; the player started {100 * st.started_share:.0f}%")
+                for label, (won, n) in (("bigger wave", st.won_with_edge),
+                                        ("smaller wave", st.won_without_edge)):
+                    if n:
+                        print(f"  with the {label}: won {won} of {n}")
+        elif args.videos_command == "dataset":
+            from riftwatch.vision import learn
+
+            df = learn.to_frame(learn.situations(conn))
+            out = Path(args.out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            df.to_parquet(out) if out.suffix == ".parquet" else df.to_csv(out, index=False)
+            n_videos = df["video_id"].nunique() if len(df) else 0
+            rate = f", trade taken in {100 * df['started'].mean():.1f}%" if len(df) else ""
+            print(f"{len(df)} situations from {n_videos} video(s){rate} -> {out}")
+        elif args.videos_command == "train":
+            from riftwatch.vision import learn
+
+            metrics = learn.train(conn, Path(settings.models_dir))
+            for k, v in metrics.items():
+                print(f"  {k:<24} {v}")
     return 0
 
 
@@ -745,11 +854,42 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--fps", type=float, default=2.0, help="frames read per second (default 2)")
     p.add_argument("--frame", type=float, help="just one frame at this many seconds: saves it "
                                                "with detected bars boxed, for checking")
+    p.add_argument("--lane", action="store_true",
+                   help="trades with your lane opponent and spacing, from the laning phase")
+    p.add_argument("--game-offset", type=float,
+                   help="game time at the video's 0:00, in seconds (default: read off the game clock)")
+    p.add_argument("--until", type=float, help="end of laning in game minutes (default 14)")
     p.add_argument("--check-panel", action="store_true",
                    help="replay/spectator footage: measure the reader against the HUD panel's "
                         "health for the followed champion")
     p.add_argument("--out", default="out/vision", help="where results go")
     p.set_defaults(func=cmd_vision)
+
+    videos = sub.add_parser("videos", help="the gameplay video library: add, process, learn from")
+    vsub = videos.add_subparsers(dest="videos_command", required=True)
+    p = vsub.add_parser("add", help="register video files or folders")
+    p.add_argument("paths", nargs="+")
+    p.add_argument("--view", choices=["spectator", "player"], default="spectator",
+                   help="spectator: replays (the default); player: your own games")
+    p.add_argument("--match", help="the Riot match id (your own games)")
+    p.add_argument("--champion", help="the followed champion, if not in the file name")
+    p.add_argument("--opponent")
+    p.add_argument("--role")
+    p.add_argument("--tier")
+    p.set_defaults(func=cmd_videos)
+    p = vsub.add_parser("process", help="read clocks and analyse laning for new or outdated videos")
+    p.add_argument("--limit", type=int)
+    p.set_defaults(func=cmd_videos)
+    vsub.add_parser("list", help="every video and its state").set_defaults(func=cmd_videos)
+    p = vsub.add_parser("stats", help="how the library's players trade in lane")
+    p.add_argument("--role")
+    p.add_argument("--champion")
+    p.add_argument("--tier")
+    p.set_defaults(func=cmd_videos)
+    p = vsub.add_parser("dataset", help="export laning situations for training")
+    p.add_argument("--out", default="out/ml/data/lane_situations.parquet")
+    p.set_defaults(func=cmd_videos)
+    vsub.add_parser("train", help="train the laning decision and outcome models").set_defaults(func=cmd_videos)
 
     p = sub.add_parser("eval-coach", help="measure the coach's grounding, faithfulness and cost on sampled games")
     p.add_argument("--games", type=int, default=20, help="games to sample (default 20)")

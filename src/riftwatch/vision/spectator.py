@@ -28,21 +28,23 @@ FULL_PERCENTILE = 97           # the panel's full width: the long end of the fil
 
 
 def panel_fill(frame_bgr: np.ndarray) -> int | None:
-    """Length in px of the green fill on the HUD panel's health bar; None if not shown."""
+    """Length in px of the green fill on the HUD panel's health bar; None if not shown.
+
+    The fill ends at the last *green* pixel: the "1107 / 1209" drawn over the bar is white,
+    so measuring by brightness would run on through the digits whenever the fill ends under
+    them. A few rows are read, because a digit's stroke can cover one."""
     import cv2
 
     h, w = frame_bgr.shape[:2]
     y = round(PANEL_ROW * h)
     x0, x1 = round(PANEL_X[0] * w), round(PANEL_X[1] * w)
-    row = cv2.cvtColor(frame_bgr[y:y + 1, x0:x1], cv2.COLOR_BGR2HSV)[0]
-    green = (row[:, 0] >= 40) & (row[:, 0] <= 85) & (row[:, 1] >= 90) & (row[:, 2] >= 110)
-    found = np.flatnonzero(green)
-    if len(found) == 0:
+    rows = cv2.cvtColor(frame_bgr[y - 2:y + 3, x0:x1], cv2.COLOR_BGR2HSV)
+    green = ((rows[..., 0] >= 40) & (rows[..., 0] <= 85) & (rows[..., 1] >= 90)
+             & (rows[..., 2] >= 110))
+    columns = np.flatnonzero(green.any(axis=0))
+    if len(columns) < 2:
         return None
-    start = pos = int(found[0])
-    while pos < len(row) and row[pos, 2] > 80:      # bright: the fill, or the digits on it
-        pos += 1
-    return pos - start
+    return int(columns[-1] - columns[0] + 1)
 
 
 def _nearest(bars: list[Bar], target: tuple[float, float]) -> Bar | None:
