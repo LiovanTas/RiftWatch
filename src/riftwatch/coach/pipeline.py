@@ -283,7 +283,7 @@ def _scored_games(
     return [hit for m in ids if (hit := found[m]) is not None and hit is not _MISSING]
 
 
-def _video_evidence(conn, evidence: EvidenceSet, match_id: str, lane_model) -> None:
+def _video_evidence(conn, evidence: EvidenceSet, match_id: str, brain) -> None:
     from riftwatch.coach.evidence import add_video_evidence
     from riftwatch.vision import library
 
@@ -293,7 +293,12 @@ def _video_evidence(conn, evidence: EvidenceSet, match_id: str, lane_model) -> N
     stats = library.stats(conn, role=mine.role) if mine.role else None
     if stats is not None and stats.videos < library.MIN_LIBRARY_VIDEOS:
         stats = None
-    add_video_evidence(evidence, mine, stats, lane_model)
+    judged = None
+    if brain is not None:
+        from riftwatch.brain.review import review
+
+        judged = review(conn, brain, mine.video_id)
+    add_video_evidence(evidence, mine, stats, judged)
 
 
 def _score(conn, game: GameFeatures, p: ParticipantFeatures, bucket: str, min_n: int) -> GameScore:
@@ -313,9 +318,9 @@ def game_report(
     min_n: int = 20,
     generate: bool = True,
     advisor=None,
-    lane_model=None,
+    brain=None,
 ) -> CoachResult:
-    """``lane_model`` (vision.learn.load) adds the laning model's view of the player's own
+    """``brain`` (brain.registry.load) adds the laning brain's view of the player's own
     gameplay video, when one is processed for this match."""
     game = _game(conn, match_id)
     p = game.by_puuid(puuid)
@@ -333,7 +338,7 @@ def game_report(
         if raw_match and raw_timeline:
             review = advisor.review(raw_match, raw_timeline, puuid)
     evidence = game_evidence(game, score, live=live, review=review)
-    _video_evidence(conn, evidence, match_id, lane_model)
+    _video_evidence(conn, evidence, match_id, brain)
     output, model, cached, dropped, usage, pending = _coach(
         conn, coach, puuid, "game", match_id, evidence, "this single game", refresh, p.role,
         generate)

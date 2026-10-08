@@ -287,8 +287,7 @@ class PlayerLane:
     """A player's laning from their own processed video of one match."""
     video_id: int
     role: str | None
-    trades: list[tuple]                      # (start, me_lost, opp_lost, started_by, edge, result)
-    situations: list[dict]                   # learn features at each trade the player started
+    trades: list[tuple]      # (start, me_lost, opp_lost, started_by, edge, result, died, back_s)
 
     def summary(self) -> dict:
         n = len(self.trades)
@@ -303,8 +302,6 @@ class PlayerLane:
 
 def player_lane(conn: psycopg.Connection, match_id: str) -> PlayerLane | None:
     """The player's processed video of ``match_id`` (view "player"), if there is one."""
-    from riftwatch.vision import learn
-
     row = conn.execute(
         "SELECT id, role FROM videos WHERE match_id = %s AND view = 'player' AND status = 'done' "
         "ORDER BY processed_at DESC LIMIT 1", (match_id,)).fetchone()
@@ -316,16 +313,4 @@ def player_lane(conn: psycopg.Connection, match_id: str) -> PlayerLane | None:
                   back_after_s
              FROM video_trades WHERE video_id = %s AND NOT skirmish ORDER BY start_s""",
         (video_id,)).fetchall()
-    situations = []
-    for start, *_rest in [t for t in trades if t[3] in ("you", "both")]:
-        s = conn.execute(
-            """SELECT t, me, opponent, distance, others, my_minions, their_minions, mana,
-                      ready, level, depth
-                 FROM video_samples WHERE video_id = %s AND t < %s AND me IS NOT NULL
-                  AND opponent IS NOT NULL AND distance IS NOT NULL
-                ORDER BY t DESC LIMIT 1""", (video_id, start)).fetchone()
-        if s is not None:
-            t, me, opp, dist, others, mine, theirs, mana, ready, level, dep = s
-            situations.append(learn._features(t, me, opp, dist, mine, theirs, others, role,
-                                              mana=mana, ready=ready, level=level, depth=dep))
-    return PlayerLane(video_id, role, [tuple(t) for t in trades], situations)
+    return PlayerLane(video_id, role, [tuple(t) for t in trades])

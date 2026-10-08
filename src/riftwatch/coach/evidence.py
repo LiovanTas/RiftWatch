@@ -274,47 +274,51 @@ def _ultimate_line(library) -> str:
             f"(level 6 or later) {down_won} of {down}")
 
 
-def add_video_evidence(evidence: EvidenceSet, mine, library=None, model=None) -> None:
-    """Laning from the player's own gameplay video of this game, against the high-elo video
-    library and the laning model when there are enough games behind them."""
+def add_video_evidence(evidence: EvidenceSet, mine, library=None, review=None) -> None:
+    """Laning from the player's own gameplay video of this game: their trades, the high-elo
+    video library's when it has enough games, and the laning brain's view (brain.review)."""
     s = mine.summary()
-    if not s["trades"]:
-        return
-    items = [("pattern", "laning", "neutral",
-              f"From the player's gameplay video of this game, laning until 14:00: {s['trades']} "
-              f"trades with the lane opponent -- {s['won']} won, {s['lost']} lost, {s['even']} "
-              f"even (won means taking at least 5 health points more than they lost); net "
-              f"{s['net']:+.1f} health points per trade; the player started {s['started']} of "
-              f"them" + (f"; {s['back_after']} were followed by going back to base within 45 "
+    items: list[tuple] = []
+    if s["trades"]:
+        items.append(("pattern", "laning", "neutral",
+                      f"From the player's gameplay video of this game, laning until 14:00: "
+                      f"{s['trades']} trades with the lane opponent -- {s['won']} won, {s['lost']} "
+                      f"lost, {s['even']} even (won means taking at least 5 health points more than "
+                      f"they lost); net {s['net']:+.1f} health points per trade; the player started "
+                      f"{s['started']} of them"
+                      + (f"; {s['back_after']} were followed by going back to base within 45 "
                          f"seconds and {s['died_after']} by the player's death within 10 seconds"
-                         if s.get("back_after") or s.get("died_after") else "") + ".", 5.0)]
-    if library is not None and library.trades:
-        worse = s["net"] < library.net_per_trade - 5
-        items.append(("pattern", "laning", "weakness" if worse else "neutral",
-                      f"High-elo {(mine.role or 'laners').lower()} players in the video library "
-                      f"({library.videos} games): {library.trades_per_10_min:.1f} trades per 10 "
-                      f"minutes of laning, won {library.won} and lost {library.lost} of "
-                      f"{library.trades}, net {library.net_per_trade:+.1f} health points per "
-                      f"trade" + _ultimate_line(library) + ".",
-                      abs(s["net"] - library.net_per_trade)))
-    if model is not None and mine.situations and model.get("outcome") is not None:
-        from riftwatch.vision.learn import judge
-
-        expected = [net for _, net in judge(model, mine.situations) if net is not None]
-        started = [t for t in mine.trades if t[3] in ("you", "both")]
-        if expected and started:
-            exp = 100 * sum(expected) / len(expected)
-            got = 100 * sum(t[2] - t[1] for t in started) / len(started)
-            items.append(("pattern", "laning", "weakness" if got < exp - 5 else "neutral",
-                          f"From the spots where the player started trades, the laning model "
-                          f"(trained on high-elo videos) expected a net of {exp:+.1f} health "
-                          f"points per trade; the player's trades from those spots netted "
-                          f"{got:+.1f}.", abs(got - exp)))
+                         if s.get("back_after") or s.get("died_after") else "") + ".", 5.0, {}))
+        if library is not None and library.trades:
+            worse = s["net"] < library.net_per_trade - 5
+            items.append(("pattern", "laning", "weakness" if worse else "neutral",
+                          f"High-elo {(mine.role or 'laners').lower()} players in the video library "
+                          f"({library.videos} games): {library.trades_per_10_min:.1f} trades per 10 "
+                          f"minutes of laning, won {library.won} and lost {library.lost} of "
+                          f"{library.trades}, net {library.net_per_trade:+.1f} health points per "
+                          f"trade" + _ultimate_line(library) + ".",
+                          abs(s["net"] - library.net_per_trade), {}))
+    if review is not None:
+        summary = review.summary_text()
+        if summary:
+            style = review.style
+            summary += {"passive": " That is fewer than half as many as high-elo players.",
+                        "aggressive": " That is more than twice as many as high-elo players.",
+                        None: ""}[style]
+            items.append(("pattern", "laning", "weakness" if style else "neutral", summary,
+                          abs(review.trades - review.expected_trades), {"brain": review.brain_version}))
+        for m in review.moments:
+            items.append(("decision", "laning", m.polarity, m.text, 5 + m.impact / 5,
+                          {"moment": m.kind, "t": round(m.t, 1)}))
+        if review.patterns and (summary or review.moments):
+            items.append(("pattern", "laning", "neutral",
+                          "What the laning brain learned from high-elo games: "
+                          + " ".join(p["text"] for p in review.patterns[:3]), 2.0, {}))
     n = len(evidence.items)
-    for kind, area, polarity, text, severity in items:
+    for kind, area, polarity, text, severity, data in items:
         n += 1
         evidence.items.append(Evidence(f"E{n}", kind, area, polarity, text, severity=severity,
-                                       data={"source": "video"}))
+                                       data={"source": "video", **data}))
 
 
 def add_session_evidence(evidence: EvidenceSet, report) -> None:

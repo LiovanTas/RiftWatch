@@ -88,8 +88,8 @@ def fake_video(conn, vid, role="TOP", view="spectator", match_id=None, seed=0):
         cur.executemany("INSERT INTO video_trades VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)", trades)
 
 
-def test_stats_situations_and_training_find_the_pattern(conn, tmp_path):
-    from riftwatch.vision import learn, library
+def test_stats_sum_up_the_librarys_trades(conn):
+    from riftwatch.vision import library
 
     for vid in range(1, 9):
         fake_video(conn, vid, seed=vid)
@@ -97,32 +97,13 @@ def test_stats_situations_and_training_find_the_pattern(conn, tmp_path):
     assert st.videos == 8 and st.trades > 50 and st.started_share == 1.0
     assert st.won + st.lost == st.trades and 5 < st.trades_per_10_min < 400
 
-    rows = learn.situations(conn)
-    assert {r.video_id for r in rows} == set(range(1, 9))
-    taken = [r for r in rows if r.started]
-    assert taken and all(r.net is not None for r in taken)
-    ahead_rate = sum(r.started for r in rows if r.features["hp_diff"] > 0.15) / \
-        max(1, sum(r.features["hp_diff"] > 0.15 for r in rows))
-    assert ahead_rate > 0.3
 
-    metrics = learn.train(conn, tmp_path)
-    assert metrics["videos"] == 8 and metrics["test_videos"] >= 1
-    assert metrics["decision_logloss"] < metrics["decision_logloss_base"]   # beats the base rate
-    model = learn.load(tmp_path)
-    (p_ahead, net_ahead), (p_behind, net_behind) = learn.judge(model, [
-        learn._features(300, 0.9, 0.4, 0.2, 3, 3, 0, "TOP"),
-        learn._features(300, 0.4, 0.9, 0.2, 3, 3, 0, "TOP")])
-    assert p_ahead > p_behind and net_ahead > net_behind
-
-
-def test_hud_fields_reach_the_stats_and_the_models(conn, tmp_path):
-    from riftwatch.vision import learn, library
+def test_hud_fields_reach_the_stats(conn):
+    from riftwatch.vision import library
 
     for vid in range(1, 7):
         fake_video(conn, vid, seed=vid)
     # Ultimate up early in each game, down later; trades lost were followed by a recall.
-    conn.execute("UPDATE video_samples SET mana = 0.6, level = 7, depth = 0.1, "
-                 "ready = CASE WHEN t < 480 THEN 15 ELSE 7 END")
     conn.execute("UPDATE video_trades SET level = 7, died = false, "
                  "ready = CASE WHEN start_s < 480 THEN 15 ELSE 7 END")
     conn.execute("UPDATE video_trades SET back_after_s = 25 WHERE result = 'lost'")
@@ -131,54 +112,20 @@ def test_hud_fields_reach_the_stats_and_the_models(conn, tmp_path):
     assert st.won_ultimate_ready[1] > 0 and st.won_ultimate_down[1] > 0
     assert st.back_after == st.lost and st.died_after == 0
 
-    rows = learn.situations(conn)
-    early = next(r for r in rows if r.t < 480)
-    assert early.features["mana"] == 0.6 and early.features["level"] == 7
-    assert early.features["r_ready"] == 1.0 and early.features["d_ready"] == 0.0
-    taken = [r for r in rows if r.started]
-    assert any(r.back for r in taken) and not any(r.died for r in taken)
-    metrics = learn.train(conn, tmp_path)
-    model = learn.load(tmp_path)
-    assert "r_ready" in model["features"] and metrics["videos"] == 6
-    # A situation from a video without the panel still gets judged.
-    (p, _), = learn.judge(model, [learn._features(300, 0.9, 0.4, 0.2, 3, 3, 0, "TOP")])
-    assert 0 <= p <= 1
 
-
-def test_features_never_seen_are_left_out_of_training(conn, tmp_path):
-    from riftwatch.vision import learn
-
-    for vid in range(1, 7):
-        fake_video(conn, vid, seed=vid)        # no panel or map anywhere (all unknown)
-    learn.train(conn, tmp_path)
-    model = learn.load(tmp_path)
-    assert "mana" not in model["features"] and "hp_diff" in model["features"]
-
-
-def test_training_refuses_with_too_few_videos(conn, tmp_path):
-    from riftwatch.vision import learn
-
-    fake_video(conn, 1)
-    with pytest.raises(ValueError, match="need at least"):
-        learn.train(conn, tmp_path)
-
-
-def test_coach_gets_the_players_video_against_the_library(conn, tmp_path):
+def test_coach_gets_the_players_video_against_the_library(conn):
     from riftwatch.coach.evidence import Evidence, EvidenceSet
     from riftwatch.coach.pipeline import _video_evidence
-    from riftwatch.vision import learn
 
     for vid in range(1, 7):
         fake_video(conn, vid, seed=vid)
-    learn.train(conn, tmp_path)
     fake_video(conn, 99, view="player", match_id="NA1_777", seed=42)
     ev = EvidenceSet([Evidence("E1", "context", "context", "neutral", "Game NA1_777.")])
-    _video_evidence(conn, ev, "NA1_777", learn.load(tmp_path))
+    _video_evidence(conn, ev, "NA1_777", None)
     texts = [e.text for e in ev.items[1:]]
-    assert len(texts) == 3 and [e.id for e in ev.items] == ["E1", "E2", "E3", "E4"]
+    assert len(texts) == 2 and [e.id for e in ev.items] == ["E1", "E2", "E3"]
     assert texts[0].startswith("From the player's gameplay video of this game")
     assert "High-elo top players in the video library (6 games)" in texts[1]
-    assert "laning model" in texts[2]
     # No video for a match: no evidence, nothing breaks.
     before = len(ev.items)
     _video_evidence(conn, ev, "NA1_000", None)

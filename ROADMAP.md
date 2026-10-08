@@ -93,6 +93,12 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
 - [x] Replay HUD panel and minimap: mana, level, which abilities and summoner spells are ready,
       map position, lane depth, in base, dead; each trade's starting state and what followed
       (death, forced recall, opponent leaving low), in the stats, the models and the coach
+- [x] **The laning brain** (`riftwatch brain`): 40 features in 14 groups with recent history,
+      seven heads (trade policy, threat, trade outcome and net, health swing, death, recall),
+      grouped cross-validation, trees vs neural network selection, usable-only-if-it-beats-base,
+      Platt calibration, bagged ensembles, role models, importance, learning curve, patterns in
+      words, versioned registry, video review with key moments and reasons, coach evidence
+- [ ] A sequence model (transformer over the raw readings) once the library has a few hundred games
 - [ ] Fill the library: high-elo videos per role (and your own games, linked to their matches);
       then tie bars to champions and read the player-view HUD clock
 

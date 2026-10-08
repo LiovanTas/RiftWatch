@@ -491,8 +491,6 @@ riftwatch videos add "D:/replays"              # register a folder (or files); s
 riftwatch videos process                       # clock, laning scan, trades -- new or outdated videos
 riftwatch videos list
 riftwatch videos stats --role top              # how the library's players trade
-riftwatch videos dataset                       # laning situations -> out/ml/data/lane_situations.parquet
-riftwatch videos train                         # the laning models (needs 5+ processed games)
 riftwatch videos add mygame.mp4 --view player --match NA1_5653891812   # your own game
 ```
 
@@ -503,19 +501,88 @@ phase four times a second, and stores every moment and every trade in Postgres. 
 versioned: when the analysis improves, every video is re-processed, so the training data never
 mixes old and new readings.
 
-Every moment a player stands within trading range of their opponent, outside a trade, is a
-situation (time, both health bars, distance, minions on each side, other enemies close, and
-from replays mana, level, lane depth and which abilities and summoner spells are ready;
-anything a video doesn't show is left unknown for the models, and a feature no video shows is
-left out). Two
-models are learned from them: whether a high-elo player starts a trade from a spot like this,
-and how the trades they start go. Whole games are held out for testing, and each model has to
-beat the plain base rate; `train` refuses with fewer than five games.
+## The laning brain
 
-When one of your own game videos is processed and linked to its match, the coach's review of
-that game gets three more evidence items: your trades from the video, how high-elo players in
-your role trade in the library (once it has five of their games), and what the model expected
-from the spots where you started trades against how yours went.
+```bash
+riftwatch brain check                  # which videos are fit to learn from, and why not
+riftwatch brain train                  # cross-validate, select, calibrate, bag, explain, save
+riftwatch brain status                 # the current brain: every head's held-out score
+riftwatch brain explain                # model comparison, importance, learning curve, patterns
+riftwatch brain review 12              # judge one processed video's laning
+riftwatch brain list                   # every saved brain; brain use <version> to switch back
+riftwatch brain dataset                # the situations with features and labels, for your own analysis
+```
+
+The brain is what RiftWatch learns from high-elo replays (`src/riftwatch/brain/`). Every
+moment a player stands within trading range of their lane opponent, outside a trade, is a
+*situation* -- about 150 per game on the training replay. Each one carries 40 features in 14
+groups: both health bars and the gap, spacing (distance, closing in or apart, seconds in
+range), the wave, other enemies close by, momentum (who lost health in the last 3 and 10
+seconds), history (seconds since the last trade, how it went, the game's trades so far), and
+from replays mana, which abilities and summoner spells are ready, the level and seconds since
+the last level-up, and lane depth; plus role and champion. Only the past goes into a
+situation's features.
+
+Seven heads answer questions about a situation:
+
+| Head | Question |
+|---|---|
+| `trade` | does a high-elo player start a trade within the next second? (the policy) |
+| `traded_on` | does their opponent start one on them? (the threat) |
+| `trade_won`, `trade_net` | for trades started from here: won or not, net health |
+| `swing_10s` | how the health difference moves over the next 10 seconds |
+| `died_15s`, `back_45s` | dying within 15 s; back in base within 45 s |
+
+Training (`brain train`) works like this:
+
+- **Held-out games.** Every head is judged by grouped cross-validation: each game's
+  situations are predicted by models that never saw that game, and every game weighs the same.
+- **Model selection.** Gradient-boosted trees at three settings and a neural network (a
+  two-layer perceptron) compete on held-out loss for each head, and the card records every
+  candidate's score.
+- **Usable or not.** A head is usable only if it beats the base rate by at least 1% and does so
+  in most folds. The coach never quotes a head that isn't usable.
+- **Calibration and bagging.** Probabilities are calibrated (Platt scaling). Candidates are
+  compared, and heads judged, after cross-fitted calibration: each fold is calibrated on the
+  others only. The final model is an ensemble over games resampled with replacement, whose
+  spread is the brain's uncertainty.
+- **Two variants.** Full features are used for replays. Basic features (no HUD panel or
+  minimap) are used to judge your own recordings.
+- **Role models.** A role gets its own model once it has 10 games, and keeps it only if it beats
+  the pooled model on that role's games.
+- **What it learned.** Feature-group permutation importance, a learning curve (is more video
+  still helping?), and patterns in plain words. Patterns are controlled comparisons, e.g.
+  "high-elo players start trades 2.1x as often with the ultimate ready as with it on cooldown,
+  other things equal". A pattern is kept only if every bagged model agrees, its feature group
+  improves held-out predictions in most folds, and the raw data doesn't point the other way.
+
+Every trained brain is kept under `out/ml/models/brain/<version>/` with a model card
+(`card.json`). The newest becomes current, and `brain use` switches back. Training refuses
+with fewer than five games.
+
+On a synthetic library of 8 games with planted habits, the brain recovered every habit and
+nothing else. The planted habits: trade when ahead on health, with the ultimate up, or with
+the bigger wave, and win more of the trades started ahead or with the ultimate up. It found
+3.1x, 2.1x and 1.7x as many trades, and 74% vs 58% and 72% vs 60% of trades won. It marked the
+heads with no planted signal (threat, trade net, health swing) as unusable. A pattern from a
+feature with no real effect ("another enemy close by", 1.3x) was caught by the held-out
+importance gate. The full training took 100 seconds on a 16-core PC: 5 folds, 5 candidates,
+5 bags, 14 head/variant pairs, run side by side in worker processes.
+
+`brain review` and the coach judge one of your processed game videos. They compare how many
+trades high-elo players would have started in the spots you stood in with how many you did,
+and find key moments, each with the reasons behind the brain's view:
+
+- trades high-elo players would have taken that you didn't
+- trades you started from spots they rarely trade from, which went badly
+- trades the opponent started after seconds the brain rated as dangerous
+- trades you started and died right after
+
+When your video is linked to its match, the coach's review of that game gets these as evidence
+next to your trades from the video and the library's stats.
+
+Trees and a small network suit a library of tens of games. A sequence model (a transformer
+over the raw four-a-second readings) becomes worth adding with a few hundred.
 
 ## Live-game scouting
 

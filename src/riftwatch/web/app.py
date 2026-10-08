@@ -114,11 +114,11 @@ def create_app(
         from riftwatch.ml.advisor import Advisor
 
         advisor = Advisor(Path(settings.models_dir))
-    lane_model = None
-    if (Path(settings.models_dir) / "lane_trades.joblib").exists():
-        from riftwatch.vision import learn
+    brain = None
+    if (Path(settings.models_dir) / "brain" / "CURRENT").exists():
+        from riftwatch.brain import registry
 
-        lane_model = learn.load(Path(settings.models_dir))
+        brain = registry.load(settings.models_dir)
     owns_pool = pool is None
     pool = pool or ConnectionPool(
         settings.database_url, min_size=1, max_size=8, open=False,
@@ -350,7 +350,7 @@ def create_app(
             account = account_or_404(conn, region, riot_id)
             result = game_report(conn, account["puuid"], match_id, coach=coach,
                                  generate=generate, advisor=advisor,
-                                 lane_model=lane_model)
+                                 brain=brain)
             return serialize.game_review(result)
 
     @app.get("/api/players/{region}/{riot_id}/matches/{match_id}")
@@ -384,7 +384,7 @@ def create_app(
                 with pool.connection() as conn:
                     result = game_report(conn, account["puuid"], match_id, coach=coach,
                                          generate=False, advisor=advisor,
-                                         lane_model=lane_model)
+                                         brain=brain)
                     for event in stream_coaching(conn, result, coach, "this single game"):
                         yield f"data: {json.dumps(event)}\n\n"
             except (CoachError, ReportError) as exc:
@@ -464,7 +464,7 @@ def create_app(
         with pool.connection() as conn:
             account = account_or_404(conn, region, riot_id)
             result = game_report(conn, account["puuid"], match_id, coach=coach, generate=False,
-                                 advisor=advisor, lane_model=lane_model)
+                                 advisor=advisor, brain=brain)
         coach_url = (f"/api/players/{region}/{riot_id}/matches/{match_id}/coach/stream"
                      if coach is not None else None)
         links = [("RiftWatch", "/"),

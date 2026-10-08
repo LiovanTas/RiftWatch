@@ -352,14 +352,12 @@ def _advisor(settings: Settings):
     return Advisor(directory)
 
 
-def _lane_model(settings: Settings):
-    """The laning model trained on the video library, if one has been trained."""
-    from pathlib import Path
-
+def _brain(settings: Settings):
+    """The current laning brain trained on the video library, if one has been trained."""
     try:
-        from riftwatch.vision import learn
+        from riftwatch.brain import registry
 
-        return learn.load(Path(settings.models_dir))
+        return registry.load(settings.models_dir)
     except ImportError:
         return None
 
@@ -386,7 +384,7 @@ def cmd_coach(settings: Settings, args: argparse.Namespace) -> int:
                 raise ReportError("no cached games for this player -- run sync first")
             result = game_report(conn, puuid, match_id, coach=coach, tier=args.tier,
                                  refresh=args.refresh, advisor=_advisor(settings),
-                                 lane_model=_lane_model(settings))
+                                 brain=_brain(settings))
         else:
             result = recent_report(conn, puuid, games=args.games, coach=coach, tier=args.tier,
                                    refresh=args.refresh, queue_id=parse_queues(args.queues))
@@ -660,22 +658,145 @@ def cmd_videos(settings: Settings, args: argparse.Namespace) -> int:
                 if st.died_after or st.back_after:
                     print(f"  followed by a death within 10 s: {st.died_after}; by going back "
                           f"to base within 45 s: {st.back_after}")
-        elif args.videos_command == "dataset":
-            from riftwatch.vision import learn
+    return 0
 
-            df = learn.to_frame(learn.situations(conn))
+
+def _unit_score(u: dict) -> str:
+    m = u["metrics"]
+    if u["skipped"]:
+        return f"skipped: {u['skipped']}"
+    if "log_loss" in m:
+        score = (f"log loss {m['log_loss']:.4f} vs {m['base_log_loss']:.4f} base"
+                 + (f", AUC {m['auc']:.3f}" if "auc" in m else "") + f", ECE {m['ece']:.3f}")
+    else:
+        score = (f"RMSE {100 * m['rmse']:.1f} vs {100 * m['base_rmse']:.1f} base (health points), "
+                 f"R2 {m['r2']:+.3f}")
+    return (f"{u['family']:<6} {score}; better in {m['folds_better']}/{m['folds']} folds"
+            f" -> {'USABLE' if u['usable'] else 'not usable'}")
+
+
+def _print_brain(card: dict, detail: bool) -> None:
+    d = card["data"]
+    roles = ", ".join(f"{r.lower()} {n}" for r, n in d.get("roles", {}).items())
+    print(f"brain {card['version']} (trained {card['created']}, {d.get('seconds')} s): "
+          f"{d['games']} games, {d['situations']} situations ({roles}); analyser v{d['analyzer_version']}")
+    if card.get("excluded"):
+        print(f"  {len(card['excluded'])} video(s) left out (see: riftwatch brain check)")
+    for u in card["units"]:
+        if u["segment"] != "all":
+            if detail and not u["skipped"]:
+                vs = u["metrics"].get("loss_vs_pooled", {})
+                print(f"    {u['head']}/{u['variant']}/{u['segment'].lower():<8} {_unit_score(u)}"
+                      + (f"; own model {'beats' if u['metrics'].get('beats_pooled') else 'loses to'}"
+                         f" pooled ({vs.get('role')} vs {vs.get('pooled')})" if vs else ""))
+            continue
+        print(f"  {u['head'] + '/' + u['variant']:<20} {_unit_score(u)}")
+        if not detail or u["skipped"]:
+            continue
+        m = u["metrics"]
+        cands = ", ".join(f"{c['family']} {c['loss']:.4f}" for c in m.get("candidates", []))
+        print(f"      candidates (held-out loss): {cands}")
+        imp = [(g, v) for g, v in m.get("importance", {}).items() if v["share"] > 0][:5]
+        if imp:
+            print("      what matters: " + ", ".join(f"{g} {100 * v['share']:.0f}%" for g, v in imp))
+    if detail and card.get("learning_curve"):
+        lc = card["learning_curve"]
+        pts = "; ".join(f"{p['train_games']:g} games -> {p['loss']:.4f} (base {p['base_loss']:.4f})"
+                        for p in lc["points"])
+        print(f"  learning curve ({lc['head']}): {pts}")
+        print("  more videos " + ("are still helping" if lc["still_improving"]
+                                  else "aren't helping much any more"))
+    if card.get("patterns"):
+        print("  learned:")
+        for p in card["patterns"][: None if detail else 5]:
+            nat = p.get("natural")
+            raw = (f" [raw data: {nat['a']:.3f} over {nat['n_a']} vs {nat['b']:.3f} over "
+                   f"{nat['n_b']}]" if detail and nat else "")
+            print(f"    - {p['text']} (models agree {p['models_agree']}){raw}")
+
+
+def cmd_brain(settings: Settings, args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from riftwatch.brain import registry
+
+    models = Path(settings.models_dir)
+    if args.brain_command == "list":
+        cards = registry.versions(models)
+        if not cards:
+            print("no brain trained yet: riftwatch brain train")
+        for c in cards:
+            usable = sorted({u["head"] for u in c["units"] if u["usable"] and u["segment"] == "all"})
+            print(f"{'*' if c['current'] else ' '} {c['version']}  {c['data']['games']} games, "
+                  f"{c['data']['situations']} situations; usable: {', '.join(usable) or 'none'}")
+        return 0
+    if args.brain_command == "use":
+        registry.use(models, args.version)
+        print(f"now using brain {args.version}")
+        return 0
+    if args.brain_command in ("status", "explain"):
+        version = getattr(args, "version", None) or registry.current(models)
+        cards = [c for c in registry.versions(models) if c["version"] == version]
+        if not cards:
+            print("no brain trained yet: riftwatch brain train")
+            return 0
+        _print_brain(cards[0], detail=args.brain_command == "explain")
+        return 0
+
+    with connect(settings.database_url) as conn:
+        if args.brain_command == "check":
+            from riftwatch.brain.data import check
+
+            checks = check(conn, args.view)
+            for c in checks:
+                state = "ok  " if c.ok else "SKIP"
+                print(f"  {state} {c.video_id:>4} {c.title[:50]:<50} {c.lane_minutes:4.1f} min, "
+                      f"own bar read {100 * c.coverage:3.0f}%, {c.trades} trades")
+                for msg in c.problems + c.warnings:
+                    print(f"         - {msg}")
+            print(f"{sum(c.ok for c in checks)} of {len(checks)} video(s) usable for training")
+        elif args.brain_command == "dataset":
+            from riftwatch.brain.data import LABELS, load
+
+            df = load(conn, view=args.view, min_tier=args.min_tier)
             out = Path(args.out)
             out.parent.mkdir(parents=True, exist_ok=True)
             df.to_parquet(out) if out.suffix == ".parquet" else df.to_csv(out, index=False)
-            n_videos = df["video_id"].nunique() if len(df) else 0
-            rate = f", trade taken in {100 * df['started'].mean():.1f}%" if len(df) else ""
-            print(f"{len(df)} situations from {n_videos} video(s){rate} -> {out}")
-        elif args.videos_command == "train":
-            from riftwatch.vision import learn
+            print(f"{len(df)} situations from {df['video_id'].nunique() if len(df) else 0} "
+                  f"video(s) -> {out}")
+            for label in LABELS:
+                if len(df) and df[label].notna().any():
+                    print(f"  {label:<10} known in {int(df[label].notna().sum()):>7}, "
+                          f"mean {df[label].mean():.4f}")
+        elif args.brain_command == "train":
+            from riftwatch.brain.train import TrainConfig, train
 
-            metrics = learn.train(conn, Path(settings.models_dir))
-            for k, v in metrics.items():
-                print(f"  {k:<24} {v}")
+            cfg = TrainConfig.quick() if args.quick else TrainConfig()
+            for name in ("folds", "bags", "min_tier", "seed"):
+                if getattr(args, name) is not None:
+                    setattr(cfg, name, getattr(args, name))
+            if args.no_search:
+                cfg.search = False
+            if args.trees_only:
+                cfg.families = ("trees",)
+            brain = train(conn, cfg, progress=print)
+            version = registry.save(brain, models, promote=not args.no_promote)
+            print(f"saved brain {version}" + ("" if args.no_promote else " (now current)"))
+            _print_brain(brain.card() | {"version": version}, detail=False)
+        elif args.brain_command == "review":
+            from riftwatch.brain.review import clock, review
+
+            brain = registry.load(models)
+            if brain is None:
+                raise ValueError("no brain trained yet: riftwatch brain train")
+            rv = review(conn, brain, args.video_id)
+            if rv is None:
+                raise ValueError(f"video {args.video_id} has no laning situations")
+            print(f"video {rv.video_id} ({(rv.role or 'role unknown').lower()}), judged by brain "
+                  f"{rv.brain_version} ({rv.variant} features); {rv.situations} situations")
+            print(rv.summary_text() or "the trade head isn't usable yet: no comparison")
+            for m in rv.moments:
+                print(f"  [{m.polarity}] {clock(m.t)} {m.kind}: {m.text}")
     return 0
 
 
@@ -904,10 +1025,39 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--champion")
     p.add_argument("--tier")
     p.set_defaults(func=cmd_videos)
-    p = vsub.add_parser("dataset", help="export laning situations for training")
-    p.add_argument("--out", default="out/ml/data/lane_situations.parquet")
-    p.set_defaults(func=cmd_videos)
-    vsub.add_parser("train", help="train the laning decision and outcome models").set_defaults(func=cmd_videos)
+
+    brain = sub.add_parser("brain", help="the laning brain: learn from the video library, judge videos")
+    bsub = brain.add_subparsers(dest="brain_command", required=True)
+    p = bsub.add_parser("check", help="which videos are fit to train on, and why not")
+    p.add_argument("--view", default="spectator")
+    p.set_defaults(func=cmd_brain)
+    p = bsub.add_parser("dataset", help="export the situations with features and labels")
+    p.add_argument("--out", default="out/ml/data/brain_situations.parquet")
+    p.add_argument("--view", default="spectator")
+    p.add_argument("--min-tier")
+    p.set_defaults(func=cmd_brain)
+    p = bsub.add_parser("train", help="train, cross-validate and save a new brain")
+    p.add_argument("--quick", action="store_true", help="few folds and bags, no search")
+    p.add_argument("--folds", type=int)
+    p.add_argument("--bags", type=int)
+    p.add_argument("--seed", type=int)
+    p.add_argument("--min-tier", help="only videos at or above this tier")
+    p.add_argument("--no-search", action="store_true", help="first setting of each model family only")
+    p.add_argument("--trees-only", action="store_true", help="skip the neural network")
+    p.add_argument("--no-promote", action="store_true", help="save it without making it current")
+    p.set_defaults(func=cmd_brain)
+    bsub.add_parser("list", help="every saved brain").set_defaults(func=cmd_brain)
+    p = bsub.add_parser("status", help="the current brain's heads and scores")
+    p.set_defaults(func=cmd_brain)
+    p = bsub.add_parser("explain", help="scores, model comparison, importance, learning curve, patterns")
+    p.add_argument("version", nargs="?")
+    p.set_defaults(func=cmd_brain)
+    p = bsub.add_parser("use", help="make a saved brain current")
+    p.add_argument("version")
+    p.set_defaults(func=cmd_brain)
+    p = bsub.add_parser("review", help="judge one processed video's laning")
+    p.add_argument("video_id", type=int)
+    p.set_defaults(func=cmd_brain)
 
     p = sub.add_parser("eval-coach", help="measure the coach's grounding, faithfulness and cost on sampled games")
     p.add_argument("--games", type=int, default=20, help="games to sample (default 20)")
