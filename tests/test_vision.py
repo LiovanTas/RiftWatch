@@ -247,3 +247,118 @@ def test_minion_bars_are_found_separately_from_champion_bars():
     assert [b.fraction for b in minions] == pytest.approx([1.0, 0.6, 0.25, 0.8], abs=0.02)
     # Minion bars aren't champion bars (no level box), and the champion still is one.
     assert [(b.team, b.x) for b in find_bars(frame)] == [("enemy", 900)]
+
+
+# The replay HUD panel: bar colours (BGR) inside each bar's hue range, and icon brightness.
+PANEL = {"hp": (60, 180, 40), "mana": (220, 120, 40), "xp": (200, 60, 170)}
+
+
+def panel_frame(hp=1.0, mana=1.0, xp=0.0, cooling=(), seed=0):
+    """A 720p frame with the spectator panel drawn: bars filled to the given shares, ability
+    and summoner icons bright, except those in ``cooling`` (dark with a white countdown)."""
+    from riftwatch.vision import panel
+
+    frame = np.full((720, 1280, 3), 25, np.uint8)
+    x0, x1 = panel.BAR_X
+    for name, share in (("hp", hp), ("mana", mana), ("xp", xp)):
+        _, y0, y1 = panel.BARS[name]
+        if share:
+            frame[y0:y1 + 1, x0:x0 + round(share * (x1 - x0 + 1))] = PANEL[name]
+    rng = np.random.default_rng(seed)
+    for slot, (a, b, c, d) in panel.SLOTS.items():
+        lit = slot not in cooling
+        base = rng.integers(150, 210) if lit else rng.integers(35, 60)
+        frame[b:d + 1, a:c + 1] = (base, base - 15, base - 30)
+        if not lit:                                   # the seconds left, in white
+            cv2.putText(frame, "8", (a + 5, d - 3), cv2.FONT_HERSHEY_PLAIN, 0.9, (255, 255, 255), 1)
+    return frame
+
+
+def test_panel_reads_resources_and_which_abilities_are_ready():
+    from riftwatch.vision import panel
+
+    frames = [panel_frame(0.8, 0.5, 0.25, cooling=("R", "F"), seed=1),
+              panel_frame(0.6, 0.3, 0.4, cooling=("Q",), seed=2),
+              panel_frame(1.0, 1.0, 0.6, seed=3)]
+    readings = [panel.read(f) for f in frames]
+    first = readings[0]
+    assert first.hp == pytest.approx(0.8, abs=0.03) and first.mana == pytest.approx(0.5, abs=0.03)
+    assert first.xp == pytest.approx(0.25, abs=0.03)
+    ready = panel.readiness(readings)
+    assert ready[0] == {"Q": True, "W": True, "E": True, "R": False, "D": True, "F": False}
+    assert ready[1]["Q"] is False and ready[1]["R"] and all(ready[2].values())
+    # No panel (a dead champion's is greyed out): no bars.
+    empty = panel.read(np.full((720, 1280, 3), 25, np.uint8))
+    assert empty.hp is None and empty.mana is None and empty.xp is None
+
+
+def test_panel_scales_with_resolution():
+    from riftwatch.vision import panel
+
+    big = cv2.resize(panel_frame(0.5, 0.75, 0.3), (1920, 1080), interpolation=cv2.INTER_NEAREST)
+    r = panel.read(big)
+    assert r.hp == pytest.approx(0.5, abs=0.03) and r.mana == pytest.approx(0.75, abs=0.03)
+
+
+def test_levels_count_experience_resets_and_ignore_one_misread():
+    from riftwatch.vision.panel import levels
+
+    t = list(range(9))
+    xp = [None, 0.2, 0.6, 0.1, 0.2, 0.7, 0.05, 0.65, 0.9]   # up at 3; 6 is a one-frame blip
+    assert levels(t, xp) == [None, 1, 1, 2, 2, 2, 2, 2, 2]
+    assert levels([0, 1, 2], [0.9, 0.1, 0.2], start_level=18) == [18, 18, 18]
+
+
+def minimap_frame(cx, cy, icon=None, seed=0):
+    """A 720p frame whose minimap shows the camera rectangle centred at map pixel (cx, cy)
+    (from the map's top left), 1 px white lines, clipped by the map's edges; ``icon`` draws
+    a champion icon over that point."""
+    from riftwatch.vision import minimap
+
+    frame = np.full((720, 1280, 3), 30, np.uint8)
+    x0, y0, x1, y1 = minimap.MAP
+    rng = np.random.default_rng(seed)
+    terrain = rng.integers(40, 90, size=(y1 - y0, x1 - x0, 3), dtype=np.uint8)
+    terrain[..., 1] += 25                                 # greenish, never white
+    frame[y0:y1, x0:x1] = terrain
+    mw, mh = x1 - x0, y1 - y0
+    bw, bh = minimap.BOX[0] * mw, minimap.BOX[1] * mh
+    crop = frame[y0:y1, x0:x1]
+    cv2.rectangle(crop, (round(cx - bw / 2), round(cy - bh / 2)),
+                  (round(cx + bw / 2), round(cy + bh / 2)), (235, 235, 235), 1)
+    if icon is not None:
+        cv2.circle(crop, icon, 5, (40, 40, 200), -1)
+    return frame, mw, mh
+
+
+@pytest.mark.parametrize("cx,cy,icon", [
+    (82, 82, None),                  # mid lane
+    (82, 82, (70, 66)),              # an icon breaks the top edge
+    (40, 120, None),                 # bot side
+    (82, 5, None),                   # top of the map: only the bottom edge shows
+    (160, 60, None),                 # right side clipped
+])
+def test_minimap_camera_is_where_the_followed_champion_is(cx, cy, icon):
+    from riftwatch.vision import minimap
+
+    frame, mw, mh = minimap_frame(cx, cy, icon)
+    pos = minimap.camera(frame)
+    assert pos is not None
+    assert pos[0] == pytest.approx(min(1, cx / mw), abs=0.04)
+    assert pos[1] == pytest.approx(1 - cy / mh, abs=0.04)
+
+
+def test_minimap_without_a_camera_rectangle_reads_nothing():
+    from riftwatch.vision import minimap
+
+    frame, _, _ = minimap_frame(-500, -500)
+    assert minimap.camera(frame) is None
+
+
+def test_lane_depth_and_base_from_map_position():
+    from riftwatch.vision import minimap
+
+    assert minimap.depth((0.06, 0.06), "blue") == pytest.approx(-1)
+    assert minimap.depth((0.5, 0.5), "red") == pytest.approx(0)
+    assert minimap.depth((0.7, 0.7), "blue") > 0 > minimap.depth((0.7, 0.7), "red")
+    assert minimap.in_base((0.95, 0.9), "red") and not minimap.in_base((0.95, 0.9), "blue")

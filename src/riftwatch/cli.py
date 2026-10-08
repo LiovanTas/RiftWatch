@@ -548,16 +548,29 @@ def cmd_vision(settings: Settings, args: argparse.Namespace) -> int:
         print(f"  within trading range of your opponent {100 * s['in_range_share']:.0f}% of "
               "the time they were on screen")
         for label, key in (("bigger wave", "with_minion_advantage"),
-                           ("smaller wave", "with_minion_disadvantage")):
+                           ("smaller wave", "with_minion_disadvantage"),
+                           ("ultimate ready", "with_ultimate_ready"),
+                           ("ultimate on cooldown", "with_ultimate_down")):
             tally = s[key]
             if tally["trades"]:
-                print(f"  with the {label} (2+ minions): {tally['trades']} trades, "
+                print(f"  with the {label}: {tally['trades']} trades, "
                       f"{tally['won']} won, {tally['lost']} lost")
+        if s["died_after"] or s["back_after"] or s["opponent_left_low"]:
+            print(f"  after trades: died {s['died_after']}, back to base within 45 s "
+                  f"{s['back_after']}, opponent left the lane low {s['opponent_left_low']}")
         for t in report.trades:
             m, sec = divmod(int(t.start), 60)
             edge = "" if t.minion_edge is None else f"  minions {t.minion_edge:+d}"
+            state = "".join([
+                "" if t.level is None else f"  lvl {t.level}",
+                "" if t.mana is None else f"  mana {100 * t.mana:.0f}%",
+                "" if t.ready is None or not t.level or t.level < 6
+                else f"  R {'up' if t.ready >> lane.SLOTS.index('R') & 1 else 'down'}"])
+            after = "".join(["  died" if t.died else "",
+                             "" if t.back_after_s is None else f"  back {t.back_after_s:.0f}s",
+                             "  they left low" if t.opponent_left_low else ""])
             print(f"  {m:>2}:{sec:02d}  you -{100 * t.me_lost:3.0f}  them -{100 * t.opponent_lost:3.0f}"
-                  f"  {t.result:<5} started by {t.started_by}{edge}"
+                  f"  {t.result:<5} started by {t.started_by}{edge}{state}{after}"
                   f"{'  (skirmish)' if t.skirmish else ''}")
         return 0
 
@@ -639,9 +652,14 @@ def cmd_videos(settings: Settings, args: argparse.Namespace) -> int:
                       f"won {st.won}, lost {st.lost}; net {st.net_per_trade:+.1f} health points "
                       f"per trade; the player started {100 * st.started_share:.0f}%")
                 for label, (won, n) in (("bigger wave", st.won_with_edge),
-                                        ("smaller wave", st.won_without_edge)):
+                                        ("smaller wave", st.won_without_edge),
+                                        ("ultimate ready", st.won_ultimate_ready),
+                                        ("ultimate on cooldown", st.won_ultimate_down)):
                     if n:
                         print(f"  with the {label}: won {won} of {n}")
+                if st.died_after or st.back_after:
+                    print(f"  followed by a death within 10 s: {st.died_after}; by going back "
+                          f"to base within 45 s: {st.back_after}")
         elif args.videos_command == "dataset":
             from riftwatch.vision import learn
 

@@ -266,6 +266,14 @@ def add_pool_evidence(evidence: EvidenceSet, pool, max_lines: int = 3,
             severity=abs(line.gap), data={"champion": line.champion, "role": line.role}))
 
 
+def _ultimate_line(library) -> str:
+    (up_won, up), (down_won, down) = library.won_ultimate_ready, library.won_ultimate_down
+    if up < 10 or down < 10:
+        return ""
+    return (f"; with the ultimate ready they won {up_won} of {up} trades, with it on cooldown "
+            f"(level 6 or later) {down_won} of {down}")
+
+
 def add_video_evidence(evidence: EvidenceSet, mine, library=None, model=None) -> None:
     """Laning from the player's own gameplay video of this game, against the high-elo video
     library and the laning model when there are enough games behind them."""
@@ -277,7 +285,9 @@ def add_video_evidence(evidence: EvidenceSet, mine, library=None, model=None) ->
               f"trades with the lane opponent -- {s['won']} won, {s['lost']} lost, {s['even']} "
               f"even (won means taking at least 5 health points more than they lost); net "
               f"{s['net']:+.1f} health points per trade; the player started {s['started']} of "
-              f"them.", 5.0)]
+              f"them" + (f"; {s['back_after']} were followed by going back to base within 45 "
+                         f"seconds and {s['died_after']} by the player's death within 10 seconds"
+                         if s.get("back_after") or s.get("died_after") else "") + ".", 5.0)]
     if library is not None and library.trades:
         worse = s["net"] < library.net_per_trade - 5
         items.append(("pattern", "laning", "weakness" if worse else "neutral",
@@ -285,7 +295,8 @@ def add_video_evidence(evidence: EvidenceSet, mine, library=None, model=None) ->
                       f"({library.videos} games): {library.trades_per_10_min:.1f} trades per 10 "
                       f"minutes of laning, won {library.won} and lost {library.lost} of "
                       f"{library.trades}, net {library.net_per_trade:+.1f} health points per "
-                      f"trade.", abs(s["net"] - library.net_per_trade)))
+                      f"trade" + _ultimate_line(library) + ".",
+                      abs(s["net"] - library.net_per_trade)))
     if model is not None and mine.situations and model.get("outcome") is not None:
         from riftwatch.vision.learn import judge
 

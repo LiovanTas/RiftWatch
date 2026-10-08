@@ -24,7 +24,7 @@ import psycopg
 
 from riftwatch.vision import lane
 
-ANALYZER_VERSION = 1
+ANALYZER_VERSION = 2       # 2: HUD panel and minimap fields
 VIDEO_SUFFIXES = {".mp4", ".mkv", ".mov", ".avi", ".webm"}
 TIERS = ("IRON", "BRONZE", "SILVER", "GOLD", "PLATINUM", "EMERALD", "DIAMOND", "MASTER",
          "GRANDMASTER", "CHALLENGER")
@@ -143,7 +143,9 @@ def process_one(conn: psycopg.Connection, video_id: int, path: str,
         raise ValueError("game clock not readable (agreement "
                          f"{0 if found is None else round(100 * found[1])}%)")
     offset, agreement = found
-    rows = video.scan(path, fps=4, extra=lane.frame_extra, progress=progress,
+    (view,) = conn.execute("SELECT view FROM videos WHERE id = %s", (video_id,)).fetchone()
+    extra = lane.frame_extra if view == "spectator" else lane.frame_extra_player
+    rows = video.scan(path, fps=4, extra=extra, progress=progress,
                       end_s=max(0.0, lane.LANE_END_S - offset))
     seq = [s for s in lane.samples(rows, game_offset=offset) if s.t <= lane.LANE_END_S]
     report = lane.trades(seq)
@@ -152,7 +154,8 @@ def process_one(conn: psycopg.Connection, video_id: int, path: str,
         conn.execute("DELETE FROM video_trades WHERE video_id = %s", (video_id,))
         with conn.cursor() as cur:
             with cur.copy("COPY video_samples (video_id, t, me, opponent, distance, others, "
-                          "my_minions, their_minions) FROM STDIN") as copy:
+                          "my_minions, their_minions, mana, ready, level, map_x, map_y, depth, "
+                          "in_base, dead) FROM STDIN") as copy:
                 seen = set()
                 for s in seq:
                     key = round(s.t, 3)
@@ -160,16 +163,22 @@ def process_one(conn: psycopg.Connection, video_id: int, path: str,
                         continue
                     seen.add(key)
                     copy.write_row((video_id, key, s.me, s.opponent, s.distance,
-                                    s.others_in_range, s.my_minions, s.their_minions))
+                                    s.others_in_range, s.my_minions, s.their_minions, s.mana,
+                                    s.ready, s.level, s.map_x, s.map_y, s.depth, s.in_base,
+                                    s.dead))
             for t in report.trades:
                 cur.execute(
                     """
                     INSERT INTO video_trades (video_id, start_s, end_s, me_lost, opponent_lost,
-                                              started_by, skirmish, minion_edge, result)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING
+                                              started_by, skirmish, minion_edge, result, mana,
+                                              ready, level, depth, died, back_after_s,
+                                              opponent_left_low)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
                     """,
                     (video_id, round(t.start, 3), round(t.end, 3), t.me_lost, t.opponent_lost,
-                     t.started_by, t.skirmish, t.minion_edge, t.result))
+                     t.started_by, t.skirmish, t.minion_edge, t.result, t.mana, t.ready,
+                     t.level, t.depth, t.died, t.back_after_s, t.opponent_left_low))
         conn.execute(
             """
             UPDATE videos SET width = %s, height = %s, fps = %s, duration_s = %s,
@@ -213,6 +222,10 @@ class TradeStats:
     started_share: float | None              # share of trades the player started
     won_with_edge: tuple[int, int]           # (won, trades) with a bigger wave
     won_without_edge: tuple[int, int]        # (won, trades) with a smaller wave
+    won_ultimate_ready: tuple[int, int] = (0, 0)   # (won, trades) with R up
+    won_ultimate_down: tuple[int, int] = (0, 0)    # (won, trades) at 6+ with R on cooldown
+    died_after: int = 0                      # trades followed by the player's death
+    back_after: int = 0                      # ... by a trip back to base within 45 s
 
     @property
     def trades_per_10_min(self) -> float:
@@ -243,10 +256,14 @@ def stats(conn: psycopg.Connection, *, role: str | None = None, champion: str | 
         """, params).fetchall()
     rows = conn.execute(
         f"""
-        SELECT t.me_lost, t.opponent_lost, t.started_by, t.minion_edge, t.result
+        SELECT t.me_lost, t.opponent_lost, t.started_by, t.minion_edge, t.result,
+               t.ready, t.level, t.died, t.back_after_s
           FROM video_trades t JOIN videos v ON v.id = t.video_id
          WHERE {clause} AND NOT t.skirmish
         """, params).fetchall()
+    r_bit = 1 << lane.SLOTS.index("R")
+    r_up = [r for r in rows if r[5] is not None and r[5] & r_bit]
+    r_down = [r for r in rows if r[5] is not None and (r[6] or 0) >= 6 and not r[5] & r_bit]
     group = " ".join(x for x in (tier, role, champion) if x) or "all"
     edge = [r for r in rows if r[3] is not None and r[3] >= lane.WAVE_EDGE]
     behind = [r for r in rows if r[3] is not None and r[3] <= -lane.WAVE_EDGE]
@@ -256,7 +273,10 @@ def stats(conn: psycopg.Connection, *, role: str | None = None, champion: str | 
         round(100 * fmean(r[1] - r[0] for r in rows), 1) if rows else None,
         sum(r[2] == "you" for r in rows) / len(rows) if rows else None,
         (sum(r[4] == "won" for r in edge), len(edge)),
-        (sum(r[4] == "won" for r in behind), len(behind)))
+        (sum(r[4] == "won" for r in behind), len(behind)),
+        (sum(r[4] == "won" for r in r_up), len(r_up)),
+        (sum(r[4] == "won" for r in r_down), len(r_down)),
+        sum(bool(r[7]) for r in rows), sum(r[8] is not None for r in rows))
 
 
 MIN_LIBRARY_VIDEOS = 5     # high-elo games in a role before the coach compares against them
@@ -273,6 +293,8 @@ class PlayerLane:
     def summary(self) -> dict:
         n = len(self.trades)
         return {"trades": n, "won": sum(t[5] == "won" for t in self.trades),
+                "died_after": sum(bool(t[6]) for t in self.trades if len(t) > 6),
+                "back_after": sum(t[7] is not None for t in self.trades if len(t) > 7),
                 "lost": sum(t[5] == "lost" for t in self.trades),
                 "even": sum(t[5] == "even" for t in self.trades),
                 "net": round(100 * fmean(t[2] - t[1] for t in self.trades), 1) if n else None,
@@ -290,17 +312,20 @@ def player_lane(conn: psycopg.Connection, match_id: str) -> PlayerLane | None:
         return None
     video_id, role = row
     trades = conn.execute(
-        """SELECT start_s, me_lost, opponent_lost, started_by, minion_edge, result
+        """SELECT start_s, me_lost, opponent_lost, started_by, minion_edge, result, died,
+                  back_after_s
              FROM video_trades WHERE video_id = %s AND NOT skirmish ORDER BY start_s""",
         (video_id,)).fetchall()
     situations = []
     for start, *_rest in [t for t in trades if t[3] in ("you", "both")]:
         s = conn.execute(
-            """SELECT t, me, opponent, distance, others, my_minions, their_minions
+            """SELECT t, me, opponent, distance, others, my_minions, their_minions, mana,
+                      ready, level, depth
                  FROM video_samples WHERE video_id = %s AND t < %s AND me IS NOT NULL
                   AND opponent IS NOT NULL AND distance IS NOT NULL
                 ORDER BY t DESC LIMIT 1""", (video_id, start)).fetchone()
         if s is not None:
-            t, me, opp, dist, others, mine, theirs = s
-            situations.append(learn._features(t, me, opp, dist, mine, theirs, others, role))
+            t, me, opp, dist, others, mine, theirs, mana, ready, level, dep = s
+            situations.append(learn._features(t, me, opp, dist, mine, theirs, others, role,
+                                              mana=mana, ready=ready, level=level, depth=dep))
     return PlayerLane(video_id, role, [tuple(t) for t in trades], situations)

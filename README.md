@@ -463,6 +463,27 @@ about 41 x 3 px at 720p -- and a thin bar just under a champion's is its mana ba
 minion. Each laning moment counts your minions and theirs near you, and each trade records
 the wave edge it started with.
 
+**HUD panel.** Replays show the followed champion's panel at the bottom left. From it each
+moment records mana, the level, and which of Q, W, E, R and the two summoner spells are ready.
+A slot on cooldown is drawn dark with white seconds over it; how bright "ready" is depends on
+the icon, so each slot is judged against its own bright level over the video. Levels are
+counted from experience-bar resets (a reset has to hold for a second reading, so one misread
+frame isn't a level-up). On the training replay all 54 slots checked by eye across 9 frames
+were right, and every level-up checked against the screen landed on its frame. When the
+panel's bars all vanish the champion is dead.
+
+**Minimap.** The minimap draws the camera's view as a white rectangle, and replays keep the
+camera on the followed champion, so its centre is that champion's place on the map, every
+frame, without identifying an icon. Edges broken by icons are joined, and a rectangle cut off
+by the map's border is placed from the edge that shows. The position was found in 90% of
+frames on the replay. From it: how deep into the lane the champion stands (-1 at their own
+base, +1 at the enemy's) and whether they're in base.
+
+**After each trade.** With those, every trade records the state it started in (level, mana,
+which abilities were ready, depth) and what followed: a death within 10 seconds, a trip back
+to base within 45 (a recall it forced), or the opponent leaving the lane low. Your own
+recordings have the in-game HUD, not the replay's, so for them only minions are read.
+
 ## Learning from gameplay videos
 
 ```bash
@@ -483,7 +504,10 @@ versioned: when the analysis improves, every video is re-processed, so the train
 mixes old and new readings.
 
 Every moment a player stands within trading range of their opponent, outside a trade, is a
-situation (time, both health bars, distance, minions on each side, other enemies close). Two
+situation (time, both health bars, distance, minions on each side, other enemies close, and
+from replays mana, level, lane depth and which abilities and summoner spells are ready;
+anything a video doesn't show is left unknown for the models, and a feature no video shows is
+left out). Two
 models are learned from them: whether a high-elo player starts a trade from a spot like this,
 and how the trades they start go. Whole games are held out for testing, and each model has to
 beat the plain base rate; `train` refuses with fewer than five games.

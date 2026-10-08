@@ -90,6 +90,9 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
 - [x] **Video library and laning models** (`riftwatch videos`): add, versioned processing,
       stats, situation dataset, decision and outcome models held out by game, coach evidence
       from your own game videos against the library and the model
+- [x] Replay HUD panel and minimap: mana, level, which abilities and summoner spells are ready,
+      map position, lane depth, in base, dead; each trade's starting state and what followed
+      (death, forced recall, opponent leaving low), in the stats, the models and the coach
 - [ ] Fill the library: high-elo videos per role (and your own games, linked to their matches);
       then tie bars to champions and read the player-view HUD clock
 
