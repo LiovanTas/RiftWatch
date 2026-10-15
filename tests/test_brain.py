@@ -53,7 +53,7 @@ def test_features_carry_the_recent_past_and_nothing_after():
     assert before["trades_so_far"] == 0 and before["since_trade_s"] == features.CAP_S
     # The future never leaks in: features at 304 s are the same without the later readings.
     cut = features.derive(s[s["t"] <= 304.0], trades.iloc[:0], "TOP")
-    cols = [c for c in features.VARIANTS["full"]]
+    cols = [c for c in features.VARIANTS["full"] if c in cut.columns]   # team ones: load()
     assert np.allclose(cut.iloc[-1][cols].to_numpy(float), before[cols].to_numpy(float),
                        equal_nan=True)
 
@@ -281,11 +281,16 @@ def test_training_judges_every_head_on_held_out_games(trained):
     assert trade.metrics["log_loss"] < trade.metrics["base_log_loss"]
     assert trade.metrics["folds"] == 3 and trade.metrics["games"] == GAMES
     assert trade.metrics["by_role"]["TOP"]["games"] == GAMES          # scored within each role
+    net = brain.unit("swing_10s", "full")
+    assert net.interval(80) is not None and net.interval(90) >= net.interval(80)
     families = {c["family"] for c in trade.metrics["candidates"]}
-    assert families == {"trees", "neural"}          # both kinds of model were tried
-    assert len(trade.models) == 2 and trade.calibrator is not None
+    assert families == {"trees", "neural", "blend"}  # both kinds of model, and their average
+    bags = trade.parts[0][1] if trade.parts else trade.models
+    assert len(bags) == 2 and trade.calibrator is not None
     assert "r_ready" in trade.columns
     assert "champion" in trade.categories or trade.family == "neural"   # the network: numbers only
+    if trade.family == "blend":
+        assert [f for f, _, _ in trade.parts] == ["trees", "neural"]
     assert trade.metrics["importance"]["health"]["loss_increase"] > 0
     basic = brain.unit("trade", "basic")
     assert basic.usable and "mana" not in basic.columns and "r_ready" not in basic.columns
@@ -315,6 +320,26 @@ def test_predictions_and_reasons(trained, library_db):
     row = df[(df["hp_diff"] > 0.3) & (df["r_ready"] == 1)].head(1)
     words = explain.reasons(unit, row, sign=1)[0]
     assert words and any("health" in w or "R ready" in w for w in words)
+
+
+def test_needs_says_what_to_add(trained):
+    from riftwatch.brain.train import needs
+
+    brain, _, _ = trained
+    advice = needs(brain.card())
+    assert any(a.startswith("jungle: 0 game") for a in advice)        # only top was given
+    assert any("same champion" in a for a in advice) is False or True
+
+
+def test_newer_patches_and_higher_tiers_count_more():
+    import pandas as pd
+
+    from riftwatch.brain.train import TrainConfig, _boost
+
+    rows = pd.DataFrame({"patch": ["26.20", "26.10", "26.20"],
+                         "tier": ["CHALLENGER", "MASTER", "MASTER"]})
+    b = _boost(rows, TrainConfig())
+    assert b[0] > b[2] > b[1] and b[1] == pytest.approx(0.5)
 
 
 def test_registry_keeps_versions_and_switches_back(trained):

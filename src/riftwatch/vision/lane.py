@@ -139,19 +139,23 @@ def _tally(trades_: list[Trade]) -> dict:
 
 @dataclass
 class FrameExtra:
-    """What laning needs from a frame besides champion bars."""
+    """Everything read from a frame besides champion bars (all of it archived)."""
     minions: list[Bar]
     panel: PanelReading | None = None
     camera: tuple[float, float] | None = None
+    clock: int | None = None                 # game seconds on the clock, if read
+    sides: list[list] | None = None          # all ten champions (vision.hud.sides)
 
 
 def frame_extra(frame_bgr) -> FrameExtra:
-    """Minions, the HUD panel and the minimap camera. Module-level so video.scan can send it
-    to its worker processes."""
-    from riftwatch.vision import minimap, panel
+    """Everything the replay HUD shows: minions, the followed champion's panel, the minimap
+    camera, the clock, and all ten champions in the side columns. Module-level so video.scan
+    can send it to its worker processes."""
+    from riftwatch.vision import clock, hud, minimap, panel
     from riftwatch.vision.healthbars import find_minion_bars
 
-    return FrameExtra(find_minion_bars(frame_bgr), panel.read(frame_bgr), minimap.camera(frame_bgr))
+    return FrameExtra(find_minion_bars(frame_bgr), panel.read(frame_bgr),
+                      minimap.camera(frame_bgr), clock.read(frame_bgr), hud.sides(frame_bgr))
 
 
 def frame_extra_player(frame_bgr) -> FrameExtra:

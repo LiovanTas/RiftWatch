@@ -20,6 +20,7 @@ the strict re-read wouldn't agree, so it is accepted only if it does.
 from __future__ import annotations
 
 from collections import Counter
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -90,10 +91,17 @@ def _normalise(g: np.ndarray) -> np.ndarray:
 
 
 def load_templates(path: Path = TEMPLATES) -> np.ndarray | None:
-    """(10, GLYPH h*w) normalised templates for digits 0-9, or None if not learned yet."""
+    """(10 x fonts, GLYPH h*w) normalised digit templates, or None if not learned yet."""
+    if path == TEMPLATES:
+        return _shipped()
     if not path.exists():
         return None
     return np.load(path)["digits"]
+
+
+@lru_cache(maxsize=1)
+def _shipped() -> np.ndarray | None:
+    return np.load(TEMPLATES)["digits"] if TEMPLATES.exists() else None
 
 
 def read(frame_bgr: np.ndarray, templates: np.ndarray | None = None,

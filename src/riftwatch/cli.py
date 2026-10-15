@@ -631,6 +631,28 @@ def cmd_videos(settings: Settings, args: argparse.Namespace) -> int:
             print(f"{done} video(s) processed, {len(failed)} failed")
             for path, error in failed:
                 print(f"  {Path(path).name}: {error}")
+        elif args.videos_command == "ingest":
+            added, known = library.add(conn, [Path(p) for p in args.paths], view=args.view)
+            print(f"{added} new video(s), {known} already known; reading every frame of the "
+                  "new ones (about 15 minutes a video)...")
+            done, failed = library.process(conn, progress=print)
+            for path, error in failed:
+                print(f"  FAILED {Path(path).name}: {error}")
+            if not args.no_train:
+                from riftwatch.brain import registry
+                from riftwatch.brain.train import train
+
+                try:
+                    brain = train(conn, progress=None)
+                    version = registry.save(brain, Path(settings.models_dir))
+                    usable = sorted({u.head for u in brain.units.values() if u.usable})
+                    print(f"brain {version} trained on {brain.data['games']} games "
+                          f"({brain.data['situations']} situations); usable: {', '.join(usable)}")
+                except ValueError as exc:
+                    print(f"brain not trained: {exc}")
+            _print_archive(conn, [Path(p) for p in args.paths])
+        elif args.videos_command == "archived":
+            _print_archive(conn, None)
         elif args.videos_command == "list":
             for row in conn.execute(
                     """SELECT id, status, view, champion, opponent, role, tier, patch,
@@ -720,6 +742,27 @@ def _print_brain(card: dict, detail: bool) -> None:
             print(f"    - {p['text']} (models agree {p['models_agree']}){raw}")
 
 
+def _print_archive(conn, under: list | None) -> None:
+    """Which video files are fully archived, so safe to delete."""
+    from pathlib import Path
+
+    from riftwatch.vision import library
+
+    rows = library.archive_state(conn)
+    if under is not None:
+        roots = [p.resolve() for p in under]
+        rows = [r for r in rows if any(Path(r[1]).resolve().is_relative_to(root)
+                                       or Path(r[1]).resolve() == root for root in roots)]
+    safe = [r for r in rows if r[2] and r[3]]
+    for vid, path, on_disk, ok, why in rows:
+        state = ("SAFE TO DELETE" if ok else "keep") if on_disk else ("deleted" if ok else
+                                                                      "deleted (not archived)")
+        print(f"  {vid:>4} {state:<22} {Path(path).name[:60]:<60} {why}")
+    freed = sum(Path(r[1]).stat().st_size for r in safe)
+    print(f"{len(safe)} file(s) safe to delete ({freed / 1e9:.1f} GB): everything the model "
+          "needs from them is in the database")
+
+
 def cmd_brain(settings: Settings, args: argparse.Namespace) -> int:
     from pathlib import Path
 
@@ -738,6 +781,18 @@ def cmd_brain(settings: Settings, args: argparse.Namespace) -> int:
     if args.brain_command == "use":
         registry.use(models, args.version)
         print(f"now using brain {args.version}")
+        return 0
+    if args.brain_command == "needs":
+        from riftwatch.brain.train import needs
+
+        version = registry.current(models)
+        cards = [c for c in registry.versions(models) if c["version"] == version]
+        if not cards:
+            print("no brain trained yet: riftwatch brain train")
+            return 0
+        print(f"what brain {version} needs most:")
+        for line in needs(cards[0]):
+            print(f"  - {line}")
         return 0
     if args.brain_command in ("status", "explain"):
         version = getattr(args, "version", None) or registry.current(models)
@@ -1024,6 +1079,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = vsub.add_parser("process", help="read clocks and analyse laning for new or outdated videos")
     p.add_argument("--limit", type=int)
     p.set_defaults(func=cmd_videos)
+    p = vsub.add_parser("ingest", help="add, read every frame into the archive, analyse, retrain, "
+                                       "and say which files are safe to delete")
+    p.add_argument("paths", nargs="+")
+    p.add_argument("--view", choices=["spectator", "player"], default="spectator")
+    p.add_argument("--no-train", action="store_true")
+    p.set_defaults(func=cmd_videos)
+    vsub.add_parser("archived", help="which video files are fully archived (safe to delete)"
+                    ).set_defaults(func=cmd_videos)
     vsub.add_parser("list", help="every video and its state").set_defaults(func=cmd_videos)
     p = vsub.add_parser("stats", help="how the library's players trade in lane")
     p.add_argument("--role")
@@ -1057,6 +1120,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = bsub.add_parser("explain", help="scores, model comparison, importance, learning curve, patterns")
     p.add_argument("version", nargs="?")
     p.set_defaults(func=cmd_brain)
+    bsub.add_parser("needs", help="which videos to add next").set_defaults(func=cmd_brain)
     p = bsub.add_parser("use", help="make a saved brain current")
     p.add_argument("version")
     p.set_defaults(func=cmd_brain)

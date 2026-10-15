@@ -24,10 +24,18 @@ games of its own:
    compared, and heads judged, on *cross-fitted* calibrated predictions: each fold calibrated
    by a fit on the other folds only. (A network can rank situations well but come out
    over-confident; judged raw it would lose to the base rate for the wrong reason.)
+   A *blend* -- the average of the best trees and the best network -- competes too: two
+   different kinds of model tend to make different mistakes, and averaging cancels some.
+
 5. **Bagging.** The final model is an ensemble fitted on games resampled with replacement;
    the spread between its members says how sure the brain is about a given situation.
 Folds, candidates, bags and learning-curve points are independent fits, so they run side by
 side in worker processes that split the machine's cores.
+
+Each game weighs the same, adjusted for how much it should count: newer patches more
+(the game changes; PATCH_HALF_LIFE patches back counts half) and higher tiers a little more
+(TIER_WEIGHT). Number-valued heads also get a conformal interval: the range their held-out
+errors stayed within 80% and 90% of the time.
 
 6. **What it learned.** Permutation importance per feature group (how much worse held-out
    predictions get when a group is scrambled), a learning curve (is more video still
@@ -84,6 +92,10 @@ class TrainConfig:
     min_class: int = 20              # binary heads: at least this many of each outcome
     champion_min_videos: int = 3
     min_tier: str | None = None
+    patch_half_life: float = 10.0    # a game this many patches older counts half (0: off)
+    tier_weight: tuple[tuple[str, float], ...] = (("CHALLENGER", 1.2), ("GRANDMASTER", 1.1),
+                                                  ("MASTER", 1.0))
+    blend: bool = True               # let the trees+network average compete
 
     @classmethod
     def quick(cls, **kw) -> TrainConfig:
@@ -159,11 +171,37 @@ def _metrics(kind: str, y, p, base, w, fold_of: np.ndarray) -> dict:
 
 # -- the pieces ---------------------------------------------------------------------------
 
-def _weights(videos: np.ndarray) -> np.ndarray:
-    """Every game weighs the same; the weights average 1."""
+def _weights(videos: np.ndarray, boost: np.ndarray | None = None) -> np.ndarray:
+    """Every game weighs the same (times its ``boost``); the weights average 1."""
     _, inverse, counts = np.unique(videos, return_inverse=True, return_counts=True)
     w = 1.0 / counts[inverse]
+    if boost is not None:
+        w = w * boost
     return w * len(w) / w.sum()
+
+
+def _patch_number(patch) -> float | None:
+    """"26.20" -> a running patch count (about 24 patches a year)."""
+    try:
+        major, minor = str(patch).split(".")[:2]
+        return int(major) * 24 + int(minor)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _boost(rows: pd.DataFrame, cfg: TrainConfig) -> np.ndarray:
+    """How much each situation's game counts: recency by patch, and tier."""
+    boost = np.ones(len(rows))
+    if cfg.patch_half_life and "patch" in rows:
+        nums = rows["patch"].map(_patch_number)
+        newest = nums.max()
+        if pd.notna(newest):
+            age = (newest - nums).fillna(0).to_numpy(float)
+            boost *= 0.5 ** (age / cfg.patch_half_life)
+    if "tier" in rows:
+        tiers = dict(cfg.tier_weight)
+        boost *= rows["tier"].map(lambda t: tiers.get(t, 1.0)).to_numpy(float)
+    return boost
 
 
 def _fold_of(videos: np.ndarray, folds: list[np.ndarray]) -> np.ndarray:
@@ -440,7 +478,8 @@ def _setup(df: pd.DataFrame, head, variant: str, folds: list[np.ndarray],
             categories[c] = keep
     from riftwatch.brain.model import _row_roles
 
-    s = _Setup(head.name, head.kind, matrix(rows, columns, categories), y, _weights(videos),
+    s = _Setup(head.name, head.kind, matrix(rows, columns, categories), y,
+               _weights(videos, _boost(rows, cfg)),
                videos, _fold_of(videos, folds), columns, categories, _row_roles(rows))
     return s, None
 
@@ -474,6 +513,24 @@ def train_unit(df: pd.DataFrame, head, variant: str, segment: str, folds: list[n
     if best is None:
         unit.skipped = "no fold could be held out"
         return unit, None, None
+    by_family = {}
+    for i, c in enumerate(candidates):
+        if c["family"] not in by_family or c["loss"] < candidates[by_family[c["family"]]]["loss"]:
+            by_family[c["family"]] = i
+    if cfg.blend and {"trees", "neural"} <= set(by_family):
+        ti, ni = by_family["trees"], by_family["neural"]
+        ti_all = [i for i, (f, p) in enumerate(tried) if f == "trees" and p == candidates[ti]["params"]][0]
+        ni_all = [i for i, (f, p) in enumerate(tried) if f == "neural" and p == candidates[ni]["params"]][0]
+        raw_b = (oofs[ti_all] + oofs[ni_all]) / 2
+        ok = ~np.isnan(raw_b)
+        oof_b = raw_b.copy()
+        if s.kind == "binary":
+            oof_b[ok] = _crossfit(s.y[ok], raw_b[ok], s.w[ok], s.fold_of[ok])
+        loss = _loss(s.kind, s.y[ok], oof_b[ok], s.w[ok])
+        params = {"trees": candidates[ti]["params"], "neural": candidates[ni]["params"]}
+        candidates.append({"family": "blend", "params": params, "loss": round(loss, 5)})
+        if loss < best[0]:
+            best = (loss, "blend", params, raw_b, oof_b, base, fitted_all[ti_all])
     _, unit.family, unit.params, raw, oof, base, fitted = best
     if unit.family == "neural":
         unit.categories = {}                     # the network takes the numeric inputs only
@@ -493,13 +550,22 @@ def train_unit(df: pd.DataFrame, head, variant: str, segment: str, folds: list[n
         metrics["calibrated"] = unit.calibrator is not None
     else:
         unit.quantiles = {"all": _quantiles(oof[ok])}
+        err = np.abs(s.y[ok] - oof[ok])
+        metrics["interval"] = {"q80": round(float(np.quantile(err, 0.8)), 5),
+                               "q90": round(float(np.quantile(err, 0.9)), 5)}
+    single = "trees" if unit.family == "blend" else unit.family      # importance, curve
+    single_params = unit.params["trees"] if unit.family == "blend" else unit.params
     if cfg.importance:
-        metrics["importance"] = _importance(s, unit.family, fitted, cfg.seed)
+        metrics["importance"] = _importance(s, single, fitted, cfg.seed)
     unit.usable = metrics.pop("usable")
     unit.metrics = metrics
-    unit.models = _bag(s, unit.family, unit.params, cfg)
+    if unit.family == "blend":
+        unit.parts = [("trees", _bag(s, "trees", unit.params["trees"], cfg), dict(s.categories)),
+                      ("neural", _bag(s, "neural", unit.params["neural"], cfg), {})]
+    else:
+        unit.models = _bag(s, unit.family, unit.params, cfg)
     unit.medians = {c: float(np.nanmedian(s.X[:, i])) for i, c in enumerate(s.columns)}
-    learning = _curve(s, unit.family, unit.params, cfg) if curve else None
+    learning = _curve(s, single, single_params, cfg) if curve else None
     full_oof = np.full(len(df), np.nan)
     full_oof[np.flatnonzero(df[head.name].notna().to_numpy())] = oof
     return unit, learning, full_oof
@@ -574,6 +640,9 @@ def train(conn: psycopg.Connection, cfg: TrainConfig | None = None,
               "video_ids": [int(v) for v in games],
               "roles": {r: len(v) for r, v in roles.items() if v},
               "champions": int(df["champion"].nunique()),
+              "champions_by_role": {r: int(df.loc[df[f"role_{r}"] == 1, "champion"].nunique())
+                                    for r in features.ROLES if v_count(df, r)},
+              "labelled": {h.name: int(df[h.name].notna().sum()) for h in HEADS},
               "trade_rate": round(float(df["trade"].mean()), 5),
               "analyzer_version": _analyzer_version(),
               "seconds": None},
@@ -582,6 +651,48 @@ def train(conn: psycopg.Connection, cfg: TrainConfig | None = None,
     brain.patterns = explain.patterns(brain, df, seed=cfg.seed)
     brain.data["seconds"] = round(time.perf_counter() - started, 1)
     return brain
+
+
+def v_count(df: pd.DataFrame, role: str) -> int:
+    return int(df.loc[df[f"role_{role}"] == 1, "video_id"].nunique())
+
+
+def needs(card: dict, cfg: TrainConfig | None = None) -> list[str]:
+    """What to add to the library next, most useful first, from a brain's card."""
+    cfg = cfg or TrainConfig()
+    d = card["data"]
+    games = max(1, d["games"])
+    out = []
+    roles = d.get("roles", {})
+    for r in features.ROLES:
+        n = roles.get(r, 0)
+        if n < cfg.min_videos:
+            out.append(f"{r.lower()}: {n} game(s) -- add at least {cfg.min_videos - n} so the brain "
+                       "can be checked on that role at all")
+        elif n < cfg.role_min_videos * 2:
+            out.append(f"{r.lower()}: {n} games -- more lets it learn {r.lower()}-specific habits "
+                       "(a role model needs to beat the pooled one)")
+    for r, k in d.get("champions_by_role", {}).items():
+        if k == 1:
+            out.append(f"{r.lower()}: every game is the same champion -- add other champions so "
+                       "it learns the role, not one champion")
+    for u in card["units"]:
+        if u["segment"] != "all" or u["variant"] != "full":
+            continue
+        rows = d.get("labelled", {}).get(u["head"], 0)
+        if u["skipped"] and rows < cfg.min_rows:
+            per_game = rows / games
+            more = int(np.ceil((cfg.min_rows - rows) / per_game)) if per_game else None
+            out.append(f"{u['head']}: {rows} labelled situations of {cfg.min_rows} needed"
+                       + (f" -- about {more} more games" if more else ""))
+        elif not u["skipped"] and not u["usable"]:
+            out.append(f"{u['head']}: trained but not yet better than the base rate on unseen "
+                       "games -- more games will tell")
+    lc = card.get("learning_curve")
+    if lc and lc.get("still_improving"):
+        out.append("the learning curve is still falling: every extra game still improves the "
+                   "trade model")
+    return out
 
 
 def _analyzer_version() -> int:

@@ -24,7 +24,7 @@ import psycopg
 
 from riftwatch.vision import lane
 
-ANALYZER_VERSION = 2       # 2: HUD panel and minimap fields
+ANALYZER_VERSION = 3       # 3: analysis rebuilt from the whole-game archive
 VIDEO_SUFFIXES = {".mp4", ".mkv", ".mov", ".avi", ".webm"}
 TIERS = ("IRON", "BRONZE", "SILVER", "GOLD", "PLATINUM", "EMERALD", "DIAMOND", "MASTER",
          "GRANDMASTER", "CHALLENGER")
@@ -122,41 +122,41 @@ def add(conn: psycopg.Connection, paths: list[Path], *, view: str = "spectator",
     return added, known
 
 
+def archive_version() -> int:
+    from riftwatch.vision.archive import DETECTOR_VERSION
+
+    return DETECTOR_VERSION
+
+
 def pending(conn: psycopg.Connection, limit: int | None = None) -> list[tuple[int, str]]:
     return conn.execute(
         """
-        SELECT id, path FROM videos
+        SELECT id, path FROM videos v
          WHERE status = 'pending' OR analyzer_version IS DISTINCT FROM %s
+            OR (status = 'done' AND (SELECT r.detector_version FROM video_readings r
+                                      WHERE r.video_id = v.id) IS DISTINCT FROM %s)
          ORDER BY id LIMIT %s
         """,
-        (ANALYZER_VERSION, limit),
+        (ANALYZER_VERSION, archive_version(), limit),
     ).fetchall()
 
 
 def process_one(conn: psycopg.Connection, video_id: int, path: str,
                 progress: Callable[[str], None] | None = None) -> lane.LaneReport:
-    """Clock, laning scan, samples and trades for one video, stored in one transaction."""
-    import cv2
+    """Archive a video (when it is on disk and not yet archived by this reader version: the
+    whole game, every reader -- see vision.archive), then rebuild its laning analysis from the
+    archive. A deleted video whose archive exists is re-analysed from the archive alone."""
+    from riftwatch.vision import archive
 
-    from riftwatch.vision import clock, video
-
-    cap = cv2.VideoCapture(path)
-    if not cap.isOpened():
-        raise OSError(f"can't open {path}")
-    width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    duration = (cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0) / fps
-    cap.release()
-    found = clock.video_offset(path)
-    if found is None or found[1] < 0.5:
-        raise ValueError("game clock not readable (agreement "
-                         f"{0 if found is None else round(100 * found[1])}%)")
-    offset, agreement = found
-    (view,) = conn.execute("SELECT view FROM videos WHERE id = %s", (video_id,)).fetchone()
-    extra = lane.frame_extra if view == "spectator" else lane.frame_extra_player
-    rows = video.scan(path, fps=4, extra=extra, progress=progress,
-                      end_s=max(0.0, lane.LANE_END_S - offset))
-    seq = [s for s in lane.samples(rows, game_offset=offset) if s.t <= lane.LANE_END_S]
+    view, offset = conn.execute("SELECT view, game_offset_s FROM videos WHERE id = %s",
+                                (video_id,)).fetchone()
+    if Path(path).exists() and archive.stored_version(conn, video_id) != archive.DETECTOR_VERSION:
+        offset = _archive(conn, video_id, path, view, progress)
+    rows = archive.load(conn, video_id)
+    if rows is None or offset is None:
+        raise FileNotFoundError(f"{path} is gone and was never archived")
+    laning = [r for r in rows if r[0] + offset <= lane.LANE_END_S + 1]
+    seq = [s for s in lane.samples(laning, game_offset=offset) if s.t <= lane.LANE_END_S]
     report = lane.trades(seq)
     with conn.transaction():
         conn.execute("DELETE FROM video_samples WHERE video_id = %s", (video_id,))
@@ -188,15 +188,51 @@ def process_one(conn: psycopg.Connection, video_id: int, path: str,
                     (video_id, round(t.start, 3), round(t.end, 3), t.me_lost, t.opponent_lost,
                      t.started_by, t.skirmish, t.minion_edge, t.result, t.mana, t.ready,
                      t.level, t.depth, t.died, t.back_after_s, t.opponent_left_low))
-        conn.execute(
-            """
-            UPDATE videos SET width = %s, height = %s, fps = %s, duration_s = %s,
-                   game_offset_s = %s, clock_agreement = %s, status = 'done', error = NULL,
-                   analyzer_version = %s, processed_at = now()
-             WHERE id = %s
-            """,
-            (width, height, fps, duration, offset, agreement, ANALYZER_VERSION, video_id))
+        conn.execute("UPDATE videos SET status = 'done', error = NULL, analyzer_version = %s, "
+                     "processed_at = now() WHERE id = %s", (ANALYZER_VERSION, video_id))
     return report
+
+
+def _archive(conn: psycopg.Connection, video_id: int, path: str, view: str,
+             progress: Callable[[str], None] | None) -> float:
+    """Read the whole video with every reader and store it (readings and snapshots), so the
+    file can be deleted afterwards. Returns the clock offset."""
+    import cv2
+
+    from riftwatch.vision import archive, clock, video
+
+    cap = cv2.VideoCapture(path)
+    if not cap.isOpened():
+        raise OSError(f"can't open {path}")
+    width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    duration = (cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0) / fps
+    cap.release()
+    found = clock.video_offset(path)
+    if found is None or found[1] < 0.5:
+        raise ValueError("game clock not readable (agreement "
+                         f"{0 if found is None else round(100 * found[1])}%)")
+    offset, agreement = found
+    extra = lane.frame_extra if view == "spectator" else lane.frame_extra_player
+    rows = video.scan(path, fps=4, extra=extra, progress=progress)
+    archive.save(conn, video_id, rows, duration)
+    archive.snapshot(conn, video_id, path, progress)
+    conn.execute(
+        """UPDATE videos SET width = %s, height = %s, fps = %s, duration_s = %s,
+                  game_offset_s = %s, clock_agreement = %s WHERE id = %s""",
+        (width, height, fps, duration, offset, agreement, video_id))
+    return offset
+
+
+def archive_state(conn: psycopg.Connection) -> list[tuple[int, str, bool, bool, str]]:
+    """(id, path, file on disk, safe to delete, why) for every video."""
+    from riftwatch.vision import archive
+
+    out = []
+    for vid, path in conn.execute("SELECT id, path FROM videos ORDER BY id").fetchall():
+        ok, why = archive.verify(conn, vid)
+        out.append((vid, path, Path(path).exists(), ok, why))
+    return out
 
 
 def process(conn: psycopg.Connection, limit: int | None = None,
@@ -205,9 +241,11 @@ def process(conn: psycopg.Connection, limit: int | None = None,
     done, failed = 0, []
     for video_id, path in pending(conn, limit):
         if not Path(path).exists() and conn.execute(
-                "SELECT status = 'done' FROM videos WHERE id = %s", (video_id,)).fetchone()[0]:
-            # Deleted after an earlier analyser read it: keep those readings rather than
-            # losing the game from training (it can't be re-read).
+                """SELECT status = 'done' AND NOT EXISTS (SELECT 1 FROM video_readings r
+                                                          WHERE r.video_id = v.id)
+                     FROM videos v WHERE id = %s""", (video_id,)).fetchone()[0]:
+            # Deleted before archives existed: keep its stored readings rather than lose the
+            # game from training (it can't be re-read).
             if progress:
                 progress(f"{Path(path).name}: file gone, keeping its earlier readings")
             continue

@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 import psycopg
 
-from riftwatch.brain import features
+from riftwatch.brain import features, team
 from riftwatch.vision import lane
 
 DECISION_S = 1.0          # a trade starting within this long is the decision taken here
@@ -124,9 +124,10 @@ def _videos(conn, view: str | None, video_ids: list[int] | None,
         where.append("id = ANY(%s)")
         params.append(list(video_ids))
     rows = conn.execute(
-        f"SELECT id, role, champion, opponent, tier, view FROM videos WHERE {' AND '.join(where)} "
-        "ORDER BY id", params).fetchall()
-    df = pd.DataFrame(rows, columns=["video_id", "role", "champion", "opponent", "tier", "view"])
+        f"SELECT id, role, champion, opponent, tier, view, game_offset_s, patch FROM videos "
+        f"WHERE {' AND '.join(where)} ORDER BY id", params).fetchall()
+    df = pd.DataFrame(rows, columns=["video_id", "role", "champion", "opponent", "tier", "view",
+                                     "offset", "patch"])
     if min_tier:
         floor = TIERS.index(min_tier.upper())
         df = df[df["tier"].map(lambda t: t in TIERS and TIERS.index(t) >= floor)]
@@ -239,7 +240,7 @@ def load(conn: psycopg.Connection, *, view: str | None = "spectator",
         bad = {c.video_id for v in videos["view"].unique() for c in check(conn, v) if not c.ok}
         videos = videos[~videos["video_id"].isin(bad)]
     if videos.empty:
-        return pd.DataFrame(columns=["video_id", "t", "view", "tier",
+        return pd.DataFrame(columns=["video_id", "t", "view", "tier", "patch",
                                      *features.VARIANTS["full"], "champion",
                                      "opponent_champion", *LABELS])
     samples, trades = readings(conn, videos["video_id"].tolist())
@@ -255,12 +256,15 @@ def load(conn: psycopg.Connection, *, view: str | None = "spectator",
         if not mask.any():
             continue
         f = features.derive(s, tr, m["role"], m["champion"], m["opponent"])
+        side = team.features(team.frames(conn, int(vid), m["offset"]), s["t"].to_numpy(float))
+        side.index = f.index
         lab = labels(s, tr)
-        part = pd.concat([f, lab], axis=1)[mask]
+        part = pd.concat([f, side, lab], axis=1)[mask]
         part.insert(0, "video_id", int(vid))
         part.insert(1, "t", s["t"].to_numpy(float)[mask])
         part.insert(2, "view", m["view"])
         part.insert(3, "tier", m["tier"])
+        part.insert(4, "patch", m["patch"])
         parts.append(part)
     if not parts:
         return load(conn, video_ids=[])

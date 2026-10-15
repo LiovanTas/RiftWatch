@@ -100,6 +100,11 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
       words, versioned registry, video review with key moments and reasons, coach evidence
 - [x] First real training: 21 high-elo replays across top, jungle, mid and ADC; per-role held-out
       scores; self-adapting clock fonts; minimap line detection; 9-second death rule
+- [x] Whole-game video archive in Postgres (every reader 4x a second, all ten champions from the side
+      columns, minimap/scoreboard snapshots) so videos can be deleted; `videos ingest`; team-aware
+      features; trees+network blend; patch/tier weighting; conformal intervals; `brain needs`
+- [ ] Readers for the archived snapshots: champion icons on the minimap, CS/KDA/items/gold from the
+      scoreboard; a mid/late-game brain from the whole-game readings
 - [ ] A sequence model (transformer over the raw readings) once the library has a few hundred games
 - [ ] Fill the library: high-elo videos per role (and your own games, linked to their matches);
       then tie bars to champions and read the player-view HUD clock

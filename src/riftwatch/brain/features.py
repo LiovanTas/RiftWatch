@@ -33,7 +33,7 @@ class Feature:
     name: str
     group: str
     about: str
-    needs: str | None = None      # "panel" or "minimap": only replays show it
+    needs: str | None = None      # "panel", "minimap" or "sides": only replays show it
 
 
 CATALOGUE: tuple[Feature, ...] = (
@@ -69,6 +69,16 @@ CATALOGUE: tuple[Feature, ...] = (
             "minimap"),
     Feature("depth_trend_5s", "position", "change in depth over the last 5 s (positive: moving up)",
             "minimap"),
+    # From the side columns (replays): all ten champions, on screen or not (brain.team).
+    Feature("opp_hp_side", "opponent", "the lane opponent's health from the side column", "sides"),
+    Feature("opp_r_ready", "opponent", "the lane opponent's ultimate ready", "sides"),
+    Feature("opp_summoners_ready", "opponent", "how many of the opponent's summoner spells are up",
+            "sides"),
+    Feature("my_jungler_hp", "team", "the player's jungler's health", "sides"),
+    Feature("enemy_jungler_hp", "team", "the enemy jungler's health", "sides"),
+    Feature("allies_down", "team", "teammates dead", "sides"),
+    Feature("enemies_down", "team", "enemies dead", "sides"),
+    Feature("team_hp_diff", "team", "the teams' average health difference", "sides"),
     *(Feature(f"role_{r}", "role", f"plays {r.lower()}") for r in ROLES),
 )
 # Named categories, coded per model (only champions seen in enough games get a code).

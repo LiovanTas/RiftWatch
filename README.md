@@ -494,8 +494,10 @@ recordings have the in-game HUD, not the replay's, so for them only minions are 
 ## Learning from gameplay videos
 
 ```bash
+riftwatch videos ingest "D:/replays"           # everything below in one go, then: which files are safe to delete
 riftwatch videos add "D:/replays"              # register a folder (or files); safe to repeat
-riftwatch videos process                       # clock, laning scan, trades -- new or outdated videos
+riftwatch videos process                       # read new videos into the archive, analyse every video
+riftwatch videos archived                      # which files are fully archived: safe to delete
 riftwatch videos list
 riftwatch videos stats --role top              # how the library's players trade
 riftwatch videos add mygame.mp4 --view player --match NA1_5653891812   # your own game
@@ -503,10 +505,25 @@ riftwatch videos add mygame.mp4 --view player --match NA1_5653891812   # your ow
 
 Videos are registered once (by a fingerprint of the file, so a moved file is the same video)
 with champion, opponent, role, region, tier and patch read from names like "IRELIA vs
-RENEKTON (TOP) NA Grandmaster 26.1". `process` reads each video's clock, scans its laning
-phase four times a second, and stores every moment and every trade in Postgres. It is
-versioned: when the analysis improves, every video is re-processed, so the training data never
-mixes old and new readings.
+RENEKTON (TOP) NA Grandmaster 26.1" or "(Pro) Yunara ADC vs Zeri - KR Grandmaster Patch
+26.20".
+
+**You don't keep the videos.** Processing a video reads it once, over the whole game, and
+stores everything in Postgres (`vision/archive.py`).
+
+- **Readings.** Every reader's output four times a second: every champion and minion health
+  bar, the followed champion's panel, the minimap camera, the clock, and all ten champions'
+  health, resource, ultimate and summoner spells from the side columns. That's about 600 KB
+  for a 28-minute game.
+- **Snapshots.** Small JPEG crops of what no reader understands yet: the minimap every 2
+  seconds, and the scoreboard and top bar every 10 seconds (CS, KDA, items, gold, kills,
+  towers). That's about 16 MB a game.
+
+Every later step rebuilds from the archive: trades, situations, features and the brain. So
+improving the analysis or the model never needs the video again, and an analysis change
+re-runs on deleted videos from their archive. `videos archived` (and the end of
+`videos ingest`) checks each archive covers the whole video and says which files are safe to
+delete. A 28-minute 720p game reads in about 6 minutes.
 
 ## The laning brain
 
@@ -530,6 +547,12 @@ from replays mana, which abilities and summoner spells are ready, the level and 
 the last level-up, and lane depth; plus role and champion. Only the past goes into a
 situation's features.
 
+From replays, the side columns add team awareness (`brain/team.py`). The followed champion
+is found among the ten by matching its panel health against each side bar. Each moment then
+gets the lane opponent's health even off screen, whether their ultimate and summoner spells
+are up, both junglers' health, how many champions are dead on each side, and the team health
+difference.
+
 Seven heads answer questions about a situation:
 
 | Head | Question |
@@ -544,9 +567,16 @@ Training (`brain train`) works like this:
 
 - **Held-out games.** Every head is judged by grouped cross-validation: each game's
   situations are predicted by models that never saw that game, and every game weighs the same.
-- **Model selection.** Gradient-boosted trees at three settings and a neural network (a
-  two-layer perceptron) compete on held-out loss for each head, and the card records every
-  candidate's score.
+- **Model selection.** Gradient-boosted trees at three settings, a neural network (a
+  two-layer perceptron), and a blend of the best of each compete on held-out loss for each
+  head. Averaging two kinds of model cancels some of each one's mistakes. The card records
+  every candidate's score.
+- **Weighting.** Every game weighs the same, adjusted for recency: a game 10 patches old
+  counts half, because the game changes. Higher tiers count a little more.
+- **Conformal intervals.** Number-valued heads report the range their held-out errors stayed
+  within 80% and 90% of the time.
+- **`brain needs`** says what to add next: roles with too few games, roles where every game
+  is one champion, and heads short of examples, with roughly how many games they need.
 - **Usable or not.** A head is usable only if it beats the base rate by at least 1% and does so
   in most folds. The coach never quotes a head that isn't usable.
 - **Calibration and bagging.** Probabilities are calibrated (Platt scaling). Candidates are

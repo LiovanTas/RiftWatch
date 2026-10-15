@@ -105,6 +105,7 @@ class Unit:
     columns: list[str] = field(default_factory=list)          # numeric inputs
     categories: dict[str, list[str]] = field(default_factory=dict)
     models: list = field(default_factory=list)                # the bagged ensemble
+    parts: list = field(default_factory=list)   # a blend: (family, models, categories) each
     calibrator: Any = None
     metrics: dict = field(default_factory=dict)
     usable: bool = False
@@ -117,9 +118,20 @@ class Unit:
         return HEADS[self.head].kind
 
     def predict_raw(self, df: pd.DataFrame) -> np.ndarray:
-        """(bags, rows): every bagged model's prediction before calibration."""
+        """(bags, rows): every bagged model's prediction before calibration (for a blend,
+        the average of its families' models bag by bag)."""
+        if self.parts:
+            each = []
+            for _, models, categories in self.parts:
+                X = matrix(df, self.columns, categories)
+                each.append(np.array([raw_predict(m, self.kind, X) for m in models]))
+            return np.mean(each, axis=0)
         X = matrix(df, self.columns, self.categories)
         return np.array([raw_predict(m, self.kind, X) for m in self.models])
+
+    def interval(self, level: int = 80) -> float | None:
+        """Number-valued heads: the held-out error stayed within this, ``level``% of the time."""
+        return self.metrics.get("interval", {}).get(f"q{level}")
 
     def predict_each(self, df: pd.DataFrame) -> np.ndarray:
         """(bags, rows): every bagged model's (calibrated) prediction."""

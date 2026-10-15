@@ -115,6 +115,19 @@ CONTRASTS: tuple[Contrast, ...] = (
              lambda d: d["trades_so_far"] >= 1, _set(since_trade_s=5.0), _set(since_trade_s=60.0),
              lambda d: ((d["trades_so_far"] >= 1) & (d["since_trade_s"] <= 10),
                         (d["trades_so_far"] >= 1) & (d["since_trade_s"] >= 40))),
+    Contrast("opp_summoners", "with the opponent's summoner spells both down",
+             "with both up", ("opp_summoners_ready",),
+             lambda d: d["opp_summoners_ready"].notna(), _set(opp_summoners_ready=0.0),
+             _set(opp_summoners_ready=2.0),
+             lambda d: (d["opp_summoners_ready"] == 0, d["opp_summoners_ready"] == 2)),
+    Contrast("opp_ult", "with the opponent's ultimate down", "with it up", ("opp_r_ready",),
+             lambda d: (d["level"] >= 6) & d["opp_r_ready"].notna(), _set(opp_r_ready=0.0),
+             _set(opp_r_ready=1.0),
+             lambda d: ((d["level"] >= 6) & (d["opp_r_ready"] == 0),
+                        (d["level"] >= 6) & (d["opp_r_ready"] == 1))),
+    Contrast("enemy_down", "with an enemy dead", "with all enemies alive", ("enemies_down",),
+             lambda d: d["enemies_down"].notna(), _set(enemies_down=1.0), _set(enemies_down=0.0),
+             lambda d: (d["enemies_down"] >= 1, d["enemies_down"] == 0)),
     Contrast("closing", "while closing in", "while moving apart", ("closing_2s",),
              lambda d: d["closing_2s"].notna(), _set(closing_2s=-0.1), _set(closing_2s=0.1),
              lambda d: (d["closing_2s"] <= -0.05, d["closing_2s"] >= 0.05)),
@@ -258,6 +271,19 @@ def describe(group: str, r: pd.Series) -> str | None:
     if group == "position" and known("depth"):
         return "pushed up the lane" if r["depth"] > 0.1 else (
             "back near your tower" if r["depth"] < -0.1 else "mid-lane")
+    if group == "opponent" and known("opp_summoners_ready"):
+        n = int(r["opp_summoners_ready"])
+        parts = [("both their summoner spells down", "one of their summoner spells down",
+                  "their summoner spells up")[n]]
+        if known("opp_r_ready"):
+            parts.append("their ultimate up" if r["opp_r_ready"] == 1 else "their ultimate down")
+        return " and ".join(parts)
+    if group == "team" and known("enemies_down", "allies_down"):
+        if r["enemies_down"] or r["allies_down"]:
+            return f"{r['enemies_down']:.0f} enemies and {r['allies_down']:.0f} allies dead"
+        if known("enemy_jungler_hp") and r["enemy_jungler_hp"] < 0.5:
+            return f"the enemy jungler at {100 * r['enemy_jungler_hp']:.0f}% health"
+        return None
     if group == "time" and known("t_min"):
         return None
     return None
