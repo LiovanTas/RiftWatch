@@ -1,8 +1,10 @@
 """Situations from the video library, with the label for every head, and the checks a video's
 readings must pass before the brain learns from it.
 
-A situation is a moment when both health bars are read, the two laners are within trading
-range, neither is in a trade and the player isn't dead, before laning ends (14:00). Its labels
+A situation is a moment when both health bars are read, the two laners are near each other
+(within SITUATION_RANGE -- both on screen, close enough for a ranged champion to trade; the
+close trading range alone would leave out most of an ADC's or a mage's spacing), neither is
+in a trade and the player isn't dead, before laning ends (14:00). Its labels
 look ahead from that moment: whether a trade starts within DECISION_S and who started it; for
 a trade the player started, how it went; how the health difference moved over SWING_S; and
 whether the player died within DIED_S or was back in base within BACK_S. A label whose window
@@ -22,6 +24,7 @@ from riftwatch.brain import features
 from riftwatch.vision import lane
 
 DECISION_S = 1.0          # a trade starting within this long is the decision taken here
+SITUATION_RANGE = 0.65    # bars this close (share of the frame height): near each other
 SWING_S = 10.0
 DIED_S = 15.0
 BACK_S = 45.0
@@ -33,7 +36,7 @@ LABELS = ("trade", "traded_on", "trade_won", "trade_net", "swing_10s", "died_15s
 MIN_LANE_MINUTES = 5.0    # ... this much laning read,
 MIN_COVERAGE = 0.4        # ... its player's own bar read in this share of its moments (the
                           # opponent is often off screen, so theirs says little about reading),
-MIN_CLOCK = 0.6           # ... and its game clock agreed on by this share of readings.
+MIN_CLOCK = 0.5           # ... and its game clock agreed on by most readings.
 
 _SAMPLE_COLS = ("t", "me", "opponent", "distance", "others", "my_minions", "their_minions",
                 "mana", "ready", "level", "depth", "in_base", "dead")
@@ -174,9 +177,9 @@ def labels(s: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
         out["trade_won"][clean] = won[j[clean]]
         out["trade_net"][clean] = net[j[clean]]
 
-    dead = np.nan_to_num(s["dead"].to_numpy(float)) > 0
+    dead = np.array(lane.real_deaths(list(t), list(np.nan_to_num(s["dead"].to_numpy(float)) > 0)))
     in_base = np.nan_to_num(s["in_base"].to_numpy(float)) > 0
-    has_panel = bool(s["mana"].notna().any() or dead.any())
+    has_panel = bool(s["ready"].notna().any() or dead.any())   # (some champions have no mana)
     has_map = bool(s["in_base"].notna().any())
     dead_cum = np.concatenate(([0], np.cumsum(dead)))
     base_cum = np.concatenate(([0], np.cumsum(in_base)))
@@ -214,7 +217,7 @@ def labels(s: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
 def situations_mask(s: pd.DataFrame, trades: pd.DataFrame) -> np.ndarray:
     t = s["t"].to_numpy(float)
     mask = np.array(s["me"].notna() & s["opponent"].notna()
-                    & (s["distance"].to_numpy(float) <= lane.TRADE_RANGE), dtype=bool)
+                    & (s["distance"].to_numpy(float) <= SITUATION_RANGE), dtype=bool)
     mask &= ~(np.nan_to_num(s["dead"].to_numpy(float)) > 0)
     mask &= t <= lane.LANE_END_S
     for start, end in zip(trades["start_s"].to_numpy(float), trades["end_s"].to_numpy(float),

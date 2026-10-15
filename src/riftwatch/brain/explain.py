@@ -108,6 +108,13 @@ CONTRASTS: tuple[Contrast, ...] = (
              _set(others=1.0, others_10s=lambda d: np.maximum(d["others_10s"], 1.0)),
              _set(others=0.0, others_10s=0.0),
              lambda d: (d["others"] >= 1, d["others"] == 0)),
+    Contrast("distance", "at close range", "at the edge of range", ("distance",),
+             lambda d: d["distance"].notna(), _set(distance=0.2), _set(distance=0.55),
+             lambda d: (d["distance"] <= 0.3, d["distance"] >= 0.5)),
+    Contrast("recent_trade", "5 seconds after a trade", "a minute after one", ("since_trade_s",),
+             lambda d: d["trades_so_far"] >= 1, _set(since_trade_s=5.0), _set(since_trade_s=60.0),
+             lambda d: ((d["trades_so_far"] >= 1) & (d["since_trade_s"] <= 10),
+                        (d["trades_so_far"] >= 1) & (d["since_trade_s"] >= 40))),
     Contrast("closing", "while closing in", "while moving apart", ("closing_2s",),
              lambda d: d["closing_2s"].notna(), _set(closing_2s=-0.1), _set(closing_2s=0.1),
              lambda d: (d["closing_2s"] <= -0.05, d["closing_2s"] >= 0.05)),
@@ -121,7 +128,7 @@ def _text(head: str, a: str, b: str, va: float, vb: float) -> str:
         who = ("high-elo players start trades" if head == "trade"
                else "opponents start trades on high-elo players")
         return (f"In otherwise similar spots, {who} {va / vb:.1f}x as often {a} as {b} "
-                f"(about {60 * va:.1f} vs {60 * vb:.1f} times per minute in range).")
+                f"(about {60 * va:.1f} vs {60 * vb:.1f} times per minute near the opponent).")
     if head == "trade_won":
         return (f"Trades high-elo players start {a} are won {100 * va:.0f}% of the time, against "
                 f"{100 * vb:.0f}% {b}, other things equal.")
@@ -240,7 +247,8 @@ def describe(group: str, r: pd.Series) -> str | None:
             return f"you had just lost {-100 * r['me_trend_3s']:.0f} health points"
         return None
     if group == "spacing" and known("in_range_s"):
-        return f"{r['in_range_s']:.0f} seconds in range of them"
+        return (f"{r['in_range_s']:.0f} seconds in close range of them" if r["in_range_s"] >= 1
+                else None)
     if group == "history" and known("since_trade_s"):
         if r["since_trade_s"] >= features.CAP_S:
             return "no trade for over two minutes"

@@ -82,8 +82,8 @@ class Review:
         if self.expected_trades is None:
             return None
         text = (f"Laning brain (trained on {self.brain_games} high-elo games, scored on games it "
-                f"never saw): over the {self.minutes_in_range:.1f} minutes you spent within trading "
-                f"range of your opponent before 14:00, {self.who} in the same spots would have "
+                f"never saw): over the {self.minutes_in_range:.1f} minutes you spent near your lane "
+                f"opponent before 14:00 (both on screen, within trading distance), {self.who} in the same spots would have "
                 f"started about {self.expected_trades:.1f} trades; you started {self.trades}.")
         if self.expected_net is not None and self.actual_net is not None:
             text += (f" From the spots you traded from, it expected a net of "
@@ -204,7 +204,7 @@ def _missed(df, pred, t, step, trades, trade_u, net_u, won_u, who) -> list[Momen
             continue
         best = idx[int(np.nanargmax(p[idx]))]
         why = explain.reasons(trade_u, df.iloc[[best]], sign=1)[0]
-        text = (f"At {clock(t[idx[0]])} you were within trading range of your opponent for "
+        text = (f"At {clock(t[idx[0]])} you were near your opponent for "
                 f"{t[idx[-1]] - t[idx[0]] + step:.0f} seconds"
                 + (f" ({_and(why)})" if why else "")
                 + f" and didn't trade. {who.capitalize()} in spots like this would have started "

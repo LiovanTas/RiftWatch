@@ -23,6 +23,7 @@ LINE = 0.12                            # a white run this long (share of the map
 GAP = 0.09                             # an icon over an edge breaks it by up to this much
 BASES = {"blue": (0.06, 0.06), "red": (0.94, 0.94)}
 IN_BASE = 0.22                         # within this of a base corner: in base
+RIDGE, RIDGE_PX = 20, 2                # a line pixel: this much brighter than 2 px either side
 
 
 def _map_crop(frame_bgr: np.ndarray) -> tuple[np.ndarray, int, int]:
@@ -48,6 +49,22 @@ def _runs(row: np.ndarray, gap: int = 0) -> list[tuple[int, int, int]]:
     return [tuple(m) for m in merged]
 
 
+def _lines(hsv: np.ndarray) -> np.ndarray:
+    """Pixels of the rectangle's thin pale lines: plain white, or -- on pale terrain, and in
+    replays that draw the rectangle dimmer -- clearly brighter than the pixels RIDGE_PX to
+    either side across the line (above and below for an edge, left and right for a side)."""
+    v = hsv[..., 2].astype(np.int16)
+    pale = (v >= 150) & (hsv[..., 1] <= 70)
+    k = RIDGE_PX
+
+    def ridge(axis: int) -> np.ndarray:
+        before, after = np.roll(v, k, axis=axis), np.roll(v, -k, axis=axis)
+        return v - np.maximum(before, after) >= RIDGE
+
+    white = (v >= 190) & (hsv[..., 1] <= 60)
+    return white | (pale & (ridge(0) | ridge(1)))
+
+
 def camera(frame_bgr: np.ndarray) -> tuple[float, float] | None:
     """Centre of the camera rectangle in map coordinates, or None if it isn't found.
 
@@ -60,7 +77,7 @@ def camera(frame_bgr: np.ndarray) -> tuple[float, float] | None:
     if crop.size == 0:
         return None
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-    white = (hsv[..., 2] >= 190) & (hsv[..., 1] <= 60)
+    white = _lines(hsv)
     bw, bh = BOX[0] * mw, BOX[1] * mh
     # Horizontal edges: rows with a long white run; keep that run's extent.
     lines = []

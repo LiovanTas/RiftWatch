@@ -129,4 +129,17 @@ def test_samples_add_the_panel_and_the_map():
     assert out[0].in_base and out[1].map_x == out[0].map_x and out[1].in_base
     assert not out[2].in_base and out[2].depth > out[0].depth
     assert not out[0].is_ready("R") and out[0].is_ready("Q") and out[2].is_ready("R")
-    assert out[4].dead and out[4].ready is None and out[4].map_x is None
+    # A moment's blank panel is a misread, not a death (deaths last DEAD_MIN_S or more).
+    assert not out[4].dead and out[4].ready is None and out[4].map_x is None
+
+
+def test_only_a_long_blank_panel_is_a_death():
+    from riftwatch.vision.lane import real_deaths
+
+    t = [i * 0.25 for i in range(80)]
+    dead = [False] * 80
+    dead[4:8] = [True] * 4              # one second blank: a misread
+    dead[20:60] = [True] * 40           # ten seconds: a death
+    dead[64:76] = [True] * 12           # three seconds: a misread
+    out = real_deaths(t, dead)
+    assert not any(out[4:8]) and all(out[20:60]) and sum(out) == 40

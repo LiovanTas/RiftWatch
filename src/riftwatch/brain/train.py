@@ -15,7 +15,9 @@ games of its own:
    worth trying with a few hundred games.)
 3. **The bar to clear.** A head is *usable* only if it beats the plain base rate (the
    training folds' average) on held-out games by at least MIN_GAIN, and does so in most
-   folds -- not on average thanks to one lucky fold. Unusable heads stay on the card; the
+   folds -- not on average thanks to one lucky fold -- and, for yes/no heads, ranks
+   situations clearly better than chance (AUC at least MIN_AUC): calibration alone can edge
+   out the base rate's loss without the model telling situations apart. Unusable heads stay on the card; the
    coach never quotes them.
 4. **Calibration.** Probabilities are mapped through a logistic (Platt) fit of what
    actually happened on the out-of-fold predictions, so "30%" means 30%. Candidates are
@@ -49,7 +51,8 @@ from riftwatch.brain.heads import HEADS, PRIMARY
 from riftwatch.brain.model import Brain, Platt, Unit, estimator, fit, matrix, raw_predict
 
 MIN_GAIN = 0.01           # beat the base rate's held-out loss by at least 1% ...
-FOLD_SHARE = 0.6          # ... in at least this share of folds
+FOLD_SHARE = 0.6          # ... in at least this share of folds ...
+MIN_AUC = 0.55            # ... and (yes/no heads) rank situations better than chance by this
 TREE_GRID = (
     {"learning_rate": 0.05, "max_leaf_nodes": 15, "min_samples_leaf": 40, "l2_regularization": 1.0},
     {"learning_rate": 0.05, "max_leaf_nodes": 31, "min_samples_leaf": 20, "l2_regularization": 0.3},
@@ -76,7 +79,7 @@ class TrainConfig:
     learning_curve: bool = True
     importance: bool = True
     min_videos: int = 5
-    role_min_videos: int = 10
+    role_min_videos: int = 5        # a role model is tried from this many games (kept if it wins)
     min_rows: int = 200
     min_class: int = 20              # binary heads: at least this many of each outcome
     champion_min_videos: int = 3
@@ -149,7 +152,8 @@ def _metrics(kind: str, y, p, base, w, fold_of: np.ndarray) -> dict:
         m["mean"] = round(float(np.average(y, weights=w)), 5)
         m["gain"] = round(1 - m["rmse"] / m["base_rmse"], 4) if m["base_rmse"] else 0.0
     m["usable"] = bool(m["gain"] >= MIN_GAIN and len(folds)
-                       and better >= np.ceil(FOLD_SHARE * len(folds)))
+                       and better >= np.ceil(FOLD_SHARE * len(folds))
+                       and (kind != "binary" or m.get("auc", 0) >= MIN_AUC))
     return m
 
 
@@ -180,6 +184,7 @@ class _Setup:
     fold_of: np.ndarray
     columns: list[str]
     categories: dict[str, list[str]]
+    roles: np.ndarray | None = None
 
 
 def _candidates(cfg: TrainConfig) -> list[tuple[str, dict]]:
@@ -319,18 +324,24 @@ def _curve(s: _Setup, family: str, params: dict, cfg: TrainConfig) -> dict:
             tasks.append((_spec(family, params, s, cfg), _inputs(family, s, idx), s.y[idx],
                           s.w[idx], _inputs(family, s, test)))
             slots.append((share, test, train, len(chosen)))
+    # Scored like the heads: calibrated across folds first (raw trees on a few games are
+    # over-confident, which would make the curve look far worse than the model is).
     by_share: dict[float, list] = {}
     for (share, test, train, n), (_, p) in zip(slots, _run(tasks, cfg), strict=True):
-        base = np.full(test.sum(), _base(s.kind, s.y[train], s.w[train]))
-        by_share.setdefault(share, []).append(
-            (_loss(s.kind, s.y[test], p, s.w[test]), _loss(s.kind, s.y[test], base, s.w[test]),
-             s.w[test].sum(), n))
+        by_share.setdefault(share, []).append((test, p, _base(s.kind, s.y[train], s.w[train]), n))
     points = []
-    for share, rows in by_share.items():
-        d = np.array(rows)
-        points.append({"share": share, "train_games": round(float(d[:, 3].mean()), 1),
-                       "loss": round(float(np.average(d[:, 0], weights=d[:, 2])), 5),
-                       "base_loss": round(float(np.average(d[:, 1], weights=d[:, 2])), 5)})
+    for share, parts in by_share.items():
+        pred, base = np.full(len(s.y), np.nan), np.full(len(s.y), np.nan)
+        fold = np.full(len(s.y), -1)
+        for i, (test, p, b, _) in enumerate(parts):
+            pred[test], base[test], fold[test] = p, b, i
+        ok = ~np.isnan(pred)
+        if s.kind == "binary":
+            pred[ok] = _crossfit(s.y[ok], pred[ok], s.w[ok], fold[ok])
+        points.append({"share": share,
+                       "train_games": round(float(np.mean([n for *_, n in parts])), 1),
+                       "loss": round(_loss(s.kind, s.y[ok], pred[ok], s.w[ok]), 5),
+                       "base_loss": round(_loss(s.kind, s.y[ok], base[ok], s.w[ok]), 5)})
     improving = (len(points) >= 2 and points[-1]["loss"] < points[-2]["loss"] * (1 - MIN_GAIN / 2))
     return {"head": s.head, "points": points, "still_improving": bool(improving)}
 
@@ -354,6 +365,29 @@ def _bag(s: _Setup, family: str, params: dict, cfg: TrainConfig) -> list:
         tasks.append((_spec(family, params, s, cfg, seed=cfg.seed + b),
                       _inputs(family, s, rows), s.y[rows], w[rows], None))
     return [model for model, _ in _run(tasks, cfg)]
+
+
+def _by_role(s: _Setup, oof, base, ok) -> dict[str, dict]:
+    """The held-out score within each role: a pooled model can work for laners and not for
+    junglers, and the pooled number would hide it."""
+    out = {}
+    if s.roles is None:
+        return out
+    for role in sorted(r for r in set(s.roles[ok]) if r):
+        m = ok & (s.roles == role)
+        if len(np.unique(s.videos[m])) < 2:
+            continue
+        y, p, b, w = s.y[m], oof[m], base[m], s.w[m]
+        row = {"games": int(len(np.unique(s.videos[m]))), "situations": int(m.sum()),
+               "loss": round(_loss(s.kind, y, p, w), 5),
+               "base_loss": round(_loss(s.kind, y, b, w), 5)}
+        if s.kind == "binary" and len(np.unique(y)) > 1:
+            from sklearn.metrics import roc_auc_score
+
+            row["auc"] = round(float(roc_auc_score(y, p, sample_weight=w)), 4)
+        row["better"] = bool(row["loss"] < row["base_loss"])
+        out[role] = row
+    return out
 
 
 def _calibrator(y, p, w) -> Platt | None:
@@ -404,8 +438,10 @@ def _setup(df: pd.DataFrame, head, variant: str, folds: list[np.ndarray],
         keep = sorted(per[per >= cfg.champion_min_videos].index.tolist())
         if keep:
             categories[c] = keep
+    from riftwatch.brain.model import _row_roles
+
     s = _Setup(head.name, head.kind, matrix(rows, columns, categories), y, _weights(videos),
-               videos, _fold_of(videos, folds), columns, categories)
+               videos, _fold_of(videos, folds), columns, categories, _row_roles(rows))
     return s, None
 
 
@@ -448,6 +484,7 @@ def train_unit(df: pd.DataFrame, head, variant: str, segment: str, folds: list[n
     if s.kind == "binary":
         metrics["log_loss_uncalibrated"] = round(_logloss(s.y[ok], raw[ok], s.w[ok]), 5)
     metrics["games"] = int(len(np.unique(s.videos)))
+    metrics["by_role"] = _by_role(s, oof, base, ok)
     metrics["situations"] = int(len(s.y))
     if s.kind == "binary":
         unit.calibrator = _calibrator(s.y[ok], raw[ok], s.w[ok])

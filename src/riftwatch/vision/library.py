@@ -36,6 +36,14 @@ _TITLE = re.compile(
     r"(?:\s+(?P<region>[A-Za-z]{2,4}))?"
     r"(?:\s+(?P<tier>" + "|".join(TIERS) + r"))?"
     r"(?:\s+(?P<patch>\d+\.\d+))?", re.IGNORECASE)
+# "(IJC Soldier) Yunara ADC vs Miss Fortune (G2 Hans) - EUW Challenger Patch 26.20": pro
+# player names in brackets, the role after the champion, then region, tier and patch.
+_TITLE_ROLE_FIRST = re.compile(
+    r"^(?:\([^)]*\)\s*)?(?P<champion>.+?)\s+(?P<role>" + "|".join(ROLES) + r")\s+vs\.?\s+"
+    r"(?P<opponent>.+?)\s*(?:\([^)]*\))?\s*(?:-\s*|$)"
+    r"(?:(?P<region>[A-Za-z]{2,4})\s+)?"
+    r"(?:(?P<tier>" + "|".join(TIERS) + r")\s*)?"
+    r"(?:Patch\s+(?P<patch>\d+\.\d+))?", re.IGNORECASE)
 
 
 @dataclass
@@ -50,10 +58,11 @@ class VideoMeta:
 
 
 def parse_title(name: str) -> VideoMeta:
-    """Metadata from a file name such as "IRELIA vs RENEKTON (TOP) NA Grandmaster 26.1_720p".
-    Anything that doesn't follow the pattern just has no metadata."""
+    """Metadata from a file name such as "IRELIA vs RENEKTON (TOP) NA Grandmaster 26.1_720p"
+    or "Yunara ADC vs Zeri (BFX Slayer) - KR Grandmaster Patch 26.20_720p". Anything that
+    follows neither pattern just has no metadata."""
     title = re.sub(r"[_ ]\d{3,4}p$", "", Path(name).stem).strip()
-    m = _TITLE.match(title)
+    m = _TITLE.match(title) or _TITLE_ROLE_FIRST.match(title)
     if not m:
         return VideoMeta(title)
 

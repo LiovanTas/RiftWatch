@@ -696,6 +696,11 @@ def _print_brain(card: dict, detail: bool) -> None:
         m = u["metrics"]
         cands = ", ".join(f"{c['family']} {c['loss']:.4f}" for c in m.get("candidates", []))
         print(f"      candidates (held-out loss): {cands}")
+        roles = m.get("by_role", {})
+        if roles:
+            print("      by role: " + ", ".join(
+                f"{r.lower()} {v['loss']:.4f} vs {v['base_loss']:.4f}"
+                + (f" AUC {v['auc']:.2f}" if "auc" in v else "") for r, v in roles.items()))
         imp = [(g, v) for g, v in m.get("importance", {}).items() if v["share"] > 0][:5]
         if imp:
             print("      what matters: " + ", ".join(f"{g} {100 * v['share']:.0f}%" for g, v in imp))

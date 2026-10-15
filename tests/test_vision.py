@@ -185,14 +185,15 @@ def test_parallel_scan_matches_a_single_pass(tmp_path):
 
 # -- game clock -----------------------------------------------------------------------------------
 
-def clock_frame(seconds, seed=0, h=720, w=1280):
+def clock_frame(seconds, seed=0, h=720, w=1280, font=None, scale=0.85):
     """A frame with the replay clock drawn where the HUD puts it."""
     frame = background(seed, h=h, w=w)
     k = h / 720
     cv2.rectangle(frame, (round(600 * k), round(48 * k)), (round(690 * k), round(64 * k)), (30, 28, 24), -1)
     m, s = divmod(seconds, 60)
-    cv2.putText(frame, f"{m:02d}:{s:02d}", (round(626 * k), round(61 * k)), cv2.FONT_HERSHEY_PLAIN,
-                0.85 * k, (235, 235, 235), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"{m:02d}:{s:02d}", (round(626 * k), round(61 * k)),
+                cv2.FONT_HERSHEY_PLAIN if font is None else font,
+                scale * k, (235, 235, 235), 1, cv2.LINE_AA)
     return frame
 
 
@@ -218,7 +219,22 @@ def test_shipped_clock_templates_exist():
     from riftwatch.vision import clock
 
     templates = clock.load_templates()
-    assert templates is not None and templates.shape == (10, clock.GLYPH[0] * clock.GLYPH[1])
+    assert templates is not None and templates.shape[0] % 10 == 0       # ten digits per font
+    assert templates.shape[1] == clock.GLYPH[0] * clock.GLYPH[1]
+
+
+def test_clock_adapts_to_a_new_font():
+    from riftwatch.vision import clock
+
+    plain = clock.learn([(clock_frame(t, seed=t % 7), t) for t in range(60, 700, 7)])
+    other = dict(font=cv2.FONT_HERSHEY_SIMPLEX, scale=0.42)
+    frames = [(float(t), clock_frame(t + 45, seed=t % 5, **other)) for t in range(5, 1500, 12)]
+    off, agree = clock._adapt(frames, plain)
+    assert off == pytest.approx(45.5, abs=0.6) and agree >= clock.MIN_AGREE
+    # Templates for two fonts read both.
+    both = np.vstack([plain, clock.learn([(img, int(t + 45)) for t, img in frames], plain)])
+    assert clock.read(clock_frame(389, seed=3), both) == 389
+    assert clock.read(clock_frame(389, seed=3, **other), both) == 389
 
 
 # -- minions --------------------------------------------------------------------------------------

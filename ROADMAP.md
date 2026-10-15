@@ -98,6 +98,8 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
       grouped cross-validation, trees vs neural network selection, usable-only-if-it-beats-base,
       Platt calibration, bagged ensembles, role models, importance, learning curve, patterns in
       words, versioned registry, video review with key moments and reasons, coach evidence
+- [x] First real training: 21 high-elo replays across top, jungle, mid and ADC; per-role held-out
+      scores; self-adapting clock fonts; minimap line detection; 9-second death rule
 - [ ] A sequence model (transformer over the raw readings) once the library has a few hundred games
 - [ ] Fill the library: high-elo videos per role (and your own games, linked to their matches);
       then tie bars to champions and read the player-view HUD clock

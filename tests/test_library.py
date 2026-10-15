@@ -16,6 +16,16 @@ TEST_DB = os.environ.get("RIFTWATCH_TEST_DATABASE_URL")
     ("LEE SIN vs VIEGO (JUNGLE) EUW Master 26.3_1080p.mkv",
      ("Lee Sin", "Viego", "JUNGLE", "EUW", "MASTER", "26.3")),
     ("Thresh vs Nautilus (Support).mp4", ("Thresh", "Nautilus", "UTILITY", None, None, None)),
+    ("(IJC Soldier) Yunara ADC vs Miss Fortune - EUW Challenger Patch 26.20_720p.mp4",
+     ("Yunara", "Miss Fortune", "BOTTOM", "EUW", "CHALLENGER", "26.20")),
+    ("(BFX VicLa) Viego Jungle vs Qiyana (T1 Faker) - KR Challenger Patch 26.18_720p.mp4",
+     ("Viego", "Qiyana", "JUNGLE", "KR", "CHALLENGER", "26.18")),
+    ("Aurelion Sol Mid vs Kassadin - EUW Grandmaster Patch 26.14_720p.mp4",
+     ("Aurelion Sol", "Kassadin", "MIDDLE", "EUW", "GRANDMASTER", "26.14")),
+    ("Volibear Top vs Yone - VN Master Patch 26.20_720p.mp4",
+     ("Volibear", "Yone", "TOP", "VN", "MASTER", "26.20")),
+    ("Viego Jungle vs Jarvan IV - EUW Master Patch 26.17_720p.mp4",
+     ("Viego", "Jarvan Iv", "JUNGLE", "EUW", "MASTER", "26.17")),
     ("my ranked game.mp4", (None, None, None, None, None, None)),
 ])
 def test_parse_title(name, expect):

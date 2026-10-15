@@ -453,7 +453,10 @@ opponent's 80; at 10:06 she lost 49 to 24.
 
 **Game clock.** Game time is read off the replay's clock: each character is cut out, scaled to
 a fixed size and matched against digit shapes learned from video whose time was known (and
-shipped with the package). A colon is told from a "1" by shape, not width. On the held-out
+shipped with the package, one set per channel font). A video in an unfamiliar font adapts
+by itself. A loose majority vote gives a first offset, the video's own digits are learned
+with it, and a strict re-read has to agree. Learned from one video of a second channel, the
+new font read the other 19 with every offset right (checked by eye on three). A colon is told from a "1" by shape, not width. On the held-out
 half of the training replay it read 821 of 960 seconds right, 2 wrong and 137 not at all
 (something bright over the clock); for a whole video only the offset matters, and the value
 most readings agree on was right to the half-second frame. 41 readings take 3.5 s.
@@ -470,13 +473,17 @@ the icon, so each slot is judged against its own bright level over the video. Le
 counted from experience-bar resets (a reset has to hold for a second reading, so one misread
 frame isn't a level-up). On the training replay all 54 slots checked by eye across 9 frames
 were right, and every level-up checked against the screen landed on its frame. When the
-panel's bars all vanish the champion is dead.
+panel's bars all vanish for at least 9 seconds the champion is dead. The shortest death
+timer is about 10 seconds, and shorter blanks are misreads; on the second channel's replays
+they had doubled the apparent death rate.
 
 **Minimap.** The minimap draws the camera's view as a white rectangle, and replays keep the
 camera on the followed champion, so its centre is that champion's place on the map, every
 frame, without identifying an icon. Edges broken by icons are joined, and a rectangle cut off
-by the map's border is placed from the edge that shows. The position was found in 90% of
-frames on the replay. From it: how deep into the lane the champion stands (-1 at their own
+by the map's border is placed from the edge that shows. A line pixel is plain white, or
+clearly brighter than the pixels just across the line. Some channels draw the rectangle
+dimmer, and top lane is pale terrain. The position was found in 90% of frames on the first
+replay and in 92–95% on a second channel's (74% in one top game). From it: how deep into the lane the champion stands (-1 at their own
 base, +1 at the enemy's) and whether they're in base.
 
 **After each trade.** With those, every trade records the state it started in (level, mana,
@@ -568,6 +575,27 @@ heads with no planted signal (threat, trade net, health swing) as unusable. A pa
 feature with no real effect ("another enemy close by", 1.3x) was caught by the held-out
 importance gate. The full training took 100 seconds on a 16-core PC: 5 folds, 5 candidates,
 5 bags, 14 head/variant pairs, run side by side in worker processes.
+
+**First real training (21 high-elo replays: 5 each of top, jungle, mid and ADC, plus one
+more top game).** It yielded 5,805 situations. A situation is any moment the two laners are
+near each other: both on screen, within 0.65 of the screen height. That is wide enough to
+cover a ranged champion's spacing; the close trading range alone gave a third as many and
+left ADCs and mages almost out. Training took about 4 minutes. Held-out scores on games the
+brain never saw:
+
+| Head | AUC (top / jungle / mid / ADC) | Usable |
+|---|---|---|
+| `trade` | 0.72 (0.74 / 0.68 / 0.73 / 0.71) | yes |
+| `traded_on` | 0.69 (0.67 / 0.64 / 0.74 / 0.69) | yes |
+| `back_45s` | 0.71 (0.68 / 0.66 / 0.74 / 0.76) | yes |
+| `died_15s` | 0.54 | no |
+| `swing_10s` | R² 0.00 | no |
+| `trade_won`, `trade_net` | | skipped: about 25 trades with a readable moment before them |
+
+What drives the trade decision is spacing (46%), the trade history (28%) and mana (16%). Two
+patterns passed every check. Opponents start trades on high-elo players 2.9x as often at
+close range as at the edge of range, and the players start them 2.1x as often. The learning
+curve is still falling at 17 training games, so more videos will help.
 
 `brain review` and the coach judge one of your processed game videos. They compare how many
 trades high-elo players would have started in the spots you stood in with how many you did,

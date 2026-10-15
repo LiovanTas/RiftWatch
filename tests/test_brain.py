@@ -12,9 +12,9 @@ pytest.importorskip("sklearn")
 # -- features and labels on a hand-built video (no database) -------------------------------
 
 def tiny():
-    """20 s at 4 readings a second: in range, a trade the player starts at 5 s (won), quiet,
-    one the opponent starts at 12 s, then the player dies at 16 s."""
-    t = np.arange(0, 20, 0.25) + 300
+    """30 s at 4 readings a second: in range, a trade the player starts at 5 s (won), quiet,
+    one the opponent starts at 12 s, then the player dies at 16 s (dead for 14 s)."""
+    t = np.arange(0, 30, 0.25) + 300
     n = len(t)
     s = pd.DataFrame({"t": t, "me": 0.8, "opponent": 0.6, "distance": 0.2, "others": 0.0,
                       "my_minions": 4.0, "their_minions": 2.0, "mana": 0.5,
@@ -32,7 +32,7 @@ def tiny():
         (312.0, 313.0, 0.2, 0.0, "opponent", False, "lost", True, None)],
         columns=["start_s", "end_s", "me_lost", "opponent_lost", "started_by", "skirmish",
                  "result", "died", "back_after_s"])
-    assert n == 80
+    assert n == 120
     return s, trades
 
 
@@ -70,7 +70,7 @@ def test_labels_look_ahead_from_each_moment():
     assert np.isnan(lab["trade_net"].iloc[at[303.0]])          # no trade started from there
     assert lab["traded_on"].iloc[at[311.5]] == 1 and lab["trade"].iloc[at[311.5]] == 0
     assert lab["died_15s"].iloc[at[302.0]] == 1 and lab["died_15s"].iloc[at[300.0]] == 0
-    assert np.isnan(lab["died_15s"].iloc[at[306.0]])          # the video ends before 15 s pass
+    assert np.isnan(lab["died_15s"].iloc[at[316.0]])          # the video ends before 15 s pass
     # Health swing over 10 s from 303 s: the opponent lost 20 points in the trade.
     assert lab["swing_10s"].iloc[at[303.0]] == pytest.approx(0.2 - 0.2)
     # In trades, dead, or out of range: not situations.
@@ -268,6 +268,7 @@ def test_training_judges_every_head_on_held_out_games(trained):
     assert trade.usable and trade.metrics["auc"] > 0.65
     assert trade.metrics["log_loss"] < trade.metrics["base_log_loss"]
     assert trade.metrics["folds"] == 3 and trade.metrics["games"] == GAMES
+    assert trade.metrics["by_role"]["TOP"]["games"] == GAMES          # scored within each role
     families = {c["family"] for c in trade.metrics["candidates"]}
     assert families == {"trees", "neural"}          # both kinds of model were tried
     assert len(trade.models) == 2 and trade.calibrator is not None

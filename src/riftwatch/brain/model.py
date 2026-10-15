@@ -161,7 +161,7 @@ class Brain:
         for v in dict.fromkeys((variant, "basic")):
             if role:
                 u = self.units.get(self.key(head, v, role))
-                if u is not None and not u.skipped and u.metrics.get("beats_pooled"):
+                if u is not None and u.usable and u.metrics.get("beats_pooled"):
                     return u
             u = self.units.get(self.key(head, v, "all"))
             if u is not None and not u.skipped:
@@ -174,8 +174,9 @@ class Brain:
 
     @staticmethod
     def variant_for(df: pd.DataFrame) -> str:
-        """``full`` when the situations show the HUD panel (replays), else ``basic``."""
-        return "full" if len(df) and df["mana"].notna().mean() > 0.5 else "basic"
+        """``full`` when the situations show the HUD panel (replays), else ``basic``. Read
+        from the ability slots: some champions have no mana bar."""
+        return "full" if len(df) and df["q_ready"].notna().mean() > 0.5 else "basic"
 
     def predict(self, df: pd.DataFrame, variant: str | None = None) -> pd.DataFrame:
         """Every head's prediction (and the ensemble's spread, ``<head>_sd``) per situation,

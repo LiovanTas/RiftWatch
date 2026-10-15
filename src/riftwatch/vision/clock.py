@@ -9,6 +9,12 @@ For a whole video only the offset matters (game time = video time + offset, cons
 the replay was paused or cut), so ``offset`` reads the clock at many moments and takes the
 value most of them agree on: a few misreads -- a flash over the clock, a frame mid-change --
 are simply outvoted.
+
+Channels render the clock a little differently, so the templates hold one set of ten digits
+per font seen so far. A video in a new font adapts by itself (``video_offset``): a loose vote
+gives a first offset, the video's own digits are learned with it, and the clock is re-read
+strictly with them. A wrong first offset would label the same shape as different digits and
+the strict re-read wouldn't agree, so it is accepted only if it does.
 """
 
 from __future__ import annotations
@@ -23,6 +29,8 @@ REGION = (0.46, 0.065, 0.54, 0.092)          # x0, y0, x1, y1
 GLYPH = (12, 16)                             # normalised glyph size (w, h)
 TEMPLATES = Path(__file__).parent / "data" / "clock_digits.npz"
 MIN_MATCH = 0.6                              # correlation below this: not confident
+LOOSE_MATCH = 0.45                           # for a first guess in an unfamiliar font
+MIN_AGREE = 0.5                              # share of readings that must agree on the offset
 
 
 def _crop(frame_bgr: np.ndarray) -> np.ndarray:
@@ -88,7 +96,8 @@ def load_templates(path: Path = TEMPLATES) -> np.ndarray | None:
     return np.load(path)["digits"]
 
 
-def read(frame_bgr: np.ndarray, templates: np.ndarray | None = None) -> int | None:
+def read(frame_bgr: np.ndarray, templates: np.ndarray | None = None,
+         min_match: float = MIN_MATCH) -> int | None:
     """Game time on the clock, in seconds; None if it can't be read confidently."""
     templates = load_templates() if templates is None else templates
     if templates is None:
@@ -100,17 +109,19 @@ def read(frame_bgr: np.ndarray, templates: np.ndarray | None = None) -> int | No
     for g in digits:
         scores = templates @ _normalise(g)
         best = int(np.argmax(scores))
-        if scores[best] < MIN_MATCH:
+        if scores[best] < min_match:
             return None
-        values.append(best)
+        values.append(best % 10)        # templates may hold several fonts, ten digits each
     m1, m2, s1, s2 = values
     if s1 > 5:
         return None
     return (m1 * 10 + m2) * 60 + s1 * 10 + s2
 
 
-def learn(labelled: list[tuple[np.ndarray, int]]) -> np.ndarray:
-    """Templates from (frame, true game seconds) pairs: the mean glyph of each digit."""
+def learn(labelled: list[tuple[np.ndarray, int]],
+          fallback: np.ndarray | None = None) -> np.ndarray:
+    """Templates from (frame, true game seconds) pairs: the mean glyph of each digit. A digit
+    with no example takes ``fallback``'s (the first font's), if given."""
     sums = np.zeros((10, GLYPH[0] * GLYPH[1]), np.float64)
     counts = np.zeros(10, int)
     for frame, seconds in labelled:
@@ -122,8 +133,10 @@ def learn(labelled: list[tuple[np.ndarray, int]]) -> np.ndarray:
             sums[d] += _normalise(g)
             counts[d] += 1
     missing = [d for d in range(10) if counts[d] == 0]
-    if missing:
+    if missing and fallback is None:
         raise ValueError(f"no examples of digit(s) {missing}")
+    for d in missing:
+        sums[d], counts[d] = fallback[d], 1
     means = sums / counts[:, None]
     return np.stack([m / np.linalg.norm(m) for m in means])
 
@@ -152,14 +165,32 @@ def video_offset(path: str, samples: int = 41) -> tuple[float, float] | None:
         raise OSError(f"can't open video {path}")
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     duration = (cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0) / fps
-    readings = []
+    frames = []
     try:
         for k in range(samples):
             t = duration * (k + 0.5) / samples
             cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
             ok, img = cap.read()
             if ok:
-                readings.append((cap.get(cv2.CAP_PROP_POS_MSEC) / 1000 - 1 / fps, read(img, templates)))
+                frames.append((cap.get(cv2.CAP_PROP_POS_MSEC) / 1000 - 1 / fps, img))
     finally:
         cap.release()
-    return offset(readings) if readings else None
+    if not frames:
+        return None
+    found = offset([(t, read(img, templates)) for t, img in frames])
+    if found is not None and found[1] >= MIN_AGREE:
+        return found
+    return _adapt(frames, templates) or found
+
+
+def _adapt(frames: list[tuple[float, np.ndarray]], templates: np.ndarray) -> tuple[float, float] | None:
+    """An unfamiliar font: a loose vote, the video's own digits learned with it, then a strict
+    re-read that has to agree."""
+    guess = offset([(t, read(img, templates, LOOSE_MATCH)) for t, img in frames])
+    if guess is None:
+        return None
+    own = learn([(img, int(t + guess[0])) for t, img in frames], fallback=templates[:10])
+    found = offset([(t, read(img, np.vstack([templates, own]))) for t, img in frames])
+    if found is None or found[1] < MIN_AGREE or abs(found[0] - guess[0]) > 1.5:
+        return None
+    return found

@@ -47,6 +47,8 @@ GONE_S = 8.0             # gone: out of range or out of view from half this afte
 POSITION_HOLD_S = 3.0    # a missed camera reading takes the last one for this long
 LEVEL_KNOWN_BEFORE = 100.0   # levels count from 1 only if the video starts before this
 SLOTS = "QWERDF"         # ready bits, in this order (D and F are the summoner spells)
+DEAD_MIN_S = 9.0         # the panel blank this long is a death (the shortest death timer is
+                         # about 10 s); shorter is a misread or a cut
 
 
 @dataclass
@@ -268,6 +270,8 @@ def _add_hud(out: list[Sample], extras: list, my_team_votes: dict[str, int]) -> 
             if side is not None:
                 s.depth = round(minimap.depth(pos, side), 3)
                 s.in_base = minimap.in_base(pos, side)
+    for s, d in zip(out, real_deaths([s.t for s in out], [s.dead for s in out]), strict=True):
+        s.dead = d
 
 
 def _smooth(values: list[float | None]) -> list[float | None]:
@@ -325,10 +329,28 @@ def trades(seq: list[Sample], until: float = LANE_END_S) -> LaneReport:
     return report
 
 
+def real_deaths(t: list[float], dead: list[bool], min_s: float = DEAD_MIN_S) -> list[bool]:
+    """``dead`` with blank-panel stretches shorter than ``min_s`` cleared: a death timer runs
+    for many seconds; a panel missing for a moment was misread."""
+    out = list(dead)
+    i = 0
+    while i < len(out):
+        if not out[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(out) and out[j + 1]:
+            j += 1
+        if t[j] - t[i] < min_s:
+            out[i:j + 1] = [False] * (j - i + 1)
+        i = j + 1
+    return out
+
+
 def _consequences(trade: Trade, seq: list[Sample], opp: list[float | None], last: int) -> None:
     """What followed a trade, from the moments after it (None where the video doesn't say)."""
     after = [s for s in seq if trade.end < s.t <= trade.end + DIED_WITHIN_S]
-    if any(s.mana is not None or s.dead for s in seq):   # the panel is read: deaths show
+    if any(s.ready is not None or s.dead for s in seq):  # the panel is read: deaths show
         trade.died = any(s.dead for s in after)
     if any(s.in_base is not None for s in seq):
         back = next((s for s in seq if trade.start < s.t <= trade.start + BACK_WITHIN_S
