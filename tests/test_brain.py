@@ -256,10 +256,22 @@ def test_check_keeps_bad_readings_out(library_db):
         "VALUES (500, 'x.mp4', 'fpx', 'unreadable', NULL, 'spectator', 'done', 1)")
     checks = {c.video_id: c for c in data.check(library_db)}
     assert checks[1].ok and not checks[500].ok
-    assert any("older analyser" in p for p in checks[500].problems)
+    assert any("minutes of laning" in p for p in checks[500].problems)
     assert any("role unknown" in w for w in checks[500].warnings)
     assert 500 not in set(data.load(library_db)["video_id"])
     library_db.execute("DELETE FROM videos WHERE id = 500")
+    # A trained-on video whose file was deleted keeps its readings, even when outdated.
+    library_db.execute("UPDATE videos SET analyzer_version = 1 WHERE id = 2")
+    from riftwatch.vision import library
+
+    library.process(library_db)
+    status, version = library_db.execute(
+        "SELECT status, analyzer_version FROM videos WHERE id = 2").fetchone()
+    assert (status, version) == ("done", 1)
+    kept = {c.video_id: c for c in data.check(library_db)}[2]
+    assert kept.ok and any("file deleted" in w for w in kept.warnings)
+    library_db.execute("UPDATE videos SET analyzer_version = %s WHERE id = 2",
+                       (library.ANALYZER_VERSION,))
 
 
 def test_training_judges_every_head_on_held_out_games(trained):

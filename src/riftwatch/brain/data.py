@@ -15,6 +15,7 @@ left unknown, and that situation simply doesn't count for that head.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -70,7 +71,7 @@ def check(conn: psycopg.Connection, view: str = "spectator") -> list[VideoCheck]
 
     rows = conn.execute(
         """
-        SELECT v.id, v.title, v.role, v.tier, v.clock_agreement, v.analyzer_version,
+        SELECT v.id, v.title, v.role, v.tier, v.clock_agreement, v.analyzer_version, v.path,
                coalesce((max(s.t) - min(s.t)) / 60, 0),
                coalesce(avg((s.me IS NOT NULL)::int), 0),
                count(*) FILTER (WHERE s.distance <= %s),
@@ -80,10 +81,12 @@ def check(conn: psycopg.Connection, view: str = "spectator") -> list[VideoCheck]
          GROUP BY v.id ORDER BY v.id
         """, (lane.TRADE_RANGE, view)).fetchall()
     out = []
-    for vid, title, role, tier, clock, version, minutes, coverage, in_range, trades in rows:
+    for vid, title, role, tier, clock, version, path, minutes, coverage, in_range, trades in rows:
         c = VideoCheck(vid, title, role, tier, float(minutes), float(coverage), int(in_range),
                        int(trades), clock)
-        if version != ANALYZER_VERSION:
+        if version != ANALYZER_VERSION and not Path(path).exists():
+            c.warnings.append(f"file deleted: keeping its readings from analyser v{version}")
+        elif version != ANALYZER_VERSION:
             c.problems.append("processed by an older analyser (run: riftwatch videos process)")
         if c.lane_minutes < MIN_LANE_MINUTES:
             c.problems.append(f"only {c.lane_minutes:.1f} minutes of laning read")

@@ -204,6 +204,13 @@ def process(conn: psycopg.Connection, limit: int | None = None,
     """Process every pending or outdated video. One bad file is recorded, not raised."""
     done, failed = 0, []
     for video_id, path in pending(conn, limit):
+        if not Path(path).exists() and conn.execute(
+                "SELECT status = 'done' FROM videos WHERE id = %s", (video_id,)).fetchone()[0]:
+            # Deleted after an earlier analyser read it: keep those readings rather than
+            # losing the game from training (it can't be re-read).
+            if progress:
+                progress(f"{Path(path).name}: file gone, keeping its earlier readings")
+            continue
         if progress:
             progress(f"processing {Path(path).name}")
         try:
