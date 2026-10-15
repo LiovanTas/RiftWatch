@@ -84,7 +84,7 @@ def _mean(columns: list[np.ndarray]) -> np.ndarray:
 
 def features(f: pd.DataFrame | None, t: np.ndarray) -> pd.DataFrame:
     """The team features at game times ``t`` (all NaN when the video has no side columns)."""
-    out = pd.DataFrame({name: np.full(len(t), np.nan) for name in FEATURES})
+    out = pd.DataFrame({name: np.full(len(t), np.nan) for name in FEATURES + ("self_hp_side",)})
     if f is None or not len(t):
         return out
     me = followed_slot(f)
@@ -106,10 +106,12 @@ def features(f: pd.DataFrame | None, t: np.ndarray) -> pd.DataFrame:
         "allies_down": np.sum([np.isnan(hp[k]) for k in team if k != me], axis=0).astype(float),
         "enemies_down": np.sum([np.isnan(hp[k]) for k in enemy], axis=0).astype(float),
         "team_hp_diff": _mean([hp[k] for k in team]) - _mean([hp[k] for k in enemy]),
+        # Not a model input: the followed champion's own side bar, a second witness for deaths.
+        "self_hp_side": hp[me],
     }).sort_values("t")
     target = pd.DataFrame({"t": np.asarray(t, float), "_i": np.arange(len(t))}).sort_values("t")
     merged = pd.merge_asof(target, per_frame, on="t", direction="nearest", tolerance=NEAREST_S)
     merged = merged.sort_values("_i")
-    for name in FEATURES:
+    for name in FEATURES + ("self_hp_side",):
         out[name] = merged[name].to_numpy(float)
     return out

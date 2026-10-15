@@ -155,8 +155,11 @@ def readings(conn: psycopg.Connection, video_ids: list[int]) -> tuple[pd.DataFra
     return samples, trades
 
 
-def labels(s: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
-    """Every head's label at every reading of one video (NaN where unknown)."""
+def labels(s: pd.DataFrame, trades: pd.DataFrame,
+           side_alive: np.ndarray | None = None) -> pd.DataFrame:
+    """Every head's label at every reading of one video (NaN where unknown).
+    ``side_alive``: the followed champion's side-column bar (NaN: blank). Where the side
+    columns are read, a death needs both witnesses -- the panel blank and the side bar blank."""
     t = s["t"].to_numpy(float)
     n = len(t)
     last_t = t[-1] if n else 0.0
@@ -181,7 +184,10 @@ def labels(s: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
         out["trade_won"][clean] = won[j[clean]]
         out["trade_net"][clean] = net[j[clean]]
 
-    dead = np.array(lane.real_deaths(list(t), list(np.nan_to_num(s["dead"].to_numpy(float)) > 0)))
+    panel_dead = np.nan_to_num(s["dead"].to_numpy(float)) > 0
+    if side_alive is not None and np.isfinite(side_alive).any():
+        panel_dead &= np.isnan(side_alive)
+    dead = np.array(lane.real_deaths(list(t), list(panel_dead)))
     in_base = np.nan_to_num(s["in_base"].to_numpy(float)) > 0
     has_panel = bool(s["ready"].notna().any() or dead.any())   # (some champions have no mana)
     has_map = bool(s["in_base"].notna().any())
@@ -258,7 +264,7 @@ def load(conn: psycopg.Connection, *, view: str | None = "spectator",
         f = features.derive(s, tr, m["role"], m["champion"], m["opponent"])
         side = team.features(team.frames(conn, int(vid), m["offset"]), s["t"].to_numpy(float))
         side.index = f.index
-        lab = labels(s, tr)
+        lab = labels(s, tr, side.pop("self_hp_side").to_numpy(float))
         part = pd.concat([f, side, lab], axis=1)[mask]
         part.insert(0, "video_id", int(vid))
         part.insert(1, "t", s["t"].to_numpy(float)[mask])

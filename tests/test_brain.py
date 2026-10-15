@@ -71,6 +71,11 @@ def test_labels_look_ahead_from_each_moment():
     assert lab["traded_on"].iloc[at[311.5]] == 1 and lab["trade"].iloc[at[311.5]] == 0
     assert lab["died_15s"].iloc[at[302.0]] == 1 and lab["died_15s"].iloc[at[300.0]] == 0
     assert np.isnan(lab["died_15s"].iloc[at[316.0]])          # the video ends before 15 s pass
+    # The side column still shows the champion alive: a blank panel alone is no death.
+    alive = data.labels(s, trades, side_alive=np.full(len(s), 0.5))
+    assert alive["died_15s"].iloc[at[302.0]] == 0
+    gone = np.where(s["t"].to_numpy() >= 316, np.nan, 0.5)
+    assert data.labels(s, trades, side_alive=gone)["died_15s"].iloc[at[302.0]] == 1
     # Health swing over 10 s from 303 s: the opponent lost 20 points in the trade.
     assert lab["swing_10s"].iloc[at[303.0]] == pytest.approx(0.2 - 0.2)
     # In trades, dead, or out of range: not situations.

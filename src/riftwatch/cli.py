@@ -633,8 +633,8 @@ def cmd_videos(settings: Settings, args: argparse.Namespace) -> int:
                 print(f"  {Path(path).name}: {error}")
         elif args.videos_command == "ingest":
             added, known = library.add(conn, [Path(p) for p in args.paths], view=args.view)
-            print(f"{added} new video(s), {known} already known; reading every frame of the "
-                  "new ones (about 15 minutes a video)...")
+            print(f"{added} new video(s), {known} already known; reading the ones not yet "
+                  "archived (about 6 minutes per 30-minute 720p game)...")
             done, failed = library.process(conn, progress=print)
             for path, error in failed:
                 print(f"  FAILED {Path(path).name}: {error}")
@@ -697,6 +697,16 @@ def _unit_score(u: dict) -> str:
             f" -> {'USABLE' if u['usable'] else 'not usable'}")
 
 
+def _chosen(card: dict, u: dict) -> str:
+    """Marks the variant used for replays: the one with the lower held-out loss."""
+    if u["skipped"]:
+        return ""
+    pair = [x for x in card["units"] if x["head"] == u["head"] and x["segment"] == "all"
+            and not x["skipped"]]
+    loss = lambda x: x["metrics"].get("log_loss", x["metrics"].get("rmse"))  # noqa: E731
+    return "  <- used for replays" if len(pair) > 1 and min(pair, key=loss) is u else ""
+
+
 def _print_brain(card: dict, detail: bool) -> None:
     d = card["data"]
     roles = ", ".join(f"{r.lower()} {n}" for r, n in d.get("roles", {}).items())
@@ -712,7 +722,8 @@ def _print_brain(card: dict, detail: bool) -> None:
                       + (f"; own model {'beats' if u['metrics'].get('beats_pooled') else 'loses to'}"
                          f" pooled ({vs.get('role')} vs {vs.get('pooled')})" if vs else ""))
             continue
-        print(f"  {u['head'] + '/' + u['variant']:<20} {_unit_score(u)}")
+        print(f"  {u['head'] + '/' + u['variant']:<20} {_unit_score(u)}"
+              + _chosen(card, u))
         if not detail or u["skipped"]:
             continue
         m = u["metrics"]

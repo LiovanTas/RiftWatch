@@ -168,9 +168,14 @@ class Brain:
         return f"{head}/{variant}/{segment}"
 
     def unit(self, head: str, variant: str = "full", role: str | None = None) -> Unit | None:
-        """The unit to ask: the role's own when it beat the pooled one, else the pooled one;
-        the basic variant when the full one wasn't trained."""
-        for v in dict.fromkeys((variant, "basic")):
+        """The unit to ask: the role's own when it beat the pooled one, else the pooled one.
+        A video that shows everything (``full``) is still judged by the basic features when
+        those did better on held-out games: with few games, more inputs can mean more noise
+        to fit, so the feature set is chosen the way the models are."""
+        order = (variant, "basic")
+        if variant == "full" and _loss(self.units.get(self.key(head, "basic", "all"))) <                 _loss(self.units.get(self.key(head, "full", "all"))):
+            order = ("basic",)
+        for v in dict.fromkeys(order):
             if role:
                 u = self.units.get(self.key(head, v, role))
                 if u is not None and u.usable and u.metrics.get("beats_pooled"):
@@ -214,6 +219,14 @@ class Brain:
                 "patterns": self.patterns, "learning_curve": self.learning_curve,
                 "features": [{"name": f.name, "group": f.group, "about": f.about,
                               "needs": f.needs} for f in features.CATALOGUE + features.CATEGORICAL]}
+
+
+def _loss(u: Unit | None) -> float:
+    """A unit's held-out loss (log loss or RMSE); infinite if it wasn't trained."""
+    if u is None or u.skipped:
+        return float("inf")
+    m = u.metrics
+    return m.get("log_loss", m.get("rmse", float("inf")))
 
 
 def _row_roles(df: pd.DataFrame) -> np.ndarray:
