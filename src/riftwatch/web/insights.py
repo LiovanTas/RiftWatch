@@ -125,6 +125,8 @@ PATTERNS = (
     ("damage_low", "bad", lambda s: s.startswith("Low damage: "), "bottom-20% damage for the rank"),
     ("deaths_high", "bad", lambda s: s.startswith("Died "), "died far more than the rank does"),
     ("no_wards", "bad", lambda s: s == "No control wards", "no control wards bought"),
+    ("comeback", "good", lambda s: s.startswith("Came back from "), "won from 2.5k+ behind at 15"),
+    ("throw", "bad", lambda s: s.startswith("Lost a ") and s.endswith(" lead"), "lost from 2.5k+ ahead at 15"),
 )
 
 
@@ -148,10 +150,15 @@ def _k(v: float) -> str:
     return f"{v / 1000:.1f}k"
 
 
+COMEBACK = 2500         # team gold behind (or ahead) at 15 minutes that makes a win a comeback
+                        # (or a loss a thrown lead)
+
+
 def game_notes(me: dict, players: list[dict], table: dict, tier: str,
-               champion_name, lane: dict | None = None) -> list[Note]:
+               champion_name, lane: dict | None = None, team15: float | None = None) -> list[Note]:
     """Notes for ``me`` (a participant_builds row) given everyone in the game.
-    ``champion_name(id)`` names a champion; ``lane`` holds timeline leads (see lane_leads)."""
+    ``champion_name(id)`` names a champion; ``lane`` holds timeline leads (see lane_leads);
+    ``team15`` is the player's team's gold lead at 15 minutes."""
     if me["remake"]:
         return []
     notes: list[Note] = []
@@ -192,6 +199,15 @@ def game_notes(me: dict, players: list[dict], table: dict, tier: str,
         word = {3: "Triple", 4: "Quadra"}.get(me["largest_multikill"], "Penta")
         notes.append(Note("good", f"{word} kill", f"A {word.lower()} kill.",
                           1.5 + me["largest_multikill"] - 3))
+
+    if team15 is not None and me["win"] and team15 <= -COMEBACK:
+        notes.append(Note("good", f"Came back from {_k(-team15)} behind",
+                          f"Your team was {-team15:,.0f} gold behind at 15 minutes and won.",
+                          2.4 + min(-team15, 8000) / 4000))
+    elif team15 is not None and not me["win"] and team15 >= COMEBACK:
+        notes.append(Note("bad", f"Lost a {_k(team15)} lead",
+                          f"Your team was {team15:,.0f} gold ahead at 15 minutes and lost.",
+                          2.2 + min(team15, 8000) / 4000))
 
     # -- against the lane opponent --------------------------------------------------------------
     if opp and position != "UTILITY":

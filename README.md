@@ -251,7 +251,14 @@ with RiftWatch's coaching built in.
   solo and flex (see *Rank progression* below); **Patterns**, the strengths and problems that
   keep recurring (say, "bottom-20% farm for the rank in 13 of 19 games"); a **Focus** card for
   the most frequent problem, game by game against the rank's typical value with whether it's
-  getting better; season champion stats and duo partners. The side panel sits on the left.
+  getting better; **season badges** (pentakill, comeback kid, hot streak, untouchable and more,
+  each saying what earned it); season champion stats and duo partners. The side panel sits on
+  the left. Each champion in the player's lists opens **their page on that champion**
+  (`/players/<region>/<id>/champions/<champion>`): their season numbers beside other players'
+  on the same champion and role at their rank and in Master+ (win rate, KDA, CS per minute
+  and at 10 minutes, damage, gold, vision, kill participation, deaths), their most-finished
+  items and keystone beside the Master+ core and keystone, their record in every matchup
+  with a Why?, and their recent games on it.
 - **Match timeline,** filtered by queue and champion, and grouped by day with each day's record. Each game
   has a 0-10 performance score ring (KDA, kill share, damage, gold, farm and vision against
   the other nine players, with MVP/ACE), champion, spells, runes, KDA, CS, damage, vision,
@@ -278,7 +285,11 @@ with RiftWatch's coaching built in.
     shareable page (`/games/<match id>`, from that player's side with `?as=<region>/<id>`).
 - **Tabs:** Champions (sortable season stats), AI Coach (coaching on recent games, weekly
   progress, sessions, champion pool) and Live game (scouting all ten players in a game in
-  progress).
+  progress, with the likely lane opponent marked and a Why? for the player's champion against
+  each enemy).
+- **Keyboard:** in a match history, <kbd>j</kbd>/<kbd>k</kbd> move between games,
+  <kbd>Enter</kbd> opens one, <kbd>g</kbd> goes to its page, <kbd>?</kbd> lists the shortcuts.
+  The site has a web app manifest, so it can be installed from the browser.
 - **Lobby lookup** (`/multi`): paste champ-select chat or a list of Riot IDs and see everyone
   at once: rank, last 20 games, KDA, main role, form and top champions.
 - **Season recap** (`/players/<region>/<id>/recap`): the season in numbers -- games and hours,
@@ -318,7 +329,9 @@ the other nine players (most damage, a third of the team's damage, kill particip
 vision, first blood, multikills), the lane opponent (30+ CS ahead or behind; 800+ gold ahead
 or behind at 15 minutes, from the stored per-minute features), and players at their solo rank in their role
 over every stored ranked game (farm, vision and damage per minute, deaths per 10 minutes,
-control wards). A rank comparison counts only in the top or bottom fifth, and a tier with
+control wards). A game won from 2,500+ gold behind at 15 minutes is a comeback, and one lost
+from 2,500+ ahead a thrown lead (team gold from the stored per-minute features). A rank
+comparison counts only in the top or bottom fifth, and a tier with
 fewer than 150 games in the role falls back to all ranks. Notes are ranked by how far they
 stand out; the card shows the top two of each kind.
 

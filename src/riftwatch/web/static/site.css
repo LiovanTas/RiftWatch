@@ -991,3 +991,42 @@ body.report main { max-width: 1240px; }
 .sides span { display: block; font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-2); }
 .sides b { font-family: var(--display); font-size: 22px; }
 @media (max-width: 560px) { .srow { grid-template-columns: 100px minmax(0, 1fr) 56px; } }
+
+/* season badges */
+.badge-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.bdg { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 10px 4px; border-radius: 8px; background: var(--panel-2);
+  border: 1px solid var(--line); text-align: center; cursor: help; }
+.bdg i { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); }
+.bdg i svg { width: 17px; height: 17px; }
+.bdg span { font-size: 11px; font-weight: 600; line-height: 1.2; }
+.bdg.b-pentakill i, .bdg.b-quadra i { background: var(--loss-soft); color: var(--loss); }
+.bdg.b-eyes i, .bdg.b-untouchable i { background: var(--win-soft); color: var(--win); }
+.bdg.b-comeback i, .bdg.b-streak i { background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--green); }
+.bdg.b-one_trick i, .bdg.b-flex i { background: rgba(180,151,255,.14); color: var(--violet); }
+
+/* a player on one champion */
+.vs-table td.mine { font-weight: 700; color: var(--text); }
+.vs-table td.mine.up { color: var(--green); } .vs-table td.mine.down { color: var(--loss); }
+.recent-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 6px; }
+.rg { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); font-size: 12.5px;
+  border-left: 3px solid var(--win); }
+.rg.loss { border-left-color: var(--loss); }
+.rg:hover { border-color: var(--accent); color: var(--text); }
+.rg .res { font-family: var(--mono); font-weight: 700; } .rg.win .res { color: var(--win); } .rg.loss .res { color: var(--loss); }
+.rg b { font-family: var(--mono); } .rg .muted { font-family: var(--mono); font-size: 11.5px; }
+.rg .vs { display: inline-flex; align-items: center; gap: 4px; color: var(--text-2); }
+.rg .vs img { width: 18px; height: 18px; border-radius: 30%; }
+.rg .when { margin-left: auto; }
+table.data tr.live-row.lane-opp td { background: var(--loss-soft); }
+table.data tr.live-row.lane-opp td:first-child { box-shadow: inset 2px 0 0 var(--loss); }
+
+/* keyboard */
+.match.kb { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.keys-help { position: fixed; inset: 0; z-index: 96; display: none; place-items: center; background: rgba(3,5,10,.6); }
+.keys-help.open { display: grid; }
+.keys-help .box { background: var(--panel); border: 1px solid var(--line-2); border-top: 2px solid var(--accent); border-radius: var(--radius-lg);
+  padding: 16px 20px; min-width: 280px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--shadow); }
+.keys-help .box b { font-family: var(--display); font-size: 15px; margin-bottom: 4px; }
+.keys-help .box div { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+.keys-help .box span { margin-left: auto; color: var(--text-2); }
+.kb-hint { margin: 10px 0 0 24px; font-size: 11.5px; color: var(--muted); }

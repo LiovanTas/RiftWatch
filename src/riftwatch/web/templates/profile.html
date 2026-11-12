@@ -149,6 +149,7 @@
       {% elif rows|length >= 20 %}
       <button class="btn more" type="button" data-more="{{ more_url }}" data-offset="{{ rows|length }}">Load older games</button>
       {% endif %}
+      {% if rows %}<p class="kb-hint">Tip: <kbd>j</kbd> <kbd>k</kbd> move between games, <kbd>Enter</kbd> opens one, <kbd>?</kbd> shows all shortcuts.</p>{% endif %}
     </div>
     <aside class="side">
       {% if focus %}
@@ -160,6 +161,12 @@
           <div class="focus-trend {{ focus.trend }}">{% if focus.trend == 'better' %}&#9650; Getting better: {{ focus.recent }} in the newer half of these games, from {{ focus.earlier }}.{% elif focus.trend == 'worse' %}&#9660; Getting worse: {{ focus.recent }} in the newer half, from {{ focus.earlier }}.{% else %}Steady at {{ focus.recent }}.{% endif %}</div>
           <span class="muted small">Dots below the dashed line are games under the typical value. Oldest on the left.</span>
         </div>
+      </div>
+      {% endif %}
+      {% if badges %}
+      <div class="panel badges">
+        <div class="panel-head"><span>Season badges</span><a class="muted small" href="{{ recap_url }}">Recap &rarr;</a></div>
+        <div class="panel-body badge-grid">{% for b in badges %}<div class="bdg b-{{ b.key }}" data-tip="{{ b.name }}&#10;{{ b.detail }}"><i>{{ icon(b.icon) }}</i><span>{{ b.name }}</span></div>{% endfor %}</div>
       </div>
       {% endif %}
       {% if summary and (summary.patterns.good or summary.patterns.bad) %}
@@ -180,7 +187,7 @@
           <table class="mini-table">
           {% for c in season[:7] %}
             <tr>
-              <td><a class="champ-cell" href="/champions/{{ c.slug }}"><img src="{{ c.icon }}" alt="" loading="lazy"><div><b>{{ c.name }}</b><span>CS {{ c.cs_min }}/min</span></div></a></td>
+              <td><a class="champ-cell" href="{{ profile_base }}/champions/{{ c.slug }}" title="Your {{ c.name }} in depth"><img src="{{ c.icon }}" alt="" loading="lazy"><div><b>{{ c.name }}</b><span>CS {{ c.cs_min }}/min</span></div></a></td>
               <td class="r"><b>{{ c.kda }}{% if c.kda != 'Perfect' %}:1{% endif %}</b><span class="muted">{{ c.kills }} / {{ c.deaths }} / {{ c.assists }}</span></td>
               <td class="r"><b>{{ wr(c.win_rate) }}</b><span class="muted">{{ c.games }} games</span></td>
             </tr>
@@ -244,7 +251,7 @@
       {% for c in season %}
         <tr>
           <td class="rank">{{ loop.index }}</td>
-          <td class="l" data-v="{{ c.name }}"><a class="champ-cell" href="/champions/{{ c.slug }}"><img src="{{ c.icon }}" alt="" loading="lazy"><b>{{ c.name }}</b></a></td>
+          <td class="l" data-v="{{ c.name }}"><a class="champ-cell" href="{{ profile_base }}/champions/{{ c.slug }}" title="Your {{ c.name }} in depth"><img src="{{ c.icon }}" alt="" loading="lazy"><b>{{ c.name }}</b></a></td>
           <td data-v="{{ c.games }}">{{ c.games }} <span class="muted small">{{ c.wins }}W {{ c.losses }}L</span></td>
           <td data-v="{{ c.win_rate }}"><div class="bar-cell">{{ wr(c.win_rate) }}<div class="bar"><i style="width:{{ c.win_rate }}%"></i></div></div></td>
           <td data-v="{{ c.kda_value }}"><b>{{ c.kda }}</b></td>
@@ -279,10 +286,10 @@
         <div class="team-head {{ 'win' if team.id == 100 else 'loss' }}"><span class="res">{{ team.label }}</span>
           {% if team.bans %}<span class="bans">Bans {% for b in team.bans %}<img src="{{ b.icon }}" alt="{{ b.name }}" data-tip="{{ b.name }}" loading="lazy">{% endfor %}</span>{% endif %}</div>
         <div class="scroll"><table class="data">
-          <thead><tr><th class="l">Player</th><th class="l">Champion</th><th class="l">Ranked Solo</th><th>Last games</th><th>On this champion</th><th>Mastery</th></tr></thead>
+          <thead><tr><th class="l">Player</th><th class="l">Champion</th><th class="l">Ranked Solo</th><th>Last games</th><th>On this champion</th><th>Mastery</th>{% if live.me and team.id != live.me.team %}<th></th>{% endif %}</tr></thead>
           <tbody>
           {% for p in team.players %}
-            <tr class="live-row{{ ' me' if p.me }}">
+            <tr class="live-row{{ ' me' if p.me }}{{ ' lane-opp' if p.lane_opponent }}">
               <td class="l">{% if p.me %}<strong>{{ p.name }}</strong>{% elif p.url %}<a href="{{ p.url }}"><b>{{ p.name }}</b></a>{% else %}<b>{{ p.name }}</b>{% endif %}
                 {% if p.flags %}<div class="flags">{% for f in p.flags %}<span class="flag">{{ f }}</span>{% endfor %}</div>{% endif %}</td>
               <td class="l"><div class="champ-cell"><img src="{{ p.icon }}" alt="" loading="lazy"><b>{{ p.champion }}</b></div></td>
@@ -290,6 +297,7 @@
               <td>{{ p.recent }}<div class="muted small">{{ p.role }}</div></td>
               <td>{{ p.champ_games }}</td>
               <td>{{ p.mastery }}</td>
+              {% if live.me and team.id != live.me.team %}<td>{% if p.slug and live.me.role %}<button class="why-btn" type="button" data-why="/api/champions/{{ live.me.slug }}/matchups/{{ p.slug }}?role={{ live.me.role|lower }}" data-icons="{{ live.me.icon }} {{ p.icon }}" data-title="{{ live.me.name }} vs {{ p.champion }} &middot; {{ live.me.role_name }}">{{ 'Your lane: why?' if p.lane_opponent else 'Why?' }}</button>{% endif %}</td>{% endif %}
             </tr>
           {% endfor %}
           </tbody>

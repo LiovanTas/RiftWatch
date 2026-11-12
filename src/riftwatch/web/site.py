@@ -29,7 +29,7 @@ from riftwatch.riot.routing import UnknownRegion, parse_riot_id, platform_for
 from riftwatch.stats import champions as champ_stats
 from riftwatch.stats import games as game_stats
 from riftwatch.stats import matchups, patches
-from riftwatch.web import gamedata, insights, mapview, moments, pages, recap, views
+from riftwatch.web import gamedata, insights, mapview, mastery, moments, pages, recap, views
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +60,9 @@ def _asset_version() -> str:
 def register(app: FastAPI, services, *, coach, advisor, brain,
              gd: gamedata.GameData | None = None, guard=None) -> None:
     """Mount the website on ``app`` (the JSON API stays in app.py)."""
+    import mimetypes
+
+    mimetypes.add_type("application/manifest+json", ".webmanifest")   # unknown to Windows
     pool = services.pool
     env = Environment(loader=PackageLoader("riftwatch.web", "templates"),
                       autoescape=select_autoescape(["html"]), trim_blocks=True, lstrip_blocks=True)
@@ -229,6 +232,27 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
 
     # -- player profile ---------------------------------------------------------------------
 
+    @app.get("/players/{region}/{riot_id}/champions/{slug}", response_class=HTMLResponse)
+    def player_champion_page(region: str, riot_id: str, slug: str) -> HTMLResponse:
+        """One player on one champion, against the champion at their rank and in Master+."""
+        if region_or_none(region) is None:
+            return error_page("Unknown region", f"RiftWatch doesn't know the region {region!r}.")
+        gd_ = game_data()
+        champ = gd_.champion_by_slug(slug)
+        if champ is None:
+            return error_page("Champion not found", f"There's no champion called {slug!r}.")
+        with pool.connection() as conn:
+            name, tag, account = find_account(conn, region, riot_id)
+            if account is None:
+                return RedirectResponse(f"/players/{region}/{riot_id}", 303)
+            data = mastery.player_champion(conn, gd_, account["puuid"], champ.id, region.lower(), riot_id,
+                                           views.player_tier(conn, account["puuid"]))
+            head = views.header(conn, gd_, account)
+        return render("player_champion.html", nav="player", region=region.lower(), name=account["game_name"],
+                      tag=account["tag_line"], champ=champ, c=data, head=head,
+                      champ_icon=gd_.champion_icon(champ.id), splash=gd_.champion_splash(champ.id),
+                      profile_url=f"/players/{region.lower()}/{riot_id}")
+
     @app.get("/players/{region}/{riot_id}/recap", response_class=HTMLResponse)
     def recap_page(region: str, riot_id: str, year: int | None = None) -> HTMLResponse:
         """A player's season in numbers: champions, months, streaks, highlights."""
@@ -364,6 +388,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                 name, tag = account["game_name"], account["tag_line"]
                 base.update(name=name, tag=tag, shown=f"{name}#{tag}",
                             recap_url=f"/players/{region}/{riot_id}/recap",
+                            profile_base=f"/players/{region}/{riot_id}",
                             compare_url=f"/compare?a={quote(name + '#' + tag)}")
                 ctx: dict[str, Any] = {
                     "synced": True, "head": head,
@@ -392,6 +417,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                                more_url=(f"/fragments/players/{region}/{riot_id}/matches?queue={queue}"
                                          + (f"&champ={picked.slug}" if picked else "")),
                                champ=picked.slug if picked else "")
+                    ctx["badges"] = recap.achievements(conn, gd, puuid)
                     if ctx["summary"]:
                         ctx["focus"] = views.focus(rows, ctx["summary"]["patterns"], insights.baselines(conn),
                                                    views.player_tier(conn, puuid))
@@ -441,6 +467,13 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
     def _live_view(report: dict, region: str) -> dict:
         gd = game_data()
         teams = []
+        # The scouted player, so each enemy can get a "why" against the player's own champion.
+        mine = next((p for p in report["players"] if p["puuid"] == report.get("me")), None)
+        my_champ = gd.champion_by_slug((mine or {}).get("champion") or "")
+        me = ({"slug": my_champ.slug, "name": my_champ.name, "icon": gd.champion_icon(my_champ.id),
+               "team": mine["team_id"], "role": mine["main_role"] or "",
+               "role_name": gamedata.POSITIONS.get(mine["main_role"] or "", "")}
+              if mine and my_champ else None)
         for team_id, label in ((100, "Blue team"), (200, "Red team")):
             players = []
             for p in report["players"]:
@@ -456,6 +489,9 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                     "name": p["riot_id"], "url": url, "flags": p["flags"],
                     "me": p["puuid"] == report.get("me"),
                     "champion": p["champion"], "icon": gd.champion_icon(champ.id) if champ else "",
+                    "slug": champ.slug if champ else None,
+                    "lane_opponent": bool(me and p["team_id"] != me["team"] and me["role"]
+                                          and p["main_role"] == me["role"]),
                     "rank": (f"{r['tier'].title()} {r['division'] or ''}".strip() if r else None),
                     "rank_key": r["tier"].lower() if r else "", "lp": r["lp"] if r else None,
                     "season": (f"{round(100 * r['wins'] / max(r['wins'] + r['losses'], 1))}% of "
@@ -474,7 +510,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             teams.append({"id": team_id, "label": label, "players": players, "bans": bans})
         minutes, seconds = divmod(max(report["game_length_s"], 0), 60)
         return {"queue": report["queue"], "platform": report["platform"],
-                "clock": f"{minutes}:{seconds:02d}", "teams": teams}
+                "clock": f"{minutes}:{seconds:02d}", "teams": teams, "me": me}
 
     @app.get("/fragments/players/{region}/{riot_id}/matches", response_class=HTMLResponse)
     def more_matches(region: str, riot_id: str, queue: str = "all",

@@ -467,3 +467,15 @@ def test_game_page_stats_page_and_history_filter(web):
     stats = client.get("/stats")
     assert stats.status_code == 200 and "What wins games" in stats.text and "Gold lead at 15 minutes" in stats.text
     assert client.get("/stats?tab=items").status_code == 200
+
+
+def test_player_champion_page_and_manifest(web):
+    client, api, _, jobs = web
+    sync(client, jobs)
+    page = client.get("/players/na/Me-NA1")
+    assert 'href="/players/na/Me-NA1/champions/' in page.text or "Season" in page.text
+    assert client.get("/players/na/Me-NA1/champions/nobody").status_code in (400, 404)
+    assert client.get("/players/na/Nobody-NA1/champions/zed", follow_redirects=False).status_code in (303, 404)
+    manifest = client.get("/static/manifest.webmanifest")
+    assert manifest.status_code == 200 and manifest.json()["name"] == "RiftWatch"
+    assert 'rel="manifest"' in page.text

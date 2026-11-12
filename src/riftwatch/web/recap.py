@@ -221,3 +221,59 @@ def compare(conn: psycopg.Connection, gd: GameData, ids: list[tuple[str, str]],
     h2h = (head_to_head(conn, sides[0]["puuid"], sides[1]["puuid"])
            if len(sides) == 2 and all(s.get("puuid") for s in sides) else None)
     return {"sides": sides, "rows": rows, "h2h": h2h}
+
+
+# -- season badges -------------------------------------------------------------------------
+
+def achievements(conn: psycopg.Connection, gd: GameData, puuid: str, year: int | None = None) -> list[dict]:
+    """Badges earned this season, from stored games: each says what earned it."""
+    year = year or datetime.now(UTC).year
+    start, end = datetime(year, 1, 1, tzinfo=UTC), datetime(year + 1, 1, 1, tzinfo=UTC)
+    games = _rows(conn, """
+        SELECT match_id, team_id, win, deaths, duration_s, cs, vision_score, penta_kills, quadra_kills,
+               first_blood, champion_id, position
+          FROM participant_builds
+         WHERE puuid = %s AND game_start >= %s AND game_start < %s AND queue_id = ANY(%s) AND NOT remake
+         ORDER BY game_start""", (puuid, start, end, list(QUEUES)))
+    if not games:
+        return []
+    n = len(games)
+    gold15: dict[str, dict[int, int]] = defaultdict(dict)
+    for match_id, team, gold in conn.execute(
+            """SELECT b.match_id, b.team_id, sum(f.gold) FROM participant_minute_features f
+                 JOIN participant_builds b ON b.match_id = f.match_id AND b.participant_id = f.participant_id
+                WHERE f.match_id = ANY(%s) AND f.minute = 15 GROUP BY 1, 2""",
+            ([g["match_id"] for g in games],)):
+        gold15[match_id][team] = gold
+    comebacks = sum(1 for g in games if g["win"] and len(gold15.get(g["match_id"], {})) == 2
+                    and gold15[g["match_id"]][g["team_id"]] - gold15[g["match_id"]][300 - g["team_id"]] <= -2500)
+    minutes = lambda g: g["duration_s"] / 60  # noqa: E731
+    pentas = sum(g["penta_kills"] for g in games)
+    quadras = sum(g["quadra_kills"] for g in games)
+    deathless = sum(1 for g in games if g["deaths"] == 0 and minutes(g) >= 15)
+    farmed = sum(1 for g in games if g["cs"] / minutes(g) >= 8)
+    vision = sum(g["vision_score"] for g in games) / sum(minutes(g) for g in games)
+    streak, _ = _streaks([g["win"] for g in games])
+    long_games = sum(1 for g in games if minutes(g) >= 40)
+    first_bloods = sum(g["first_blood"] for g in games)
+    champs = Counter(g["champion_id"] for g in games)
+    top_champ, top_n = champs.most_common(1)[0]
+    roles = Counter(g["position"] for g in games if g["position"])
+    candidates = [
+        ("pentakill", "Pentakill", "sword", pentas >= 1, f"{pentas} pentakill{'s' if pentas != 1 else ''} this season"),
+        ("quadra", "Quadra club", "sword", quadras >= 3, f"{quadras} quadra kills"),
+        ("untouchable", "Untouchable", "star", deathless >= 5, f"{deathless} games without dying"),
+        ("farmer", "Farmer", "chart", farmed >= 10, f"{farmed} games at 8+ CS a minute"),
+        ("eyes", "Eyes everywhere", "eye", n >= 20 and vision >= 1.2, f"{vision:.2f} vision a minute this season"),
+        ("streak", "Hot streak", "trophy", streak >= 5, f"{streak} wins in a row"),
+        ("comeback", "Comeback kid", "history", comebacks >= 3, f"{comebacks} wins from 2.5k+ behind at 15 minutes"),
+        ("marathon", "Marathoner", "history", long_games >= 5, f"{long_games} games of 40+ minutes"),
+        ("first_strike", "First strike", "sword", first_bloods >= 15, f"{first_bloods} first bloods"),
+        ("one_trick", "One-trick", "star", top_n >= 50 and top_n / n >= 0.4,
+         f"{gd.champion(top_champ).name} in {round(100 * top_n / n)}% of games"),
+        ("flex", "Flex player", "chart", sum(1 for c in roles.values() if c >= 10) >= 4,
+         f"{sum(1 for c in roles.values() if c >= 10)} roles with 10+ games"),
+        ("grinder", "Grinder" if n >= 500 else "Centurion", "trophy", n >= 100, f"{n} games this season"),
+    ]
+    return [{"key": key, "name": name, "icon": icon, "detail": detail}
+            for key, name, icon, earned, detail in candidates if earned]

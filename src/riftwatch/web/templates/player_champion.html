@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% from "_macros.html" import wr, item_slot %}
+{% block title %}{{ name }}#{{ tag }} on {{ champ.name }} | RiftWatch{% endblock %}
+{% block description %}{{ name }}'s {{ champ.name }} this season against {{ champ.name }} players at the same rank and in Master+.{% endblock %}
+{% block content %}
+<section class="champ-hero">
+  <div class="bg" style="background-image:url('{{ splash }}')"></div>
+  <div class="container">
+    <div class="portrait"><img src="{{ champ_icon }}" alt="{{ champ.name }}"></div>
+    <div>
+      <div class="eyebrow"><a href="{{ profile_url }}">{{ name }}#{{ tag }}</a> &middot; this season</div>
+      <h1>{{ champ.name }}</h1>
+      {% if c %}<div class="title">{{ c.games }} games &middot; {{ c.wins }}W {{ c.games - c.wins }}L ({{ (100 * c.wins / c.games)|round|int }}%) &middot; {{ c.kda }} KDA{% if c.role %} &middot; mostly {{ c.role|lower }}{% endif %}</div>{% endif %}
+      <div class="meta-line" style="margin-top:8px"><a class="btn" href="/champions/{{ champ.slug }}{% if c and c.position %}?role={{ c.position|lower }}{% endif %}">{{ champ.name }} builds and matchups &rarr;</a></div>
+    </div>
+  </div>
+</section>
+<div class="container" style="padding-bottom:40px">
+  {% if not c %}
+  <div class="panel empty" style="margin-top:20px"><h3>No {{ champ.name }} games this season</h3><p><a href="{{ profile_url }}">Back to the profile</a></p></div>
+  {% else %}
+  <div class="panel" style="margin-top:16px">
+    <div class="panel-head"><span><span class="n">01</span>You against other {{ champ.name }} players</span><span class="muted small">{{ c.role }} &middot; other players: {{ '{:,}'.format(c.peer_games) }} games ({{ c.columns[1] }}), {{ '{:,}'.format(c.high_games) }} in Master+</span></div>
+    <div class="scroll"><table class="data vs-table">
+      <thead><tr><th class="l">Stat</th>{% for col in c.columns %}<th>{{ col }}</th>{% endfor %}</tr></thead>
+      <tbody>{% for r in c.rows %}<tr><td class="l">{{ r.label }}</td>{% for v in r['values'] %}<td class="{{ ('mine ' ~ (r.verdict or '')) if loop.first }}">{{ v }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+    </table></div>
+    <p class="muted small" style="padding:0 16px 12px;margin:0">Green: at or better than Master+ {{ champ.name }} players; red: below them.</p>
+  </div>
+
+  <div class="cols-2" style="margin-top:12px">
+    <div class="panel">
+      <div class="panel-head"><span><span class="n">02</span>Your build against Master+</span></div>
+      <div class="panel-body">
+        <div class="build-row"><div class="its">{% for it in c.my_items %}<div class="slot" data-tip="{{ it.name }}&#10;in {{ it.share }}% of your games"><img src="{{ it.icon }}" alt="{{ it.name }}"></div>{% endfor %}</div><div class="rt"><b>You</b><span class="muted">most finished</span></div></div>
+        {% if c.pro_core %}<div class="build-row"><div class="its">{% for it in c.pro_core %}<div class="slot" data-tip="{{ it.name }}"><img src="{{ it.icon }}" alt="{{ it.name }}"></div>{% if not loop.last %}<span class="arrow">&rsaquo;</span>{% endif %}{% endfor %}</div><div class="rt"><b>Master+</b><span class="muted">most common core</span></div></div>{% endif %}
+        {% if c.my_key %}<div class="build-row"><div class="its"><div class="slot rune" data-tip="{{ c.my_key.name }}"><img src="{{ c.my_key.icon }}" alt=""></div><span class="small">{{ c.my_key.name }}</span></div><div class="rt"><b>Your keystone</b><span class="muted">{{ c.my_key.share }}% of games</span></div></div>{% endif %}
+        {% if c.pro_key %}<div class="build-row"><div class="its"><div class="slot rune" data-tip="{{ c.pro_key.name }}"><img src="{{ c.pro_key.icon }}" alt=""></div><span class="small">{{ c.pro_key.name }}</span></div><div class="rt"><b>Master+ keystone</b><span class="muted">most played</span></div></div>{% endif %}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><span><span class="n">03</span>Your matchups on {{ champ.name }}</span><span class="muted small">lane opponents</span></div>
+      <div class="panel-body" style="max-height:330px;overflow-y:auto">
+        {% for m in c.matchups %}
+        <div class="pm-row"><img src="{{ m.icon }}" alt=""><div class="who2"><b>vs {{ m.name }}</b><span>{{ m.wins }}W {{ m.games - m.wins }}L</span></div><b class="{{ 'wr-hi' if m.win_rate >= 55 else ('loss-text' if m.win_rate < 47 else '') }}">{{ m.win_rate }}%</b>
+          {% if c.position %}<button class="why-btn" type="button" data-why="/api/champions/{{ champ.slug }}/matchups/{{ m.slug }}?role={{ c.position|lower }}" data-icons="{{ champ_icon }} {{ m.icon }}" data-title="{{ champ.name }} vs {{ m.name }} &middot; {{ c.role }}">Why?</button>{% endif %}</div>
+        {% else %}<p class="muted small">No lane opponents recorded.</p>{% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:12px">
+    <div class="panel-head"><span><span class="n">04</span>Recent {{ champ.name }} games</span></div>
+    <div class="panel-body recent-list">
+      {% for g in c.recent %}<a class="rg {{ 'win' if g.win else 'loss' }}" href="{{ g.url }}"><span class="res">{{ 'W' if g.win else 'L' }}</span><b>{{ g.kda }}</b><span class="muted">{{ g.cs_min }} CS/min</span>{% if g.opponent %}<span class="vs">vs {% if g.opponent_icon %}<img src="{{ g.opponent_icon }}" alt="">{% endif %}{{ g.opponent }}</span>{% endif %}<span class="muted when">{{ g.when }}</span></a>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

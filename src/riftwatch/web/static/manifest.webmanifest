@@ -1,0 +1,17 @@
+{
+  "name": "RiftWatch",
+  "short_name": "RiftWatch",
+  "description": "League of Legends match history, stats and coaching measured against your rank.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#090c12",
+  "theme_color": "#090c12",
+  "icons": [
+    {
+      "src": "/static/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

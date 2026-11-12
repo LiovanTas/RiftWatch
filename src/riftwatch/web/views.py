@@ -184,6 +184,14 @@ def match_rows(conn: psycopg.Connection, gd: GameData, puuid: str, region: str,
                   AND f.gold_diff IS NOT NULL""", (puuid, [m["match_id"] for m in mine])):
         leads[match_id][minute] = {"gold": gold_diff, "me_gold": gold, "opp_gold": gold - gold_diff,
                                    "cs": cs_diff or 0, "xp": xp_diff or 0}
+    # Each team's gold at 15 minutes, for comebacks and thrown leads.
+    team15: dict[str, dict[int, int]] = defaultdict(dict)
+    for match_id, team_id, gold in conn.execute(
+            """SELECT b.match_id, b.team_id, sum(f.gold) FROM participant_minute_features f
+                 JOIN participant_builds b ON b.match_id = f.match_id AND b.participant_id = f.participant_id
+                WHERE f.match_id = ANY(%s) AND f.minute = 15 GROUP BY 1, 2""",
+            ([m["match_id"] for m in mine],)):
+        team15[match_id][team_id] = gold
     out = []
     for m in mine:
         players = everyone[m["match_id"]]
@@ -219,11 +227,17 @@ def match_rows(conn: psycopg.Connection, gd: GameData, puuid: str, region: str,
             "lead15": (leads.get(m["match_id"]) or {}).get(15, {}).get("gold"),
             "all_notes": (found := insights.game_notes(
                 m, players, table, tier, lambda cid: gd.champion(cid).name,
-                leads.get(m["match_id"]))),
+                leads.get(m["match_id"]), _team_lead(team15.get(m["match_id"]), m["team_id"]))),
             "notes": insights.card(found),
             "score_pct": round(10 * scores[m["participant_id"]]),
         })
     return out
+
+
+def _team_lead(golds: dict[int, int] | None, team: int) -> int | None:
+    if not golds or len(golds) != 2:
+        return None
+    return golds[team] - golds[300 - team]
 
 
 def day_label(when: datetime) -> str:
@@ -509,8 +523,9 @@ def match_detail(conn: psycopg.Connection, gd: GameData, match_id: str, puuid: s
         tier = player_tier(conn, me["puuid"])
         lane = insights.lane_leads(timeline[0] if timeline else None, me["participant_id"],
                                    opp["participant_id"] if opp else None)
+        team15 = (gold[15]["diff"] * (1 if me["team_id"] == 100 else -1)) if len(gold) > 15 else None
         found = insights.game_notes(me, players, insights.baselines(conn), tier,
-                                    lambda cid: gd.champion(cid).name, lane)
+                                    lambda cid: gd.champion(cid).name, lane, team15)
         notes = {"good": [n.view() for n in found if n.kind == "good"],
                  "bad": [n.view() for n in found if n.kind == "bad"],
                  "lane": [{"minute": k, **v} for k, v in sorted(lane.items())],

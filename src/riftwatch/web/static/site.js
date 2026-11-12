@@ -659,6 +659,47 @@
     box.innerHTML = html + '<span class="note">Blue: won at least half; red: lost more. Stronger colour means more games.</span>';
   }
 
+  // -- keyboard: j/k move through the match history, Enter opens a game, g its page, ? help --
+  let cursor = -1;
+  const typing = (el) => el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
+  const helpBox = () => {
+    let box = $('#keys-help');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'keys-help';
+      box.className = 'keys-help';
+      box.innerHTML = '<div class="box"><b>Keyboard shortcuts</b>'
+        + '<div><kbd>j</kbd> <kbd>k</kbd><span>next / previous game</span></div>'
+        + '<div><kbd>Enter</kbd><span>open or close the game</span></div>'
+        + '<div><kbd>g</kbd><span>the game\'s own page</span></div>'
+        + '<div><kbd>/</kbd><span>find a player</span></div>'
+        + '<div><kbd>?</kbd><span>this help</span></div></div>';
+      box.addEventListener('click', () => box.classList.remove('open'));
+      document.body.append(box);
+    }
+    return box;
+  };
+  document.addEventListener('keydown', (e) => {
+    if (typing(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === '?') { helpBox().classList.toggle('open'); return; }
+    if (e.key === 'Escape') { $('#keys-help')?.classList.remove('open'); return; }
+    const games = $$('#match-list .match');
+    if (!games.length) return;
+    if (e.key === 'j' || e.key === 'k') {
+      cursor = Math.max(0, Math.min(games.length - 1, cursor + (e.key === 'j' ? 1 : -1)));
+      games.forEach((g, i) => g.classList.toggle('kb', i === cursor));
+      games[cursor].scrollIntoView({ block: 'center', behavior: 'smooth' });
+      e.preventDefault();
+    } else if (e.key === 'Enter' && cursor >= 0 && games[cursor]) {
+      $('.m-expand', games[cursor])?.click();
+      e.preventDefault();
+    } else if (e.key === 'g' && cursor >= 0 && games[cursor]) {
+      const src = $('.m-expand', games[cursor])?.dataset.detail || '';
+      const m = src.match(/^\/fragments\/players\/([^/]+)\/([^/]+)\/matches\/([^/?]+)/);
+      if (m) location.href = `/games/${m[3]}?as=${m[1]}/${m[2]}`;
+    }
+  });
+
   // -- copy link ---------------------------------------------------------------------------
   for (const b of $$('[data-copy]')) {
     b.addEventListener('click', async () => {

@@ -333,3 +333,17 @@ def test_focus_picks_the_most_frequent_problem_and_its_trend():
     assert f["trend"] == "better" and f["recent"] == "6.7 CS/min"         # newer half: 7.0, 6.8, 6.4
     assert f["spark"].startswith("<svg") and f["spark"].count("<circle") == 6
     assert focus(rows, {"bad": []}, TABLE, "GOLD") is None
+
+
+def test_comebacks_and_thrown_leads():
+    me, players = game(win=True)
+    good = labels(insights.game_notes(me, players, {}, "GOLD", names, team15=-3200), "good")
+    assert "Came back from 3.2k behind" in good
+    me, players = game(win=False)
+    bad = labels(insights.game_notes(me, players, {}, "GOLD", names, team15=4100), "bad")
+    assert "Lost a 4.1k lead" in bad
+    assert insights.Note("bad", "Lost a 4.1k lead", "", 1).pattern == "throw"
+    assert insights.Note("good", "Came back from 3.2k behind", "", 1).pattern == "comeback"
+    me, players = game(win=True)
+    assert not [n for n in insights.game_notes(me, players, {}, "GOLD", names, team15=-1000)
+                if n.label.startswith("Came back")]
