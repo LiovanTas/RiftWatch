@@ -38,6 +38,7 @@ DID = {
     "roam_mid": "roamed mid", "with_adc": "stayed with the ADC", "ward": "went warding",
 }
 
+LAPSED_LAST_MINUTE = 15  # models trained before their minute range was recorded saw 2-15 only
 RARE = 0.10             # the player's choice was this rare among high-elo players here...
 CONSENSUS = 0.50        # ...while at least this share of them did one particular other thing
 MATCHED = 0.50          # the player matched a consensus this strong: a strength
@@ -106,14 +107,20 @@ class Advisor:
             self._models[role] = load(self.models_dir, role)
         return self._models[role]
 
+    def last_minute(self, role: str) -> int:
+        """The last minute this role's model was trained on: it isn't asked about later ones."""
+        metrics = getattr(self.model(role), "metrics", {}) or {}
+        return int(metrics.get("last_minute", LAPSED_LAST_MINUTE))
+
     def review(self, match: dict[str, Any], timeline: dict[str, Any], puuid: str,
                max_moments: int = 3) -> Review | None:
         me = next((p for p in match["info"]["participants"] if p["puuid"] == puuid), None)
         role = (me or {}).get("teamPosition") or ""
         if me is None or role not in DECISIONS or not self.available(role):
             return None
+        last = self.last_minute(role)
         mine = [e for e in examples(match, timeline, role)
-                if e.participant_id == me["participantId"]]
+                if e.participant_id == me["participantId"] and e.minute <= last]
         if not mine:
             return None
         trained = self.model(role)
@@ -154,8 +161,9 @@ class Advisor:
         role = (me or {}).get("teamPosition") or ""
         if me is None or role not in DECISIONS or not self.available(role):
             return None
+        last = self.last_minute(role)
         mine = [e for e in examples(match, timeline, role)
-                if e.participant_id == me["participantId"]]
+                if e.participant_id == me["participantId"] and e.minute <= last]
         if not mine:
             return None
         out = []

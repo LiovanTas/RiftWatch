@@ -288,6 +288,128 @@
     });
   }
 
+  // -- rank progression ------------------------------------------------------------------
+  // Points come on one ladder scale (400 a tier, 100 a division, plus LP; views.rank_history).
+  // Snapshots are exact; the line between them is estimated from each game's result, and the
+  // stretch before the first snapshot is estimated with nothing to correct it (dashed).
+  const TIER_SHORT = ['Iron', 'Bronze', 'Silver', 'Gold', 'Plat', 'Emerald', 'Diamond'];
+  const divLabel = (score) => {
+    if (score >= 2800) return 'Master';
+    const tier = Math.floor(score / 400), div = Math.floor((score % 400) / 100);
+    return `${TIER_SHORT[tier] || ''} ${['IV', 'III', 'II', 'I'][div]}`;
+  };
+  for (const box of $$('.rankprog')) {
+    const data = JSON.parse(box.dataset.rank);
+    const state = { queue: 'solo', range: 0 };
+    const svg = $('.rp-chart', box), tip = $('.rp-tip', box), foot = $('.rp-foot', box);
+    let shown = [], X = null;
+    const W = 720, H = 210, L = 64, R = 12, T = 10, B = 24;
+    function draw() {
+      const h = data[state.queue] || { points: [] };
+      let pts = h.points || [];
+      if (state.range) {
+        const cut = Date.now() - state.range * 864e5;
+        const before = pts.filter((p) => p.t < cut).pop();
+        pts = [...(before ? [{ ...before, t: cut, kind: 'edge' }] : []), ...pts.filter((p) => p.t >= cut)];
+      }
+      shown = pts;
+      if (!pts.length) { svg.innerHTML = ''; foot.textContent = 'No ranked data for this period.'; return; }
+      const t0 = pts[0].t, t1 = Math.max(pts[pts.length - 1].t, t0 + 1);
+      let lo = Math.min(...pts.map((p) => p.score)), hi = Math.max(...pts.map((p) => p.score));
+      lo = Math.floor((lo - 40) / 100) * 100; hi = Math.ceil((hi + 40) / 100) * 100;
+      if (hi - lo < 200) { hi += 100; lo -= 100; }
+      lo = Math.max(lo, 0);
+      const x = (t) => L + ((t - t0) / (t1 - t0)) * (W - L - R);
+      const y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+      X = x;
+      let g = '';
+      for (let v = lo; v <= hi; v += 100) {
+        const tierLine = v % 400 === 0;
+        g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="${tierLine ? 'tier' : 'div'}"/>`;
+        if (v < hi) g += `<text x="${L - 8}" y="${y(v + 50) + 4}" text-anchor="end" class="lab${tierLine ? '' : ''}">${divLabel(v)}</text>`;
+      }
+      const firstSnap = pts.findIndex((p) => p.kind === 'snapshot');
+      const path = (list) => list.map((p, i) => `${i ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p.score).toFixed(1)}`).join('');
+      const early = firstSnap > 0 ? pts.slice(0, firstSnap + 1) : [];
+      const rest = firstSnap > 0 ? pts.slice(firstSnap) : pts;
+      if (early.length > 1) g += `<path d="${path(early)}" class="line est"/>`;
+      if (rest.length > 1) g += `<path d="${path(rest)}" class="line"/>`;
+      g += pts.filter((p) => p.kind === 'snapshot').map((p) => `<circle cx="${x(p.t)}" cy="${y(p.score)}" r="4.5" class="snap"/>`).join('');
+      const fmt = (t) => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      g += `<text x="${L}" y="${H - 6}" class="lab">${fmt(t0)}</text><text x="${W - R}" y="${H - 6}" text-anchor="end" class="lab">${fmt(t1)}</text>`;
+      g += `<line class="cursor" x1="0" x2="0" y1="${T}" y2="${H - B}" visibility="hidden"/>`;
+      svg.innerHTML = g;
+      const change = Math.round(pts[pts.length - 1].score - pts[0].score);
+      const games = pts.filter((p) => p.kind === 'game');
+      const wins = games.filter((p) => p.win).length;
+      foot.innerHTML = `<span><b class="${change >= 0 ? 'up' : 'down'}">${change >= 0 ? '+' : ''}${change} LP</b> ${state.range ? `over ${state.range} days` : 'this season'}${games.length ? ` &middot; ${wins}W ${games.length - wins}L` : ''}</span>`
+        + `<span>Peak <b>${esc(h.peak || '-')}</b> &middot; now <b>${esc(h.current || '-')}</b></span>`
+        + `<span class="muted">Dots are rank snapshots RiftWatch took when the player was updated; the line between them is estimated from each game's result (about 22 LP a game)${h.points.length && h.points[0].kind === 'start' ? ', and the dashed start of the season has no snapshot to check it against' : ''}.</span>`;
+    }
+    svg.addEventListener('mousemove', (e) => {
+      if (!shown.length || !X) return;
+      const box2 = svg.getBoundingClientRect();
+      const vx = ((e.clientX - box2.left) / box2.width) * W;
+      let best = shown[0];
+      for (const p of shown) if (Math.abs(X(p.t) - vx) < Math.abs(X(best.t) - vx)) best = p;
+      const cur = $('line.cursor', svg);
+      cur.setAttribute('x1', X(best.t)); cur.setAttribute('x2', X(best.t)); cur.setAttribute('visibility', 'visible');
+      const when = new Date(best.t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      const what = best.kind === 'snapshot' ? 'Rank snapshot (exact)' : best.kind === 'game' ? (best.win ? 'Win' : 'Loss') + ' (estimated LP)' : 'Estimated';
+      tip.innerHTML = `<b>${esc(best.label)}</b><span>${when}</span><span>${what}</span>`;
+      tip.style.left = Math.min(((X(best.t) / W) * box2.width) + 10, box2.width - 200) + 'px';
+      tip.hidden = false;
+    });
+    svg.addEventListener('mouseleave', () => { tip.hidden = true; const cur = $('line.cursor', svg); if (cur) cur.setAttribute('visibility', 'hidden'); });
+    for (const nav of $$('[data-rp]', box)) {
+      nav.addEventListener('click', (e) => {
+        const b = e.target.closest('button');
+        if (!b) return;
+        $$('button', nav).forEach((x) => x.classList.toggle('on', x === b));
+        state[nav.dataset.rp] = nav.dataset.rp === 'range' ? Number(b.dataset.v) : b.dataset.v;
+        draw();
+      });
+    }
+    draw();
+  }
+
+  // -- gold graph: exact gold at the minute under the pointer ------------------------------
+  // The chart is drawn server-side in a 720-wide viewBox with 40 px on the left and 8 on the
+  // right (views.gold_chart); the pointer's x maps back to a minute on the same scale.
+  const hideGold = (wrap) => { wrap.classList.toggle('hover', false); $('.gold-tip', wrap).hidden = true; $('.gold-cursor', wrap).hidden = true; };
+  document.addEventListener('mousemove', (e) => {
+    const wrap = e.target.closest('.gold-wrap');
+    for (const other of $$('.gold-wrap.hover')) if (other !== wrap) hideGold(other);
+    if (!wrap) return;
+    const data = wrap._gold || (wrap._gold = JSON.parse(wrap.dataset.gold));
+    const series = data.series;
+    if (!series || series.length < 2) return;
+    const svg = $('svg', wrap), box = svg.getBoundingClientRect();
+    const x = ((e.clientX - box.left) / box.width) * 720;
+    const i = Math.max(0, Math.min(series.length - 1, Math.round(((x - 40) / (720 - 48)) * (series.length - 1))));
+    const m = series[i];
+    const k = (v) => (v / 1000).toFixed(1) + 'k';
+    const lead = m.diff === 0 ? 'Even' : `${m.diff > 0 ? 'Blue' : 'Red'} +${k(Math.abs(m.diff))}`;
+    const yours = data.team ? (data.team === 100 ? m.diff : -m.diff) : null;
+    let html = `<b>Minute ${m.minute}</b><span>Blue ${k(m.blue)} &middot; Red ${k(m.red)} &middot; ${lead}</span>`;
+    if (m.me != null) {
+      html += `<span class="you">You: ${m.me.toLocaleString()} gold</span>`;
+      if (m.opp != null) {
+        const d = m.me - m.opp;
+        html += `<span>${esc(data.opp)}: ${m.opp.toLocaleString()} (you ${d >= 0 ? '+' : ''}${d.toLocaleString()})</span>`;
+      }
+    }
+    if (yours != null) html += `<span class="${yours >= 0 ? 'up' : 'down'}">Your team ${yours >= 0 ? 'ahead' : 'behind'} by ${Math.abs(yours).toLocaleString()}</span>`;
+    const tip = $('.gold-tip', wrap), cur = $('.gold-cursor', wrap);
+    tip.innerHTML = html;
+    const px = ((40 + (720 - 48) * (i / (series.length - 1))) / 720) * box.width;
+    cur.style.left = px + 'px';
+    tip.style.left = Math.min(Math.max(px + 12, 0), box.width - 250) + 'px';
+    tip.hidden = false;
+    cur.hidden = false;
+    wrap.classList.toggle('hover', true);
+  });
+
   // -- high-elo map: the game minute by minute on the minimap -------------------------------
   async function loadMap(pane) {
     pane.dataset.loaded = '1';
@@ -313,15 +435,19 @@
             </defs>
             <line class="you" marker-end="url(#ah-you)"/><line class="pro" marker-end="url(#ah-pro)"/>
           </svg>
+          <div class="pits"><i class="pit dragon" data-tip="Dragon is up" hidden></i><i class="pit baron" data-tip="Baron is up" hidden></i><i class="pit herald" data-tip="Voidgrubs or Rift Herald are up" hidden></i></div>
           <div class="events"></div>
           <div class="dots">${data.players.map((p) => `<div class="dot t${p.team}${p.me ? ' me' : ''}" data-pid="${p.pid}" data-tip="${esc(p.name)}&#10;${esc(p.champion)}${p.role ? ' · ' + esc(p.role) : ''}"><img src="${esc(p.icon)}" alt=""></div>`).join('')}</div>
         </div>
         <div class="hmap-side">
           <div class="clock"><b>Minute <span class="min"></span></b><span class="kind"></span></div>
+          <div class="state"></div>
           <div class="said"></div>
+          <div class="why"></div>
           <div class="opts"></div>
+          <div class="feed"></div>
           <div class="hmap-sum">${data.compared
-            ? `<span><b>${data.agreement}%</b> of minutes ${data.first}-${data.last} matched the most common high-elo choice</span><span><b>${data.moments}</b> key moment${data.moments === 1 ? '' : 's'} where you went against a strong consensus</span><span class="muted">Compared with ${data.games ? Number(data.games).toLocaleString() + ' ' : ''}Grandmaster and Challenger games in the ${esc(data.role.toLowerCase())} role. Shares are how often those players chose each option in similar spots, not a guarantee it would have worked.</span>`
+            ? `<span><b>${data.agreement}%</b> of minutes ${data.first} to ${data.last} matched the most common high-elo choice</span><span><b>${data.moments}</b> key moment${data.moments === 1 ? '' : 's'} where you went against a strong consensus</span><span class="muted">Compared with ${data.games ? Number(data.games).toLocaleString() + ' ' : ''}Grandmaster and Challenger games in the ${esc(data.role.toLowerCase())} role. Shares are how often those players chose each option in similar spots, not a guarantee it would have worked.</span>`
             : '<span class="muted">No high-elo model covers this role yet, so this is a replay of positions, kills and objectives only.</span>'}</div>
           <div class="legend"><span><i class="l-you"></i>your move to the next minute</span><span><i class="l-pro"></i>most common high-elo choice</span></div>
         </div>
@@ -364,23 +490,70 @@
       };
       line(you, m.next);
       line(pro, m.advice && m.advice.target);
-      $('.events', pane).innerHTML = m.events.map((e) => `<i class="ev ${e.kind} t${e.team}${e.mine ? ' mine' : ''}" style="left:${e.x}%;top:${e.y}%" data-tip="${e.kind === 'kill' ? (e.mine ? 'Your fight' : 'Kill') : esc(e.name)}&#10;minute ${m.minute}"></i>`).join('');
+      $('.events', pane).innerHTML = m.events.map((e) => `<i class="ev ${e.kind} t${e.team}${e.mine ? ' mine' : ''}" style="left:${e.x}%;top:${e.y}%" data-tip="${esc(e.text || e.kind)}"></i>`).join('');
+      for (const [name, at] of Object.entries(data.pits || {})) {
+        const pit = $(`.pit.${name}`, pane);
+        if (pit) { pit.hidden = !(m.up || []).includes(name); pit.style.left = at.x + '%'; pit.style.top = at.y + '%'; }
+      }
+      const herald = $('.pit.herald', pane);
+      if (herald && data.pits) { herald.style.left = data.pits.baron.x + '%'; herald.style.top = data.pits.baron.y + '%'; herald.hidden = !(m.up || []).includes('herald') || (m.up || []).includes('baron'); }
+      const st = m.state || {};
+      const k1 = (v) => `${v >= 0 ? '+' : '-'}${(Math.abs(v) / 1000).toFixed(1)}k`;
+      const timer = (label, mins) => (mins <= 0 ? `<span class="chip up">${label} up</span>` : mins <= 2 ? `<span class="chip soon">${label} in ${Math.floor(mins)}:${String(Math.round((mins % 1) * 60)).padStart(2, '0')}</span>` : '');
+      $('.state', pane).innerHTML = `
+        <div class="chips2">
+          <span class="chip ${st.lead >= 0 ? 'good' : 'bad'}">Team ${k1(st.lead || 0)} gold</span>
+          <span class="chip">Dragons ${(st.dragons || [0, 0]).join('-')}</span>
+          ${timer('Dragon', st.dragon_in ?? 9)}${m.minute >= 19 ? timer('Baron', st.baron_in ?? 9) : ''}
+        </div>
+        <div class="you-line">${st.dead ? '<b class="down">You were dead</b>' : `You: <b>level ${st.level ?? '-'}</b> &middot; <b>${st.hp ?? '-'}%</b> health &middot; <b>${(st.unspent || 0).toLocaleString()}</b> gold unspent`}${st.cs_diff != null && st.opp ? ` &middot; <b class="${st.cs_diff >= 0 ? 'up' : 'down'}">${st.cs_diff >= 0 ? '+' : ''}${st.cs_diff}</b> CS vs ${esc(st.opp)}` : ''}${(st.allies_near || st.enemies_near) ? ` &middot; ${st.allies_near} ${st.allies_near === 1 ? 'ally' : 'allies'}, ${st.enemies_near} ${st.enemies_near === 1 ? 'enemy' : 'enemies'} near` : ''}</div>`;
+      const feed = [];
+      if ((m.this_minute || []).length) feed.push(`<h5>This minute</h5><ul>${m.this_minute.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`);
+      if (m.advice && (m.advice.next || []).length) {
+        const lc = m.advice.lead_change;
+        feed.push(`<h5>What happened next</h5><ul>${m.advice.next.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`
+          + (lc ? `<p class="lc">Your team's gold lead went from <b>${k1(lc.from)}</b> to <b class="${lc.to - lc.from >= 0 ? 'up' : 'down'}">${k1(lc.to)}</b> over the next ${lc.minutes} minutes.</p>` : ''));
+      }
+      $('.feed', pane).innerHTML = feed.join('');
       const a = m.advice;
       const kind = $('.kind', pane);
       kind.className = 'kind ' + (a ? a.kind : '');
       kind.textContent = a ? kindText[a.kind] : '';
       if (!a) {
         $('.said', pane).innerHTML = data.compared && (m.minute < data.first || m.minute > data.last)
-          ? `<p class="muted">High-elo comparisons cover minutes ${data.first} to ${data.last}, the laning phase. Later minutes show positions, kills and objectives.</p>` : '';
+          ? `<p class="muted">${m.minute < data.first ? 'The comparison starts at minute ' + data.first + ', once players have left base.' : 'The high-elo models were trained on minutes ' + data.first + ' to ' + data.last + ' of their games; later minutes show the game state and what happened.'}</p>` : '';
         $('.opts', pane).innerHTML = '';
+        $('.why', pane).innerHTML = '';
         return;
       }
+      $('.why', pane).innerHTML = ((a.why || []).length
+        ? `<h5>${a.kind === 'moment' || a.kind === 'differ' ? `Why ${esc(a.best.toLowerCase())} fit this moment` : 'What the game looked like'}</h5><ul>${a.why.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '')
+        + (pane.dataset.ask && (a.kind === 'moment' || a.kind === 'differ')
+          ? `<div class="ask" data-minute="${i}">${asked[i] ? asked[i] : `<button class="btn ask-btn" type="button">Ask the coach about this minute</button>`}</div>` : '');
       $('.said', pane).innerHTML = `<p>You <b>${esc(a.did)}</b>${a.did_share != null ? ` &middot; <span class="share">${a.did_share}%</span> of high-elo players did this here` : ''}.</p>`
         + (a.kind === 'moment' || a.kind === 'differ' ? `<p>Most chose <b class="pro-text">${esc(a.best.toLowerCase())}</b> (${a.best_share}%).</p>` : '');
       $('.opts', pane).innerHTML = a.options.map((o) => `<div class="opt${o.mine ? ' mine' : ''}"><span>${esc(o.label)}${o.mine ? ' <em>you</em>' : ''}</span><div class="bar"><i style="width:${o.share}%"></i></div><b>${o.share}%</b></div>`).join('');
     }
     let timer = null;
     const stop = () => { clearInterval(timer); timer = null; $('.play', pane).innerHTML = '&#9654;'; };
+    // AI notes for single minutes, kept so moving the slider back shows them again.
+    const asked = {};
+    pane.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.ask-btn');
+      if (!btn) return;
+      const box = btn.closest('.ask'), minute = Number(box.dataset.minute);
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Asking the coach...';
+      try {
+        const r = await fetch(`${pane.dataset.mapUrl}/${minute}/explain`, { method: 'POST' });
+        const note = await r.json();
+        if (!r.ok) throw new Error(note.detail || 'failed');
+        asked[minute] = `<div class="coach-note">${note.explanation ? `<p>${esc(note.explanation)}</p>` : ''}${note.tip ? `<p class="tip"><b>Next time:</b> ${esc(note.tip)}</p>` : ''}<span class="muted small">AI coach, from the facts above; every number is checked against them.</span></div>`;
+        box.innerHTML = asked[minute];
+      } catch (err) {
+        box.innerHTML = `<p class="muted small">${esc(friendly(String(err.message || err)))}</p>`;
+      }
+    });
     range.addEventListener('input', () => { stop(); show(Number(range.value)); });
     $('.play', pane).addEventListener('click', () => {
       if (timer) return stop();
@@ -435,17 +608,26 @@
       const ev = data.evidence || [];
       const evText = Object.fromEntries(ev.map((x) => [x.id, x.text]));
       const out = data.output;
+      const g = data.glance || {};
+      const signed = (v) => (v == null ? '-' : (v > 0 ? '+' : '') + Number(v).toLocaleString());
       let html = head;
+      if (g.games) {
+        html += `<div class="glance">
+          <div><span>Record</span><b class="${g.win_rate >= 50 ? 'up' : 'down'}">${g.wins}-${g.games - g.wins}</b><small>${g.win_rate}% &middot; usually ${g.usual ?? '-'}%</small></div>
+          <div><span>Gold at 10</span><b class="${(g.gold10 || 0) >= 0 ? 'up' : 'down'}">${signed(g.gold10)}</b><small>average lead</small></div>
+          <div><span>Gold at 15</span><b class="${(g.gold15 || 0) >= 0 ? 'up' : 'down'}">${signed(g.gold15)}</b><small>average lead</small></div>
+          <div><span>Died by 10</span><b>${g.died10 ?? '-'}%</b><small>them ${g.opp_died10 ?? '-'}%</small></div>
+        </div>`;
+      }
       if (out) {
         if (out.verdict) html += `<p class="verdict">${esc(out.verdict)}</p>`;
-        html += (out.points || []).map((p) => `<div class="reason"><b>${esc(p.title)}</b><p>${esc(p.explanation)}</p>
-          <div class="cites">${(p.evidence_ids || []).map((id) => `<span data-tip="${esc(id)}&#10;${esc(evText[id] || '')}">${esc(id)}</span>`).join('')}</div></div>`).join('');
-        if ((out.tips || []).length) html += `<h4>How to play it</h4><ul class="tips">${out.tips.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>`;
+        html += (out.points || []).map((p) => `<div class="reason"><b>${esc(p.title)}</b> <span>${esc(p.explanation)}</span>${(p.evidence_ids || []).map((id) => `<i data-tip="${esc(id)}&#10;${esc(evText[id] || '')}">${esc(id)}</i>`).join('')}</div>`).join('');
+        if ((out.tips || []).length) html += `<ul class="tips">${out.tips.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>`;
       } else {
-        html += `<p class="muted">${esc(data.note || 'No explanation available.')}</p>`;
+        html += `<p class="muted small">${esc(data.note || 'No explanation available.')}</p>`;
       }
-      html += `<details${out ? '' : ' open'}><summary>The evidence (${ev.length} items: lane numbers from ranked games, then both kits)</summary><ol class="ev">${ev.map((x) => `<li><b>${esc(x.id)}</b>${esc(x.text)}</li>`).join('')}</ol></details>`;
-      if (out) html += `<div class="foot">Written by AI from the evidence above; every number it uses is checked against it. ${data.cached ? 'Saved explanation.' : 'Just written.'}</div>`;
+      html += `<details><summary>Evidence (${ev.length} items)</summary><ol class="ev">${ev.map((x) => `<li><b>${esc(x.id)}</b>${esc(x.text)}</li>`).join('')}</ol></details>`;
+      if (out) html += `<div class="foot">Written by AI from this evidence; every number is checked against it.</div>`;
       body.innerHTML = html;
     } catch (err) {
       body.innerHTML = head + `<div class="empty">${esc(friendly(String(err.message || err)))}</div>`;

@@ -31,7 +31,7 @@ class Settings:
     coach_thinking: str = DEFAULT_COACH_THINKING
     kill_hotkey: str = DEFAULT_KILL_HOTKEY
     models_dir: str = DEFAULT_MODELS_DIR
-    rate_limits: str | None = None          # website: "sync=30,scout=60,coach=10,matchup=20" per hour
+    rate_limits: str | None = None          # website: "sync=30,scout=60,coach=10,matchup=20,moment=30" per hour
     coach_daily_budget_usd: float = 5.0     # website: LLM coaching stops for the day past this
 
     @classmethod

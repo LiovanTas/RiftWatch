@@ -12,7 +12,7 @@
       <div class="eyebrow">{{ role_name or "Champion" }}{% if s.games %} &middot; {{ '{:,}'.format(s.games) }} ranked games{% endif %}</div>
       <h1>{{ champ.name }}</h1>
       <div class="title">{{ champ.title }}{% if champ.tags %} &middot; {{ champ.tags|join(', ') }}{% endif %}</div>
-      {% if patch_changes %}<div class="hero-patch">{% for c in patch_changes %}<a class="pm-line {{ c.kind }}" href="{{ c.source }}" target="_blank" rel="noopener"><i>{{ {'buff': '▲', 'nerf': '▼', 'adjust': '◆'}[c.kind] }}</i><b>{{ c.patch }}{{ ' preview' if c.status == 'preview' }}</b> {{ c.text }}</a>{% endfor %}</div>{% endif %}
+      {% if patch_changes or item_hits %}<div class="hero-patch">{% for c in patch_changes %}<a class="pm-line {{ c.kind }}" href="{{ c.source }}" target="_blank" rel="noopener"><i>{{ {'buff': '▲', 'nerf': '▼', 'adjust': '◆'}[c.kind] }}</i><b>{{ c.patch }}{{ ' preview' if c.status == 'preview' }}</b> {{ c.text }}</a>{% endfor %}{% for c in item_hits %}<span class="pm-line {{ c.kind }}"><i>{{ {'buff': '▲', 'nerf': '▼', 'adjust': '◆'}[c.kind] }}</i><b>{{ c.patch }}{{ ' preview' if c.status == 'preview' }}</b> {{ c.name }} {{ {'buff': 'buffed', 'nerf': 'nerfed', 'adjust': 'changed'}[c.kind] }} ({{ c.text }}), bought in {{ c.usage }}% of {{ champ.name }}'s games</span>{% endfor %}</div>{% endif %}
       {% if abilities %}
       <div class="abil">{% for a in abilities %}<div class="slot" data-tip="{{ a.key }} &middot; {{ a.name }}&#10;{{ a.text }}"><img src="{{ a.icon }}" alt="{{ a.name }}" loading="lazy"><span>{{ a.key }}</span></div>{% endfor %}</div>
       {% endif %}

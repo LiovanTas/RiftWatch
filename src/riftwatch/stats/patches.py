@@ -10,7 +10,9 @@ nudges each changed champion's tier score:
     before that patch (a change the data already includes moves nothing);
   * a previewed change counts ``PREVIEW_WEIGHT`` of that, since previews are often adjusted;
   * mixed changes and reworks move nothing but are flagged, because the old numbers may no
-    longer describe the champion.
+    longer describe the champion;
+  * a system change (an item) moves every champion who buys it, by ``ITEM_SHIFT`` times the
+    share of that champion's games in which they bought it (ignored under ``MIN_USAGE``).
 
 The nudge is shown, never hidden: every changed champion carries its changes, and the board
 can be switched to the raw data.
@@ -25,6 +27,8 @@ from typing import Any
 
 SHIFT = 1.0
 PREVIEW_WEIGHT = 0.6
+ITEM_SHIFT = 1.0        # for a champion that buys the item every game
+MIN_USAGE = 0.15
 WEIGHT = {"buff": 1.0, "nerf": -1.0, "adjust": 0.0}
 NOTES_PATH = Path(__file__).with_name("patch_notes.json")
 
@@ -54,6 +58,32 @@ def by_champion(name_to_id: dict[str, int]) -> dict[int, list[dict[str, Any]]]:
     return out
 
 
+def systems(item_ids: dict[str, list[int]]) -> list[dict[str, Any]]:
+    """Every item change, newest patch first, with the item's ids (empty if Data Dragon
+    doesn't know the name)."""
+    out = []
+    for p in notes()["patches"]:
+        for c in p.get("systems", []):
+            out.append({**c, "patch": p["patch"], "status": p["status"], "source": p["source"],
+                        "ids": item_ids.get(c["name"].lower(), []) if c["type"] == "item" else []})
+    return out
+
+
+def system_shift(changes: list[dict[str, Any]], usage: dict[int, float],
+                 counts: list[tuple[str, int]]) -> tuple[float, list[dict[str, Any]]]:
+    """Tier-score points from item changes for one champion, given how often it buys each
+    item (item id -> share of games), and the changes that applied with their usage."""
+    total, applied = 0.0, []
+    for c in changes:
+        share = min(1.0, sum(usage.get(i, 0.0) for i in c["ids"]))
+        if share < MIN_USAGE:
+            continue
+        weight = WEIGHT.get(c["kind"], 0.0) * (PREVIEW_WEIGHT if c["status"] == "preview" else 1.0)
+        total += ITEM_SHIFT * weight * share * share_before(c["patch"], counts)
+        applied.append({k: c[k] for k in ("name", "kind", "text", "patch", "status")} | {"usage": round(100 * share)})
+    return total, applied
+
+
 def share_before(patch: str, counts: list[tuple[str, int]]) -> float:
     """Share of the games in ``counts`` (game version, games) played before ``patch``."""
     total = sum(n for _, n in counts)
@@ -72,9 +102,11 @@ def shift(changes: list[dict[str, Any]], counts: list[tuple[str, int]]) -> float
     return total
 
 
-def mark(changes: list[dict[str, Any]]) -> str | None:
-    """'buff', 'nerf' or 'adjust' for a champion's badge: the net direction of its changes."""
-    if not changes:
+def mark(changes: list[dict[str, Any]], items: list[dict[str, Any]] = ()) -> str | None:
+    """'buff', 'nerf' or 'adjust' for a champion's badge: the net direction of its own changes
+    and of the item changes it's exposed to (weighted by how often it buys the item)."""
+    if not changes and not items:
         return None
-    net = sum(WEIGHT.get(c["kind"], 0.0) for c in changes)
+    net = (sum(WEIGHT.get(c["kind"], 0.0) for c in changes)
+           + sum(WEIGHT.get(c["kind"], 0.0) * c["usage"] / 100 for c in items))
     return "buff" if net > 0 else "nerf" if net < 0 else "adjust"

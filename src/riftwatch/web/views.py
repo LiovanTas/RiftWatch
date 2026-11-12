@@ -7,8 +7,9 @@ so a profile is a handful of indexed queries; only an expanded game reads its ti
 
 from __future__ import annotations
 
+import json
 from collections import Counter, defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from statistics import fmean
 from typing import Any
 from urllib.parse import quote
@@ -350,19 +351,27 @@ OBJECTIVES = (("baron", "Baron"), ("dragon", "Dragon"), ("horde", "Voidgrubs"),
               ("atakhan", "Atakhan"))
 
 
-def _gold_series(timeline: dict | None) -> list[dict]:
-    """Blue minus red total gold at each minute."""
+def _gold_series(timeline: dict | None, me_pid: int | None = None,
+                 opp_pid: int | None = None) -> list[dict]:
+    """Each minute's team gold (blue, red, blue minus red) and, when given, the player's and
+    their lane opponent's own gold."""
     if not timeline:
         return []
     out = []
     for i, frame in enumerate(timeline.get("info", {}).get("frames", [])):
         blue = red = 0
-        for pid, pf in (frame.get("participantFrames") or {}).items():
+        pfs = frame.get("participantFrames") or {}
+        for pid, pf in pfs.items():
             if int(pid) <= 5:
                 blue += pf.get("totalGold", 0)
             else:
                 red += pf.get("totalGold", 0)
-        out.append({"minute": i, "diff": blue - red})
+        row = {"minute": i, "diff": blue - red, "blue": blue, "red": red}
+        if me_pid:
+            row["me"] = (pfs.get(str(me_pid)) or {}).get("totalGold")
+        if opp_pid:
+            row["opp"] = (pfs.get(str(opp_pid)) or {}).get("totalGold")
+        out.append(row)
     return out
 
 
@@ -483,11 +492,12 @@ def match_detail(conn: psycopg.Connection, gd: GameData, match_id: str, puuid: s
     me = next((p for p in players if p["puuid"] == puuid), None)
     timeline = conn.execute("SELECT raw FROM match_timelines WHERE match_id = %s",
                             (match_id,)).fetchone()
-    gold = _gold_series(timeline[0] if timeline else None)
+    opp = (next((p for p in players if me["position"] and p["team_id"] != me["team_id"]
+                 and p["position"] == me["position"]), None) if me is not None else None)
+    gold = _gold_series(timeline[0] if timeline else None,
+                        me["participant_id"] if me else None, opp["participant_id"] if opp else None)
     notes = None
     if me is not None:
-        opp = next((p for p in players if me["position"] and p["team_id"] != me["team_id"]
-                    and p["position"] == me["position"]), None)
         tier = player_tier(conn, me["puuid"])
         lane = insights.lane_leads(timeline[0] if timeline else None, me["participant_id"],
                                    opp["participant_id"] if opp else None)
@@ -504,6 +514,8 @@ def match_detail(conn: psycopg.Connection, gd: GameData, match_id: str, puuid: s
         "match_id": match_id, "duration": clock(players[0]["duration_s"]),
         "queue": QUEUE_NAMES.get(players[0]["queue_id"], "Custom"), "patch": players[0]["patch"],
         "teams": teams, "gold_chart": gold_chart(gold),
+        "gold_data": json.dumps({"series": gold, "team": me["team_id"] if me else None,
+                                 "opp": gd.champion(opp["champion_id"]).name if opp else None}),
         "gold_end": gold[-1]["diff"] if gold else None,
         "me": ({"build": _build_steps(me, gd), "skills": _skill_grid(me["skill_order"]),
                 "skill_order": (me["skill_order"] or "")[:18], "runes": _rune_page(me, gd),
@@ -641,3 +653,103 @@ def personal_matchups(conn: psycopg.Connection, gd: GameData, puuid: str, min_ga
     easy = sorted(rows, key=lambda r: -(r[4] - r[3] / 2) / r[3] ** 0.5)
     return {"hard": [view(*r) for r in hard if r[4] < r[3] / 2][:limit],
             "easy": [view(*r) for r in easy if r[4] > r[3] / 2][:limit]}
+
+
+# -- rank progression -----------------------------------------------------------------------
+
+LADDER = ("IRON", "BRONZE", "SILVER", "GOLD", "PLATINUM", "EMERALD", "DIAMOND")
+DIVISIONS = {"IV": 0, "III": 1, "II": 2, "I": 3}
+APEX_START = 400 * len(LADDER)                       # Master 0 LP on the same scale
+LP_PER_GAME = 22                                     # a typical win or loss near even MMR
+
+
+def ladder_score(tier: str, division: str | None, lp: int) -> int:
+    """One number for a rank: 400 per tier, 100 per division, plus LP (Master+ continue from
+    Diamond I 100 LP)."""
+    tier = tier.upper()
+    if tier in LADDER:
+        return 400 * LADDER.index(tier) + 100 * DIVISIONS.get(division or "IV", 0) + lp
+    return APEX_START + lp
+
+
+def ladder_label(score: float) -> str:
+    score = round(score)
+    if score >= APEX_START:
+        return f"Master+ {score - APEX_START} LP"
+    tier, rest = divmod(max(score, 0), 400)
+    division, lp = divmod(rest, 100)
+    return f"{LADDER[tier].title()} {('IV', 'III', 'II', 'I')[division]} {lp} LP"
+
+
+def rank_history(conn: psycopg.Connection, puuid: str, queue: str = "RANKED_SOLO_5x5") -> dict:
+    """The player's rank over the season, as points on the ladder scale.
+
+    Riot's API only gives the current rank, so RiftWatch keeps a snapshot each time a player
+    is updated. Snapshots are exact. Between two of them, each ranked game moves the line by a
+    typical LP_PER_GAME up or down, scaled so the line meets the next snapshot exactly; before
+    the first snapshot of the season the same estimate runs backwards with nothing to correct
+    it. Points carry ``estimated`` so the chart can show the difference."""
+    queue_id = {"RANKED_SOLO_5x5": 420, "RANKED_FLEX_SR": 440}[queue]
+    snaps = conn.execute(
+        """SELECT captured_at, tier, division, lp, wins, losses FROM rank_snapshots
+            WHERE puuid = %s AND queue = %s ORDER BY captured_at""", (puuid, queue)).fetchall()
+    if not snaps:
+        return {"points": [], "snapshots": 0}
+    season_start = datetime(snaps[-1][0].year, 1, 1, tzinfo=UTC)
+    games = conn.execute(
+        """SELECT game_start + make_interval(secs => duration_s), win FROM participant_builds
+            WHERE puuid = %s AND queue_id = %s AND NOT remake AND game_start >= %s
+            ORDER BY game_start""", (puuid, queue_id, season_start)).fetchall()
+    kept = []
+    for snap in snaps:                     # repeated updates with nothing new: keep the first
+        if snap[0] >= season_start and (not kept or kept[-1][1:] != snap[1:]):
+            kept.append(snap)
+    snaps = kept
+    anchors = [(t, ladder_score(tier, div, lp)) for t, tier, div, lp, _, _ in snaps]
+
+    points: list[dict] = []
+
+    def add(t, score, kind, win=None, estimated=True):
+        points.append({"t": int(t.timestamp() * 1000), "score": round(score, 1), "kind": kind,
+                       "win": win, "estimated": estimated, "label": ladder_label(score)})
+
+    # Before the first snapshot: walk backwards from it.
+    first_t, first_s = anchors[0]
+    before = [g for g in games if g[0] <= first_t]
+    score, back = first_s, []
+    for t, win in reversed(before):
+        back.append((t, score, win))
+        score -= LP_PER_GAME if win else -LP_PER_GAME
+        score = max(score, 0)
+    if before:
+        add(before[0][0] - (before[1][0] - before[0][0] if len(before) > 1 else timedelta(hours=1)),
+            score, "start")
+    for t, s, win in reversed(back):
+        add(t, s, "game", win)
+    add(first_t, first_s, "snapshot", estimated=False)
+
+    # Between snapshots: typical steps, corrected to land on the next snapshot.
+    for (t0, s0), (t1, s1) in zip(anchors, anchors[1:], strict=False):
+        between = [g for g in games if t0 < g[0] <= t1]
+        if between:
+            steps = [LP_PER_GAME if win else -LP_PER_GAME for _, win in between]
+            fix = (s1 - s0 - sum(steps)) / len(steps)
+            score = s0
+            for (t, win), step in zip(between, steps, strict=True):
+                score += step + fix
+                add(t, score, "game", win)
+        add(t1, s1, "snapshot", estimated=False)
+
+    # After the last snapshot (games stored since): typical steps forward.
+    last_t, score = anchors[-1]
+    for t, win in (g for g in games if g[0] > last_t):
+        score = max(0, score + (LP_PER_GAME if win else -LP_PER_GAME))
+        add(t, score, "game", win)
+
+    real = [p for p in points if not p["estimated"]]
+    peak = max(points, key=lambda p: p["score"])
+    return {"points": points, "snapshots": len(real), "season": season_start.year,
+            "peak": peak["label"], "current": ladder_label(anchors[-1][1]),
+            "since": points[0]["t"], "tiers": [{"name": t.title(), "score": 400 * i}
+                                                for i, t in enumerate(LADDER)] +
+                                               [{"name": "Master+", "score": APEX_START}]}

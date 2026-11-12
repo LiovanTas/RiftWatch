@@ -52,7 +52,8 @@ def examples(events=None):
 def test_one_example_per_jungler_per_minute():
     ex = examples()
     assert {e.participant_id for e in ex} == {2, 7}           # the two junglers
-    assert sorted({e.minute for e in ex}) == list(range(2, 16))
+    # every minute from the first labelled one to the last frame with a following minute
+    assert sorted({e.minute for e in ex}) == list(range(2, 26))          # a 26:34 game
     assert all(e.decision in JUNGLE_DECISIONS for e in ex)
 
 
@@ -148,13 +149,15 @@ def test_duo_features_for_bot_lane():
 
 
 def test_every_role_produces_valid_examples():
-    from riftwatch.ml.situations import DECISIONS, ROLES
+    from riftwatch.ml.situations import DECISIONS, FIRST_MINUTE, LAST_MINUTE, ROLES
     from riftwatch.ml.situations import examples as role_examples
 
     match, timeline = placed_game()
     for role in ROLES:
         ex = role_examples(match, timeline, role)
-        assert len(ex) == 2 * 14 and all(e.decision in DECISIONS[role] for e in ex)
+        minutes = sorted({e.minute for e in ex})
+        assert minutes == list(range(FIRST_MINUTE, minutes[-1] + 1)) and minutes[-1] <= LAST_MINUTE
+        assert len(ex) == 2 * len(minutes) and all(e.decision in DECISIONS[role] for e in ex)
         assert all(e.role == role for e in ex)
 
 

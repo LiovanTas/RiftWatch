@@ -125,6 +125,7 @@ def train(dataset: Path, *, test_fraction: float = 0.2, seed: int = 7,
         }
     metrics: dict[str, Any] = {
         "games": int(df["match_id"].nunique()), "rows": int(len(df)),
+        "first_minute": int(df["minute"].min()), "last_minute": int(df["minute"].max()),
         "train_games": int(tr["match_id"].nunique()), "test_games": int(te["match_id"].nunique()),
         "decision": {
             "accuracy": round(accuracy, 3), "top2_accuracy": round(top2, 3),

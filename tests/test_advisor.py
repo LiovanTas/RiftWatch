@@ -133,7 +133,7 @@ def test_train_then_review(tmp_path):
     match, timeline = build_game("NA1_9999")
     puuid = match["info"]["participants"][1]["puuid"]
     review = Advisor(tmp_path / "models").review(match, timeline, puuid)
-    assert review.role == "JUNGLE" and review.minutes == 14 and 0 <= review.agreement <= 1
+    assert review.role == "JUNGLE" and review.minutes == 24 and 0 <= review.agreement <= 1
     # A role with no trained model is simply skipped.
     mid = match["info"]["participants"][2]["puuid"]
     assert Advisor(tmp_path / "models").review(match, timeline, mid) is None

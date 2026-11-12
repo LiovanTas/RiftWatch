@@ -77,3 +77,14 @@
 {% macro pos_icon(gd, position, size=16) -%}
 <img class="pos" src="{{ gd.position_icon(position) }}" alt="{{ position }}" width="{{ size }}" height="{{ size }}" loading="lazy">
 {%- endmacro %}
+
+{% macro patch_row(w) -%}
+<div class="watch-row">
+  <div class="wlab"><b>{{ w.patch }}</b><span class="{{ 'preview' if w.status == 'preview' else '' }}">{{ 'preview' if w.status == 'preview' else 'live' }} &middot; {{ w.date[5:] }}</span><a href="{{ w.source }}" rel="noopener" target="_blank">notes &#8599;</a></div>
+  <div class="wchips">
+    {% for c in w.changes %}<a class="pchip {{ c.kind }}" href="/champions/{{ c.slug }}" data-tip="{{ c.champion }} &middot; {{ {'buff': 'buffed', 'nerf': 'nerfed', 'adjust': 'changed'}[c.kind] }} in {{ w.patch }}{{ ' (preview)' if w.status == 'preview' }}&#10;{{ c.text }}"><img src="{{ c.icon }}" alt="{{ c.champion }}" loading="lazy"><i>{{ {'buff': '▲', 'nerf': '▼', 'adjust': '◆'}[c.kind] }}</i></a>{% endfor %}
+    {% if w.systems %}<span class="wsep" title="Items"></span>
+    {% for c in w.systems %}<span class="pchip item {{ c.kind }}" data-tip="{{ c.name }} &middot; item {{ {'buff': 'buffed', 'nerf': 'nerfed', 'adjust': 'changed'}[c.kind] }} in {{ w.patch }}{{ ' (preview)' if w.status == 'preview' }}&#10;{{ c.text }}. Moves every champion that buys it.">{% if c.icon %}<img src="{{ c.icon }}" alt="{{ c.name }}" loading="lazy">{% else %}<b>{{ c.name[:2] }}</b>{% endif %}<i>{{ {'buff': '▲', 'nerf': '▼', 'adjust': '◆'}[c.kind] }}</i></span>{% endfor %}{% endif %}
+  </div>
+</div>
+{%- endmacro %}

@@ -5,7 +5,7 @@
     {% if d.insights %}<button type="button" data-pane="insights">Insights</button>{% endif %}
     {% if d.me %}<button type="button" data-pane="build">Build</button>{% endif %}
     {% if d.gold_chart %}<button type="button" data-pane="gold">Gold graph</button>{% endif %}
-    {% if map_url %}<button type="button" data-pane="map" class="map-tab">{{ 'Map vs high elo' if map_compared else 'Map replay' }}</button>{% endif %}
+    {% if map_url %}<button type="button" data-pane="map" class="map-tab">{{ 'High Elo Comparison' if map_compared else 'Map replay' }}</button>{% endif %}
     {% if analysis_url %}<a class="btn" style="margin:0 0 6px auto" href="{{ analysis_url }}">RiftWatch analysis &rarr;</a>{% endif %}
   </div>
   <div class="d-pane on" data-pane="overview">
@@ -118,12 +118,16 @@
   </div>
   {% endif %}
   {% if map_url %}
-  <div class="d-pane" data-pane="map" data-map-url="{{ map_url }}"></div>
+  <div class="d-pane" data-pane="map" data-map-url="{{ map_url }}"{% if map_compared %} data-ask="1"{% endif %}></div>
   {% endif %}
   {% if d.gold_chart %}
   <div class="d-pane" data-pane="gold">
-    <h4 style="margin:0 0 8px;font-size:13px;color:var(--text-2)">Team gold lead &middot; blue above the line, red below</h4>
-    {{ d.gold_chart|safe }}
+    <h4 style="margin:0 0 8px;font-size:13px;color:var(--text-2)">Team gold lead &middot; blue above the line, red below &middot; hover for exact gold</h4>
+    <div class="gold-wrap" data-gold="{{ d.gold_data }}">
+      {{ d.gold_chart|safe }}
+      <i class="gold-cursor" hidden></i>
+      <div class="gold-tip" hidden></div>
+    </div>
   </div>
   {% endif %}
 </div>

@@ -46,7 +46,8 @@ HOME_LANE = {"TOP": "top", "MIDDLE": "mid", "BOTTOM": "bot", "UTILITY": "bot"}
 OPPONENT_ROLE = {"TOP": "TOP", "MIDDLE": "MIDDLE", "BOTTOM": "BOTTOM", "UTILITY": "UTILITY",
                  "JUNGLE": "JUNGLE"}
 FIRST_MINUTE = 2
-LAST_MINUTE = 15        # last minute whose *decision* is labelled (needs frame m+1)
+LAST_MINUTE = 40        # last minute whose *decision* is labelled (needs frame m+1); was 15,
+                        # the laning phase only, until 2026-11 (see README, High-elo ML)
 OUTCOME_MINUTES = 3     # how far ahead outcomes look
 
 _EPIC = {"DRAGON", "ELDER_DRAGON", "HORDE", "RIFTHERALD", "BARON_NASHOR", "ATAKHAN"}
@@ -54,6 +55,7 @@ _EPIC = {"DRAGON", "ELDER_DRAGON", "HORDE", "RIFTHERALD", "BARON_NASHOR", "ATAKH
 DRAGON_SPAWN, DRAGON_RESPAWN = 5.0, 5.0
 GRUBS_SPAWN = 8.0
 HERALD_SPAWN = 15.0
+BARON_SPAWN, BARON_RESPAWN = 20.0, 6.0
 
 # Lane centerlines in game units. "In lane" means within LANE_WIDTH of one: the coarse map
 # zones used elsewhere put blue's gromp inside "top lane", which made clearing a camp look
@@ -274,6 +276,15 @@ def _example(g: _Game, pid: int, role: str, m: int) -> Example:
     herald_taken = any(e.get("monsterType") == "RIFTHERALD" for e in epics)
     f["herald_up_in"] = round(min(max(HERALD_SPAWN - now, 0.0), 15.0), 2)
     f["herald_up"] = float(now >= HERALD_SPAWN and not herald_taken)
+    # Baron decides most games after 20 minutes: whether it's up, and who has taken it.
+    barons = sorted(e["timestamp"] / 60_000 for e in epics if e.get("monsterType") == "BARON_NASHOR")
+    next_baron = (barons[-1] + BARON_RESPAWN) if barons else BARON_SPAWN
+    f["baron_up_in"] = round(min(max(next_baron - now, -5.0), 10.0), 2)
+    f["baron_up"] = float(next_baron <= now)
+    f["own_barons"] = float(team_count(epics, team, "BARON_NASHOR"))
+    f["enemy_barons"] = float(team_count(epics, enemy, "BARON_NASHOR"))
+    f["minutes_since_baron"] = (t0 - max([e["timestamp"] for e in epics
+                                          if e.get("monsterType") == "BARON_NASHOR"], default=0)) / 60_000
 
     cs_1 = stat(pid, main_cs, g.frames[m - 1])
     cs_2 = stat(pid, main_cs, g.frames[max(m - 2, 0)])

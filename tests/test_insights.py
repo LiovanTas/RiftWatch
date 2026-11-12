@@ -215,3 +215,103 @@ def test_patterns_count_recurring_notes():
     assert found["good"] == []                                      # one game isn't a pattern
     assert all(n(label).pattern for label in ("Out-farmed Ahri by 40 CS", "40 CS behind Ahri",
                                               "+1.0k gold on Ahri at 15", "Died 9 times", "Quadra kill"))
+
+
+def test_item_changes_move_champions_by_how_often_they_buy_the_item():
+    from riftwatch.stats import patches
+    counts = [("16.19", 100)]
+    nerf = [{"name": "Voltaic Cyclosword", "kind": "nerf", "text": "", "patch": "26.23",
+             "status": "preview", "ids": [6699, 226699]}]
+    shift, applied = patches.system_shift(nerf, {6699: 0.5}, counts)
+    assert shift == -patches.ITEM_SHIFT * patches.PREVIEW_WEIGHT * 0.5 and applied[0]["usage"] == 50
+    assert patches.system_shift(nerf, {6699: 0.05}, counts) == (0.0, [])      # rarely bought: ignored
+    assert patches.mark([], applied) == "nerf"
+    ids = patches.systems({"voltaic cyclosword": [6699]})
+    assert any(c["name"] == "Voltaic Cyclosword" and c["ids"] == [6699] for c in ids)
+
+
+def test_ladder_scores_and_labels_round_trip():
+    from riftwatch.web.views import ladder_label, ladder_score
+    assert ladder_score("IRON", "IV", 0) == 0
+    assert ladder_score("PLATINUM", "IV", 6) == 4 * 400 + 6
+    assert ladder_label(ladder_score("GOLD", "II", 55)) == "Gold II 55 LP"
+    assert ladder_label(ladder_score("MASTER", None, 120)) == "Master+ 120 LP"
+
+
+def test_gold_series_has_team_and_player_gold():
+    from riftwatch.web.views import _gold_series
+
+    def frame(blue_me, red_opp):
+        pfs = {str(p): {"totalGold": 500} for p in range(1, 11)}
+        pfs["3"]["totalGold"], pfs["8"]["totalGold"] = blue_me, red_opp
+        return {"participantFrames": pfs}
+    series = _gold_series({"info": {"frames": [frame(500, 500), frame(1500, 900)]}}, 3, 8)
+    assert series[1] == {"minute": 1, "diff": 600, "blue": 3500, "red": 2900, "me": 1500, "opp": 900}
+
+
+def test_map_moment_lines_describe_events_from_the_players_side():
+    from riftwatch.web import mapview
+    names = {1: "Garen", 3: "Ahri", 8: "Zed"}
+    kill = {"type": "CHAMPION_KILL", "timestamp": 501_000, "killerId": 8, "victimId": 3}
+    assert mapview._describe(kill, names, 3, 100) == "8:21 Zed killed you"
+    assist = {"type": "CHAMPION_KILL", "timestamp": 61_000, "killerId": 1, "victimId": 8,
+              "assistingParticipantIds": [3]}
+    assert mapview._describe(assist, names, 3, 100) == "1:01 Garen killed Zed (you assisted)"
+    drake = {"type": "ELITE_MONSTER_KILL", "timestamp": 600_000, "killerTeamId": 200,
+             "monsterType": "DRAGON", "monsterSubType": "FIRE_DRAGON"}
+    assert mapview._describe(drake, names, 3, 100) == "10:00 The enemy took Infernal Dragon"
+    tower = {"type": "BUILDING_KILL", "timestamp": 840_000, "teamId": 200, "laneType": "MID_LANE",
+             "buildingType": "TOWER_BUILDING"}
+    assert mapview._describe(tower, names, 3, 100) == "14:00 Your team destroyed the enemy mid tower"
+
+
+def test_map_reasons_are_facts_of_the_moment():
+    from riftwatch.web import mapview
+    calm = {"dragon_in": 3.0, "baron_in": 8.0, "grubs_up": False, "herald_up": False}
+    ctx = {"minute": 9, "team_lead": -2000, "objectives": calm, "unspent": 1400, "hp": 30, "level": 8,
+           "cs_diff": -20, "opp_name": "Zed", "opp_down": None, "allies_near": 0, "enemies_near": 0,
+           "lane_foes": {"mid": {"name": "Zed", "hp": 95, "level_diff": 0}}}
+    assert mapview._reasons("base", "lane", ctx)[:2] == [
+        "You had 1,400 gold unspent, enough to buy a real item component.", "You were at 30% health."]
+    farm = mapview._reasons("farm", "gank_mid", ctx)
+    assert "No epic monster was up, so camps were the best gold available." in farm
+    assert any("Zed) was at 95% health" in r for r in farm)
+    dragon = mapview._reasons("objective", "farm", {**ctx, "objectives": {**calm, "dragon_in": 0}})
+    assert dragon[0] == "Dragon was up."
+    assert mapview._reasons("farm", "lane", {**ctx, "hp": 0}) == ["You were dead at the start of this minute."]
+
+
+MINUTE = {"minute": 12, "state": {"lead": -1500, "dragons": [0, 2], "dragon_in": 0.5, "baron_in": 8,
+                                 "level": 9, "hp": 60, "dead": False, "unspent": 900, "cs_diff": -12,
+                                 "opp": "Zed", "allies_near": 1, "enemies_near": 2},
+          "advice": {"kind": "moment", "did": "invaded", "did_share": 4, "best": "Take an objective",
+                     "best_share": 62, "options": [{"label": "Take an objective", "share": 62},
+                                                    {"label": "Invade", "share": 4}],
+                     "why": ["Dragon was about to spawn."], "next": ["12:40 The enemy took Ocean Dragon"],
+                     "lead_change": {"from": -1500, "to": -2600, "minutes": 3}}}
+
+
+def test_moment_evidence_carries_the_numbers_the_coach_may_use():
+    from riftwatch.web import moments
+    items = moments.evidence(MINUTE, {"champion": "Ahri", "role": "Mid"})
+    text = " ".join(i["text"] for i in items)
+    for fact in ("Minute 12", "1,500 gold behind", "60% health", "-12 CS against Zed", "4% of high-elo",
+                 "take an objective (62%)", "12:40 The enemy took Ocean Dragon", "-1,500 to -2,600"):
+        assert fact in text, fact
+
+
+def test_moment_notes_retry_and_drop_invented_numbers():
+    from riftwatch.web import moments
+    first = moments.MomentNote(explanation="Most took dragon (75%).", tip="Ward at 2 minutes.", evidence_ids=["E5"])
+    second = moments.MomentNote(explanation="Most took the objective (62%).", tip="Ward river early.", evidence_ids=["E5"])
+    calls = []
+
+    def parse(**request):
+        calls.append(request)
+        return SimpleNamespace(parsed_output=first if len(calls) == 1 else second, content=[],
+                               usage=SimpleNamespace(input_tokens=10, output_tokens=5))
+    coach = SimpleNamespace(model="claude-sonnet-5-5", max_tokens=2000, thinking="adaptive", effort="low",
+                            client=SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(parse=parse))))
+    note, usage = moments.write(coach, moments.evidence(MINUTE, {"champion": "Ahri", "role": "Mid"}))
+    assert len(calls) == 2 and "75" in calls[1]["messages"][-1]["content"]
+    assert note.explanation == "Most took the objective (62%)." and usage["requests"] == 2

@@ -28,7 +28,7 @@ from riftwatch.db import repo
 from riftwatch.riot.routing import UnknownRegion, parse_riot_id, platform_for
 from riftwatch.stats import champions as champ_stats
 from riftwatch.stats import matchups, patches
-from riftwatch.web import gamedata, mapview, pages, views
+from riftwatch.web import gamedata, mapview, moments, pages, views
 
 log = logging.getLogger(__name__)
 
@@ -118,7 +118,8 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                 "SELECT count(DISTINCT puuid) FROM participant_builds").fetchone()[0]
             top = []
             if ranked:
-                rows = champ_stats.tier_list(conn, changes=patch_changes())["rows"]
+                rows = champ_stats.tier_list(conn, changes=patch_changes(),
+                                             systems=item_changes())["rows"]
                 for r in [r for r in rows if r["tier"] in ("S+", "S")][:12]:
                     c = gd.champion(r["champion_id"])
                     top.append({"name": c.name, "slug": c.slug, "icon": gd.champion_icon(c.id),
@@ -270,6 +271,11 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                 }
                 if tab == "overview":
                     rows = views.match_rows(conn, gd, puuid, region, queue)
+                    solo_history = views.rank_history(conn, puuid)
+                    if solo_history["points"]:
+                        ctx["rank_json"] = json.dumps({
+                            "solo": solo_history,
+                            "flex": views.rank_history(conn, puuid, "RANKED_FLEX_SR")})
                     ctx.update(rows=rows, groups=views.day_groups(rows),
                                summary=views.summary(rows),
                                season=views.champion_stats(conn, gd, puuid, "ranked"),
@@ -388,6 +394,30 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             map_compared=bool(advisor is not None and detail.get("role")
                               and advisor.available(detail["role"]))))
 
+    @app.post("/api/players/{region}/{riot_id}/matches/{match_id}/map/{minute}/explain")
+    def explain_moment(request: Request, region: str, riot_id: str, match_id: str, minute: int) -> dict:
+        """A short AI explanation of one minute of the High Elo Comparison (web.moments)."""
+        if coach is None:
+            raise HTTPException(503, "AI explanations are switched off on this server")
+        with pool.connection() as conn:
+            _, _, account = find_account(conn, region, riot_id)
+            if account is None:
+                raise HTTPException(404, "player not synced")
+            game = mapview.map_state(conn, game_data(), advisor, match_id, account["puuid"])
+            if game is None or not 0 <= minute < len(game["minutes"]) or not game["minutes"][minute].get("advice"):
+                raise HTTPException(404, "no high-elo comparison for that minute")
+            stored = conn.execute("SELECT 1 FROM moment_notes WHERE match_id = %s AND puuid = %s AND minute = %s "
+                                  "AND version = %s", (match_id, account["puuid"], minute,
+                                                       moments.PROMPT_VERSION)).fetchone()
+        if stored is None and guard is not None:
+            guard(request, "moment")
+        try:
+            with pool.connection() as conn:
+                return moments.explain(conn, coach, game, minute, account["puuid"])
+        except Exception as exc:                              # noqa: BLE001 -- shown to the visitor
+            log.warning("moment note %s %s failed: %s", match_id, minute, exc)
+            raise HTTPException(502, "the coach couldn't write this right now") from exc
+
     @app.get("/api/players/{region}/{riot_id}/matches/{match_id}/map")
     def match_map(region: str, riot_id: str, match_id: str) -> dict:
         """The High-elo map tab's data: positions, kills and objectives each minute, and for
@@ -427,6 +457,14 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
         gd = game_data()
         return patches.by_champion({c.name.lower(): c.id for c in gd.champions.values()})
 
+    def item_changes() -> list[dict]:
+        """Item changes from the patch notes, with Data Dragon item ids (stats.patches)."""
+        gd = game_data()
+        ids: dict[str, list[int]] = {}
+        for iid, it in gd.items.items():
+            ids.setdefault(it.name.lower(), []).append(iid)
+        return patches.systems(ids)
+
     def patch_watch() -> list[dict]:
         """The patches in patch_notes.json, newest first, with champion icons for the board."""
         gd = game_data()
@@ -438,7 +476,10 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                 champ = by_name.get(c["champion"].lower())
                 if champ:
                     items.append({**c, "slug": champ.slug, "icon": gd.champion_icon(champ.id)})
-            out.append({**p, "changes": sorted(items, key=lambda c: ("buff", "nerf", "adjust").index(c["kind"]))})
+            systems = [{**c, "icon": gd.item_icon(min(c["ids"])) if c["ids"] else None}
+                       for c in item_changes() if c["patch"] == p["patch"]]
+            out.append({**p, "changes": sorted(items, key=lambda c: ("buff", "nerf", "adjust").index(c["kind"])),
+                        "systems": systems})
         return out
 
     @app.get("/champions", response_class=HTMLResponse)
@@ -452,7 +493,8 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
         with pool.connection() as conn:
             known = dict(champ_stats.patches(conn))
             patch = patch if patch in known else None
-            data = champ_stats.tier_list(conn, patch, rank, patch_changes() if adjusted else None)
+            data = champ_stats.tier_list(conn, patch, rank, patch_changes() if adjusted else None,
+                                         item_changes() if adjusted else None)
         rows = []
         for r in data["rows"]:
             if role and r["position"] != role:
@@ -499,6 +541,10 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             mains = views.champion_players(conn, champ.id, s.get("position"), PLATFORM_REGION)
             duo = champ_stats.partners(conn, champ.id, s.get("position"))
             table = champ_stats.matchup_table(conn, champ.id, s.get("position"))
+            systems = item_changes()
+            usage = champ_stats.item_usage(conn, champ.id, s.get("position"),
+                                           sorted({i for c in systems for i in c["ids"]}))
+            _, item_hits = patches.system_shift(systems, usage, [("0.0", 1)])
 
         def item_view(i):
             it = gd.item(i)
@@ -516,6 +562,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                                "role_name": gamedata.POSITIONS.get(s.get("position", ""), ""),
                                "qs": _query_string(request),
                                "patch_changes": patch_changes().get(champ.id, []),
+                               "item_hits": item_hits,
                                "mains": mains,
                                "matchup_rows": [{**m, "name": gd.champion(m["champion_id"]).name,
                                                  "slug": gd.champion(m["champion_id"]).slug,
@@ -576,27 +623,27 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
         if a is None or b is None or role not in gamedata.POSITIONS:
             raise HTTPException(404, "unknown champion or role")
         with pool.connection() as conn:
-            hit = matchups.cached(conn, a.id, b.id, role, gd_.version)
+            pack = matchups.build(conn, gd_, a.id, b.id, role)
+            base = {"champion": a.name, "opponent": b.name, "glance": pack["glance"]}
+            hit = matchups.cached(conn, a.id, b.id, role, matchups.cache_version(gd_))
             if hit:
-                return {**hit, "champion": a.name, "opponent": b.name}
+                return {**hit, **base}
             if coach is None:
-                return {"output": None, "evidence": matchups.evidence(conn, gd_, a.id, b.id, role),
-                        "champion": a.name, "opponent": b.name,
+                return {"output": None, "evidence": pack["evidence"], **base,
                         "note": "AI explanations are switched off on this server; here is the evidence."}
         if guard is not None:
             guard(request, "matchup")
         with pool.connection() as conn:
             try:
-                note = matchups.explain(conn, gd_, coach, a.id, b.id, role)
+                note = matchups.explain(conn, gd_, coach, a.id, b.id, role, pack["evidence"])
             except Exception as exc:                          # noqa: BLE001 -- the evidence still helps
                 log.warning("matchup note %s vs %s failed: %s", slug, opponent, exc)
                 reason = ("the server's Anthropic API key was rejected"
                           if "401" in str(exc) or "api-key" in str(exc) else "the AI call failed")
-                return {"output": None, "evidence": matchups.evidence(conn, gd_, a.id, b.id, role),
-                        "champion": a.name, "opponent": b.name,
+                return {"output": None, "evidence": pack["evidence"], **base,
                         "note": f"The written explanation isn't available right now ({reason}). "
                                 "Here is the evidence it would be written from."}
-        return {**note, "champion": a.name, "opponent": b.name}
+        return {**note, **base}
 
     # -- multi-search -----------------------------------------------------------------------
 

@@ -1,105 +1,491 @@
 {
   "updated": "2026-11-12",
-  "about": "Summoner's Rift champion changes from Riot's patch notes (and the next patch's preview). Kinds: buff, nerf, adjust (mixed or a rework). Edit this file when a patch ships; the tier board reads it at startup.",
+  "about": "Summoner's Rift changes from Riot's patch notes (and the next patch's preview): champion changes, and system changes (items, runes) that move every champion who uses them. Kinds: buff, nerf, adjust (mixed or a rework). Edit this file when a patch ships; the tier board reads it at startup.",
   "patches": [
     {
-      "patch": "26.23", "status": "preview", "date": "2026-11-18",
+      "patch": "26.23",
+      "status": "preview",
+      "date": "2026-11-18",
       "source": "https://www.strafe.com/news/read/lol-patch-26-23-preview/",
       "changes": [
-        {"champion": "Annie", "kind": "buff", "text": "Tibbers: base health 1150-3500 to 1275-4000, aura damage 8-16 to 10-20, attacks 30/50/70"},
-        {"champion": "Azir", "kind": "buff", "text": "Attack range 525 to 550; W on-hit AD ratio 50% to 67%"},
-        {"champion": "Bard", "kind": "buff", "text": "Q damage 80-240 (+80% AP) to 80-260 (+100% AP)"},
-        {"champion": "Ezreal", "kind": "buff", "text": "W ratios up (115% bonus AD, 100% AP); R damage 350-750 to 350-850"},
-        {"champion": "Galio", "kind": "buff", "text": "W/R shield 7.5-13.5% to 8-20% of max health"},
-        {"champion": "Gnar", "kind": "buff", "text": "Q AD ratio 125% to 135% (mini), 140% to 150% (mega)"},
-        {"champion": "K'Sante", "kind": "buff", "text": "W mana cost flat 45; damage 45-165 to 45-205"},
-        {"champion": "Mel", "kind": "buff", "text": "Q bolt damage and ratios up; W shield 50-170 to 50-210, retaliation 35-55 to 35-75"},
-        {"champion": "Vel'Koz", "kind": "buff", "text": "R damage 450/700/925 to 450/700/950 (a bug fix)"},
-        {"champion": "Vi", "kind": "buff", "text": "E damage 10-90 to 10-110"},
-        {"champion": "LeBlanc", "kind": "nerf", "text": "Q AP ratio 40% to 35%"},
-        {"champion": "Master Yi", "kind": "nerf", "text": "Q AD ratio 70% to 60%"},
-        {"champion": "Syndra", "kind": "nerf", "text": "E mana 50 to 60; cooldown 15 to 17-15 s"}
+        {
+          "champion": "Annie",
+          "kind": "buff",
+          "text": "Tibbers: base health 1150-3500 to 1275-4000, aura damage 8-16 to 10-20, attacks 30/50/70"
+        },
+        {
+          "champion": "Azir",
+          "kind": "buff",
+          "text": "Attack range 525 to 550; W on-hit AD ratio 50% to 67%"
+        },
+        {
+          "champion": "Bard",
+          "kind": "buff",
+          "text": "Q damage 80-240 (+80% AP) to 80-260 (+100% AP)"
+        },
+        {
+          "champion": "Ezreal",
+          "kind": "buff",
+          "text": "W ratios up (115% bonus AD, 100% AP); R damage 350-750 to 350-850"
+        },
+        {
+          "champion": "Galio",
+          "kind": "buff",
+          "text": "W/R shield 7.5-13.5% to 8-20% of max health"
+        },
+        {
+          "champion": "Gnar",
+          "kind": "buff",
+          "text": "Q AD ratio 125% to 135% (mini), 140% to 150% (mega)"
+        },
+        {
+          "champion": "K'Sante",
+          "kind": "buff",
+          "text": "W mana cost flat 45; damage 45-165 to 45-205"
+        },
+        {
+          "champion": "Mel",
+          "kind": "buff",
+          "text": "Q bolt damage and ratios up; W shield 50-170 to 50-210, retaliation 35-55 to 35-75"
+        },
+        {
+          "champion": "Vel'Koz",
+          "kind": "buff",
+          "text": "R damage 450/700/925 to 450/700/950 (a bug fix)"
+        },
+        {
+          "champion": "Vi",
+          "kind": "buff",
+          "text": "E damage 10-90 to 10-110"
+        },
+        {
+          "champion": "LeBlanc",
+          "kind": "nerf",
+          "text": "Q AP ratio 40% to 35%"
+        },
+        {
+          "champion": "Master Yi",
+          "kind": "nerf",
+          "text": "Q AD ratio 70% to 60%"
+        },
+        {
+          "champion": "Syndra",
+          "kind": "nerf",
+          "text": "E mana 50 to 60; cooldown 15 to 17-15 s"
+        }
+      ],
+      "systems": [
+        {
+          "type": "item",
+          "name": "Voltaic Cyclosword",
+          "kind": "nerf",
+          "text": "Firmament bonus damage 9%|7% to 8%|6% of current health"
+        }
       ]
     },
     {
-      "patch": "26.22", "status": "live", "date": "2026-11-04",
+      "patch": "26.22",
+      "status": "live",
+      "date": "2026-11-04",
       "source": "https://www.leagueoflegends.com/en-us/news/game-updates/league-of-legends-patch-26-22-notes",
       "changes": [
-        {"champion": "Aurelion Sol", "kind": "buff", "text": "E damage 50-150 to 50-170, AP ratio 60% to 60-80%"},
-        {"champion": "Corki", "kind": "buff", "text": "R damage 90/170/250 to 100/190/280, ratio 85% to 90% bonus AD"},
-        {"champion": "Kayle", "kind": "buff", "text": "Q cooldown lower early; R cooldown 160/120/80 to 140/110/80 s"},
-        {"champion": "Maokai", "kind": "buff", "text": "Q max-health damage 2-4% to 2.5-4.5%"},
-        {"champion": "Naafiri", "kind": "buff", "text": "Q heal 45-105 to 55-115; W bonus AD 20% to 22%"},
-        {"champion": "Rumble", "kind": "buff", "text": "R ratios up: 35% to 40% AP per second, 175% to 200% max"},
-        {"champion": "Shen", "kind": "buff", "text": "Q damage to monsters 100-200% to 120-200%"},
-        {"champion": "Smolder", "kind": "buff", "text": "W damage 10-110 to 25-125"},
-        {"champion": "Viktor", "kind": "buff", "text": "Health per level 100 to 105; R AP ratio 50% to 60%"},
-        {"champion": "Zaahen", "kind": "buff", "text": "Q cooldown 10-6 s to 8-6 s"},
-        {"champion": "Evelynn", "kind": "buff", "text": "Q damage 40-100 to 40-120"},
-        {"champion": "Ezreal", "kind": "buff", "text": "W AP ratio 60% to 80%; E AP ratio 75% to 80%"},
-        {"champion": "Gangplank", "kind": "buff", "text": "More health and regen; Q cheaper; R cooldown 120-110 to 120-100 s"},
-        {"champion": "Nami", "kind": "buff", "text": "Q damage 75-295 (+65% AP) to 90-310 (+100% AP); W bounces lose less"},
-        {"champion": "Olaf", "kind": "buff", "text": "W bonus AD 7-35 to 10-38; E cooldown 9-5 to 8-4 s"},
-        {"champion": "Locke", "kind": "nerf", "text": "Q stack damage lower; W duration 6 to 5 s"},
-        {"champion": "Thresh", "kind": "nerf", "text": "Base AD 56 to 54; R damage 250/400/550 to 200/350/500"},
-        {"champion": "Yasuo", "kind": "nerf", "text": "Q AD ratio 105% to 100%"},
-        {"champion": "Amumu", "kind": "nerf", "text": "Passive MR shred 15-35 to 15-25; Q damage lower; R cooldown 150-110 to 170-120 s"},
-        {"champion": "Janna", "kind": "nerf", "text": "Bonus move speed 3% to 2%"},
-        {"champion": "Rammus", "kind": "nerf", "text": "Base armor 28.8 to 25; AD per level 3.5 to 2.75"},
-        {"champion": "Mel", "kind": "adjust", "text": "Midscope rework: W now a nova that destroys projectiles instead of reflecting"},
-        {"champion": "Fiddlesticks", "kind": "adjust", "text": "E damage lower early, higher at max rank"},
-        {"champion": "Mordekaiser", "kind": "adjust", "text": "Faster attacks; pet changes; no bonus damage to inhibitors and Nexus"}
+        {
+          "champion": "Aurelion Sol",
+          "kind": "buff",
+          "text": "E damage 50-150 to 50-170, AP ratio 60% to 60-80%"
+        },
+        {
+          "champion": "Corki",
+          "kind": "buff",
+          "text": "R damage 90/170/250 to 100/190/280, ratio 85% to 90% bonus AD"
+        },
+        {
+          "champion": "Kayle",
+          "kind": "buff",
+          "text": "Q cooldown lower early; R cooldown 160/120/80 to 140/110/80 s"
+        },
+        {
+          "champion": "Maokai",
+          "kind": "buff",
+          "text": "Q max-health damage 2-4% to 2.5-4.5%"
+        },
+        {
+          "champion": "Naafiri",
+          "kind": "buff",
+          "text": "Q heal 45-105 to 55-115; W bonus AD 20% to 22%"
+        },
+        {
+          "champion": "Rumble",
+          "kind": "buff",
+          "text": "R ratios up: 35% to 40% AP per second, 175% to 200% max"
+        },
+        {
+          "champion": "Shen",
+          "kind": "buff",
+          "text": "Q damage to monsters 100-200% to 120-200%"
+        },
+        {
+          "champion": "Smolder",
+          "kind": "buff",
+          "text": "W damage 10-110 to 25-125"
+        },
+        {
+          "champion": "Viktor",
+          "kind": "buff",
+          "text": "Health per level 100 to 105; R AP ratio 50% to 60%"
+        },
+        {
+          "champion": "Zaahen",
+          "kind": "buff",
+          "text": "Q cooldown 10-6 s to 8-6 s"
+        },
+        {
+          "champion": "Evelynn",
+          "kind": "buff",
+          "text": "Q damage 40-100 to 40-120"
+        },
+        {
+          "champion": "Ezreal",
+          "kind": "buff",
+          "text": "W AP ratio 60% to 80%; E AP ratio 75% to 80%"
+        },
+        {
+          "champion": "Gangplank",
+          "kind": "buff",
+          "text": "More health and regen; Q cheaper; R cooldown 120-110 to 120-100 s"
+        },
+        {
+          "champion": "Nami",
+          "kind": "buff",
+          "text": "Q damage 75-295 (+65% AP) to 90-310 (+100% AP); W bounces lose less"
+        },
+        {
+          "champion": "Olaf",
+          "kind": "buff",
+          "text": "W bonus AD 7-35 to 10-38; E cooldown 9-5 to 8-4 s"
+        },
+        {
+          "champion": "Locke",
+          "kind": "nerf",
+          "text": "Q stack damage lower; W duration 6 to 5 s"
+        },
+        {
+          "champion": "Thresh",
+          "kind": "nerf",
+          "text": "Base AD 56 to 54; R damage 250/400/550 to 200/350/500"
+        },
+        {
+          "champion": "Yasuo",
+          "kind": "nerf",
+          "text": "Q AD ratio 105% to 100%"
+        },
+        {
+          "champion": "Amumu",
+          "kind": "nerf",
+          "text": "Passive MR shred 15-35 to 15-25; Q damage lower; R cooldown 150-110 to 170-120 s"
+        },
+        {
+          "champion": "Janna",
+          "kind": "nerf",
+          "text": "Bonus move speed 3% to 2%"
+        },
+        {
+          "champion": "Rammus",
+          "kind": "nerf",
+          "text": "Base armor 28.8 to 25; AD per level 3.5 to 2.75"
+        },
+        {
+          "champion": "Mel",
+          "kind": "adjust",
+          "text": "Midscope rework: W now a nova that destroys projectiles instead of reflecting"
+        },
+        {
+          "champion": "Fiddlesticks",
+          "kind": "adjust",
+          "text": "E damage lower early, higher at max rank"
+        },
+        {
+          "champion": "Mordekaiser",
+          "kind": "adjust",
+          "text": "Faster attacks; pet changes; no bonus damage to inhibitors and Nexus"
+        }
+      ],
+      "systems": [
+        {
+          "type": "item",
+          "name": "Doran's Bow",
+          "kind": "nerf",
+          "text": "Attack damage 8 to 7"
+        },
+        {
+          "type": "item",
+          "name": "Overlord's Bloodmail",
+          "kind": "buff",
+          "text": "Attack damage 30 to 40; Retribution 0-12% to 0-10% of AD"
+        },
+        {
+          "type": "item",
+          "name": "Gluttonous Greaves",
+          "kind": "nerf",
+          "text": "Adjusted to be less of a default pick for ADCs"
+        }
       ]
     },
     {
-      "patch": "26.21", "status": "live", "date": "2026-10-21",
+      "patch": "26.21",
+      "status": "live",
+      "date": "2026-10-21",
       "source": "https://www.leagueoflegends.com/en-us/news/game-updates/league-of-legends-patch-26-21-notes",
       "changes": [
-        {"champion": "Azir", "kind": "buff", "text": "Mana growth 40 to 50 per level"},
-        {"champion": "Darius", "kind": "buff", "text": "Q cooldown 5 to 4 s at max rank"},
-        {"champion": "Miss Fortune", "kind": "buff", "text": "E damage 70-190 to 90-210; R crit damage 130% to 145%"},
-        {"champion": "Nunu & Willump", "kind": "buff", "text": "R max damage 625-1275 to 750-1450"},
-        {"champion": "Orianna", "kind": "buff", "text": "Q AP ratio 55% to 60%; W 80% to 85%"},
-        {"champion": "Ryze", "kind": "buff", "text": "Q flux damage and move speed up; W AP ratio 60% to 70%"},
-        {"champion": "Sion", "kind": "buff", "text": "Health per level 87 to 95; R damage increase up"},
-        {"champion": "Taliyah", "kind": "buff", "text": "E damage 60-240 to 70-250; 225% damage to monsters"},
-        {"champion": "Vel'Koz", "kind": "buff", "text": "Passive damage 35-180 to 35-205"},
-        {"champion": "Xin Zhao", "kind": "buff", "text": "Q bonus AD ratio 40% to 45%; E attack speed scaling up"},
-        {"champion": "Zyra", "kind": "buff", "text": "W seed recharge 18-10 to 16-10 s"},
-        {"champion": "Caitlyn", "kind": "nerf", "text": "Headshot damage 60-100% to 60-80% AD (Q stronger early)"},
-        {"champion": "Jinx", "kind": "nerf", "text": "AD per level 3.25 to 3; base health 630 to 610"},
-        {"champion": "Lee Sin", "kind": "nerf", "text": "W cooldown 7 to 8 s; R damage 175-625 to 150-550"},
-        {"champion": "Nidalee", "kind": "nerf", "text": "W damage 55-190 to 50-170; E attack speed 30-70% to 20-60%"},
-        {"champion": "Qiyana", "kind": "nerf", "text": "Q damage 80-200 to 70-190"},
-        {"champion": "Rammus", "kind": "nerf", "text": "W bonus armor and resist ratios lower"},
-        {"champion": "Tristana", "kind": "nerf", "text": "Q attack speed 60-120% to 40-120%"},
-        {"champion": "Viktor", "kind": "nerf", "text": "Move speed 335 to 330; Q shield 40-140 to 30-130"},
-        {"champion": "Yone", "kind": "nerf", "text": "Q AD ratio 110% to 105%"},
-        {"champion": "Locke", "kind": "adjust", "text": "Mana and W reworked; E scaling up"},
-        {"champion": "Varus", "kind": "adjust", "text": "Q and W damage reworked (min-damage scaling)"},
-        {"champion": "Wukong", "kind": "adjust", "text": "More health regen; passive armor 6-10 to 4.5-10"}
+        {
+          "champion": "Azir",
+          "kind": "buff",
+          "text": "Mana growth 40 to 50 per level"
+        },
+        {
+          "champion": "Darius",
+          "kind": "buff",
+          "text": "Q cooldown 5 to 4 s at max rank"
+        },
+        {
+          "champion": "Miss Fortune",
+          "kind": "buff",
+          "text": "E damage 70-190 to 90-210; R crit damage 130% to 145%"
+        },
+        {
+          "champion": "Nunu & Willump",
+          "kind": "buff",
+          "text": "R max damage 625-1275 to 750-1450"
+        },
+        {
+          "champion": "Orianna",
+          "kind": "buff",
+          "text": "Q AP ratio 55% to 60%; W 80% to 85%"
+        },
+        {
+          "champion": "Ryze",
+          "kind": "buff",
+          "text": "Q flux damage and move speed up; W AP ratio 60% to 70%"
+        },
+        {
+          "champion": "Sion",
+          "kind": "buff",
+          "text": "Health per level 87 to 95; R damage increase up"
+        },
+        {
+          "champion": "Taliyah",
+          "kind": "buff",
+          "text": "E damage 60-240 to 70-250; 225% damage to monsters"
+        },
+        {
+          "champion": "Vel'Koz",
+          "kind": "buff",
+          "text": "Passive damage 35-180 to 35-205"
+        },
+        {
+          "champion": "Xin Zhao",
+          "kind": "buff",
+          "text": "Q bonus AD ratio 40% to 45%; E attack speed scaling up"
+        },
+        {
+          "champion": "Zyra",
+          "kind": "buff",
+          "text": "W seed recharge 18-10 to 16-10 s"
+        },
+        {
+          "champion": "Caitlyn",
+          "kind": "nerf",
+          "text": "Headshot damage 60-100% to 60-80% AD (Q stronger early)"
+        },
+        {
+          "champion": "Jinx",
+          "kind": "nerf",
+          "text": "AD per level 3.25 to 3; base health 630 to 610"
+        },
+        {
+          "champion": "Lee Sin",
+          "kind": "nerf",
+          "text": "W cooldown 7 to 8 s; R damage 175-625 to 150-550"
+        },
+        {
+          "champion": "Nidalee",
+          "kind": "nerf",
+          "text": "W damage 55-190 to 50-170; E attack speed 30-70% to 20-60%"
+        },
+        {
+          "champion": "Qiyana",
+          "kind": "nerf",
+          "text": "Q damage 80-200 to 70-190"
+        },
+        {
+          "champion": "Rammus",
+          "kind": "nerf",
+          "text": "W bonus armor and resist ratios lower"
+        },
+        {
+          "champion": "Tristana",
+          "kind": "nerf",
+          "text": "Q attack speed 60-120% to 40-120%"
+        },
+        {
+          "champion": "Viktor",
+          "kind": "nerf",
+          "text": "Move speed 335 to 330; Q shield 40-140 to 30-130"
+        },
+        {
+          "champion": "Yone",
+          "kind": "nerf",
+          "text": "Q AD ratio 110% to 105%"
+        },
+        {
+          "champion": "Locke",
+          "kind": "adjust",
+          "text": "Mana and W reworked; E scaling up"
+        },
+        {
+          "champion": "Varus",
+          "kind": "adjust",
+          "text": "Q and W damage reworked (min-damage scaling)"
+        },
+        {
+          "champion": "Wukong",
+          "kind": "adjust",
+          "text": "More health regen; passive armor 6-10 to 4.5-10"
+        }
+      ],
+      "systems": [
+        {
+          "type": "item",
+          "name": "Bastion Breaker",
+          "kind": "nerf",
+          "text": "Lethality 22 to 18; charge damage 50/25 to 40/20"
+        },
+        {
+          "type": "item",
+          "name": "Dawncore",
+          "kind": "buff",
+          "text": "AP per 100% base mana regen 10 to 15"
+        },
+        {
+          "type": "item",
+          "name": "Gluttonous Greaves",
+          "kind": "nerf",
+          "text": "Cost 1000 to 1100 gold"
+        },
+        {
+          "type": "item",
+          "name": "Hubris",
+          "kind": "adjust",
+          "text": "AD split by range: 15 melee, 10 ranged (was 12)"
+        }
       ]
     },
     {
-      "patch": "26.20", "status": "live", "date": "2026-10-07",
+      "patch": "26.20",
+      "status": "live",
+      "date": "2026-10-07",
       "source": "https://www.leagueoflegends.com/en-us/news/game-updates/league-of-legends-patch-26-20-notes",
       "changes": [
-        {"champion": "Diana", "kind": "buff", "text": "W shield health ratio 11% to 14%"},
-        {"champion": "Kennen", "kind": "buff", "text": "E attack speed 40-80% to 50-90%"},
-        {"champion": "Kindred", "kind": "buff", "text": "W damage to monsters 150% to 165%; E slow 1 to 1.5 s"},
-        {"champion": "Lillia", "kind": "buff", "text": "R sleep 2.5 to 2.5-3 s"},
-        {"champion": "Lucian", "kind": "buff", "text": "AD per level 2.5 to 2.9"},
-        {"champion": "Mordekaiser", "kind": "buff", "text": "Q scales more late; R cooldown 140-100 to 120-100 s"},
-        {"champion": "Neeko", "kind": "buff", "text": "E damage 70-210 to 80-220; root 1.8-3 to 2-3 s"},
-        {"champion": "Smolder", "kind": "buff", "text": "R self-heal 100-170 to 100-250"},
-        {"champion": "Tahm Kench", "kind": "buff", "text": "Q heal 10-25 to 10-50"},
-        {"champion": "Vayne", "kind": "buff", "text": "More health regen; Q mana flat 30"},
-        {"champion": "Swain", "kind": "buff", "text": "W damage 70-210 to 70-250, cooldown 22-18 to 20-16 s"},
-        {"champion": "Ambessa", "kind": "nerf", "text": "Passive damage 5-30 (+25% bonus AD) to 5-25 (+20%)"},
-        {"champion": "Ashe", "kind": "nerf", "text": "AD per level 3.5 to 3"},
-        {"champion": "Cassiopeia", "kind": "nerf", "text": "Base health 630 to 610; base mana 480 to 450"},
-        {"champion": "K'Sante", "kind": "nerf", "text": "W costs 5 more mana; damage reduction 30%/75% to 25%/70%"},
-        {"champion": "Yunara", "kind": "nerf", "text": "Q on-hit 5-25 to 3-23"}
+        {
+          "champion": "Diana",
+          "kind": "buff",
+          "text": "W shield health ratio 11% to 14%"
+        },
+        {
+          "champion": "Kennen",
+          "kind": "buff",
+          "text": "E attack speed 40-80% to 50-90%"
+        },
+        {
+          "champion": "Kindred",
+          "kind": "buff",
+          "text": "W damage to monsters 150% to 165%; E slow 1 to 1.5 s"
+        },
+        {
+          "champion": "Lillia",
+          "kind": "buff",
+          "text": "R sleep 2.5 to 2.5-3 s"
+        },
+        {
+          "champion": "Lucian",
+          "kind": "buff",
+          "text": "AD per level 2.5 to 2.9"
+        },
+        {
+          "champion": "Mordekaiser",
+          "kind": "buff",
+          "text": "Q scales more late; R cooldown 140-100 to 120-100 s"
+        },
+        {
+          "champion": "Neeko",
+          "kind": "buff",
+          "text": "E damage 70-210 to 80-220; root 1.8-3 to 2-3 s"
+        },
+        {
+          "champion": "Smolder",
+          "kind": "buff",
+          "text": "R self-heal 100-170 to 100-250"
+        },
+        {
+          "champion": "Tahm Kench",
+          "kind": "buff",
+          "text": "Q heal 10-25 to 10-50"
+        },
+        {
+          "champion": "Vayne",
+          "kind": "buff",
+          "text": "More health regen; Q mana flat 30"
+        },
+        {
+          "champion": "Swain",
+          "kind": "buff",
+          "text": "W damage 70-210 to 70-250, cooldown 22-18 to 20-16 s"
+        },
+        {
+          "champion": "Ambessa",
+          "kind": "nerf",
+          "text": "Passive damage 5-30 (+25% bonus AD) to 5-25 (+20%)"
+        },
+        {
+          "champion": "Ashe",
+          "kind": "nerf",
+          "text": "AD per level 3.5 to 3"
+        },
+        {
+          "champion": "Cassiopeia",
+          "kind": "nerf",
+          "text": "Base health 630 to 610; base mana 480 to 450"
+        },
+        {
+          "champion": "K'Sante",
+          "kind": "nerf",
+          "text": "W costs 5 more mana; damage reduction 30%/75% to 25%/70%"
+        },
+        {
+          "champion": "Yunara",
+          "kind": "nerf",
+          "text": "Q on-hit 5-25 to 3-23"
+        }
+      ],
+      "systems": [
+        {
+          "type": "item",
+          "name": "Experimental Hexplate",
+          "kind": "nerf",
+          "text": "Ranged users get 50% of the value (was 70%)"
+        },
+        {
+          "type": "item",
+          "name": "Hextech Rocketbelt",
+          "kind": "adjust",
+          "text": "Ability haste 20 to 10; active damage 100 to 135"
+        },
+        {
+          "type": "item",
+          "name": "Runaan's Hurricane",
+          "kind": "nerf",
+          "text": "Bolt damage 65% to 60% AD"
+        }
       ]
     }
   ]

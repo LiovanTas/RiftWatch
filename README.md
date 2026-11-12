@@ -247,8 +247,10 @@ with RiftWatch's coaching built in.
   loads on the spot: the page downloads their games from Riot and shows its progress.
 - **Player file:** a stat band with ranked solo and flex, the last 20 games' win rate and
   streak, average KDA and most-played champion and role; a form strip of the last 20 results;
-  a score-per-game chart; **Patterns**, the strengths and problems that keep recurring (say,
-  "bottom-20% farm for the rank in 13 of 19 games"); season champion stats and duo partners.
+  a score-per-game chart; **rank progression** over 7, 30 or 90 days or the season, for
+  solo and flex (see *Rank progression* below); **Patterns**, the strengths and problems that
+  keep recurring (say, "bottom-20% farm for the rank in 13 of 19 games"); season champion stats
+  and duo partners. The side panel sits on the left.
 - **Match timeline,** filtered by queue and grouped by day with each day's record. Each game
   has a 0-10 performance score ring (KDA, kill share, damage, gold, farm and vision against
   the other nine players, with MVP/ACE), champion, spells, runes, KDA, CS, damage, vision,
@@ -258,12 +260,19 @@ with RiftWatch's coaching built in.
   - **Insights:** every strength and weakness with its evidence, and the gold, CS and XP lead
     over the lane opponent at 10 and 15 minutes
   - the player's item build by minute, skill order and rune page
-  - a team gold graph
-  - **Map vs high elo:** the game replayed minute by minute on the minimap (every champion,
-    kills, objectives), with a slider, play button and a jump to each key moment. For minutes
-    2-15 it shows what the player did beside what Grandmaster and Challenger players chose in
-    similar spots, from the decision models in `ml/` (see *High-elo ML*): your move as a solid
-    arrow, the most common high-elo choice as a dashed one, and each option's share
+  - a team gold graph; hovering shows each minute's exact gold for both teams, the player
+    and their lane opponent
+  - **High Elo Comparison:** the game replayed minute by minute on the minimap (every
+    champion, kills, objectives, Dragon and Baron when they're up), with a slider, play button
+    and previous/next key moment. For every minute the models cover (2 to the end of the game)
+    it shows what the player did beside how often Grandmaster and Challenger players chose
+    each option in similar spots (the decision models in `ml/`, see *High-elo models*): your
+    move as a solid arrow, the most common high-elo choice as a dashed one. Beside it: the
+    game state (team gold lead, dragons, objective timers), the player's level, health,
+    unspent gold and CS against their opponent, allies and enemies nearby on the replay, the
+    facts of that moment that fit the high-elo choice, what happened that minute and over
+    the next two, and how the team's gold lead moved. **Ask the coach** writes a short,
+    grounded explanation of a key moment (`web/moments.py`, stored in `moment_notes`)
   - a link to RiftWatch's minute-by-minute analysis and AI coaching.
 - **Tabs:** Champions (sortable season stats), AI Coach (coaching on recent games, weekly
   progress, sessions, champion pool) and Live game (scouting all ten players in a game in
@@ -301,10 +310,11 @@ stand out; the card shows the top two of each kind.
 stick to (`stats/matchups.py`): the measured record, the gold, CS and XP lead at 3, 6, 10 and
 15 minutes, early deaths and results by game length, for that pair against the champion's
 usual numbers; and both kits from Data Dragon (base stats, range, each ability's cooldown,
-range and description). It gives a verdict, three or four reasons that tie the kits to how
-trades go, and tips, and the coach's grounding check applies (every number must be in the
-cited evidence; one retry, then failing points are dropped). Each answer is stored per pair,
-role and game version (`matchup_notes`), so it's written once. Requests count against a
+range and description). It's kept short: an at-a-glance strip (record, gold lead at 10 and
+15, early deaths), a one-line verdict, three reasons that tie the kits to how trades go, and
+two tips, with the evidence folded away. The coach's grounding check applies (every number
+must be in the cited evidence; one retry, then failing points are dropped). Each answer is
+stored per pair, role, game version and prompt version (`matchup_notes`), so it's written once. Requests count against a
 `matchup` visitor limit and the daily AI budget. Without a working Anthropic key the dialog
 shows the evidence on its own.
 
@@ -315,8 +325,20 @@ patches and the next patch's preview, each with its source. Most stored games co
 patch, so a champion changed since then is placed on numbers from before the change.
 `stats/patches.py` nudges its tier score: a buff adds 1 win-rate point and a nerf takes one
 away, times the share of games played before that patch, and a previewed change counts 60%.
-Reworks and mixed changes don't move a champion but are flagged. Update the file when a
-patch ships (it's read at startup).
+Reworks and mixed changes don't move a champion but are flagged. System changes (items) move
+every champion that buys the item: a buff or nerf counts in proportion to how often the
+champion bought it (from the timeline's purchases), ignored under 15%, so a Cyclosword nerf
+moves a champion who builds it every game and leaves one who rarely does alone. Update the
+file when a patch ships (it's read at startup).
+
+### Rank progression
+
+Riot's API only gives a player's current rank, so RiftWatch stores a snapshot each time a
+player is updated. The chart plots both on one ladder scale (400 points a tier, 100 a
+division, plus LP). Snapshots are exact. Between two, each ranked game moves the line by a
+typical 22 LP, corrected so it meets the next snapshot; before the first snapshot of the
+season the same estimate runs backwards with nothing to check it, and is drawn dashed. Past
+seasons appear only from snapshots stored in them.
 
 The pages are server-rendered Jinja2 templates (`web/templates/`) with one stylesheet and one
 script (`web/static/`). There's no build step. Dark and light themes follow the visitor's choice
@@ -368,7 +390,7 @@ high-elo models are mounted read-only from `out/ml/models`.
 What makes it safe to put in public:
 
 - **Visitor limits.** Update, live-game scouting and AI coaching are limited per visitor per hour
-  (`RIFTWATCH_RATE_LIMITS`, default `sync=30,scout=60,coach=10,matchup=20`), counted in Postgres and
+  (`RIFTWATCH_RATE_LIMITS`, default `sync=30,scout=60,coach=10,matchup=20,moment=30`), counted in Postgres and
   answered with `429` and `Retry-After`. Behind a reverse proxy, set `FORWARDED_ALLOW_IPS` to
   the proxy's address so the limits see visitors' real addresses.
 - **Coaching budget.** AI coaching stops for the day once that day's coaching has cost
@@ -484,19 +506,23 @@ The honest picture: predicting the *exact* next move beats the best baseline by 
 points, since one snapshot a minute doesn't pin it down and good players differ. The outcome
 models are the useful part, and they're what the coach leans on.
 
-Measured on games the models never saw (3,922 Grandmaster/Challenger games, about 109,000
-examples per role):
+Every minute from 2 to the end of the game is labelled (to minute 40). Until November 2026
+the models covered only minutes 2-15, the laning phase; the situations now include Baron
+(whether it's up, who has taken it) for the later game. Measured on games the models never saw
+(3,922 Grandmaster/Challenger games, about 186,000 examples per role):
 
 | Role | Decision accuracy | Best simple baseline | Top-2 | Objective within 3 min (AUC) | Player dies within 3 min (AUC) |
 |---|---|---|---|---|---|
-| Top | 66.2% | 64.2% | 81.2% | 0.77 | 0.62 |
-| Jungle | 53.0% | 48.4% | 68.9% | 0.79 | 0.63 |
-| Mid | 57.1% | 54.2% | 73.0% | 0.78 | 0.61 |
-| ADC | 65.1% | 61.7% | 80.2% | 0.78 | 0.63 |
-| Support | 37.9% | 35.5% | 60.8% | 0.78 | 0.61 |
+| Top | 57.1% | 52.9% | 75.2% | 0.77 | 0.63 |
+| Jungle | 48.4% | 41.6% | 65.2% | 0.79 | 0.64 |
+| Mid | 47.4% | 41.5% | 65.4% | 0.77 | 0.63 |
+| ADC | 59.3% | 55.0% | 77.0% | 0.78 | 0.63 |
+| Support | 39.1% | 35.6% | 63.9% | 0.78 | 0.63 |
 
-Doubling the data from 1,830 games moved these by a point or two at most, so the limit now is
-the inputs (camp timers and lane states aren't modelled yet), not the amount of data.
+Raw accuracy is lower than the laning-only models had (mid and late game choices vary more),
+but the gain over the best baseline is larger: 3.5 to 6.8 points, against 2 to 5 before.
+Each model records the minutes it was trained on, and the advisor never asks it about later
+ones. The laning-only models are kept in `out/ml/models/laning_2026-10-05/`.
 
 The coach uses them through the **advisor**: for each minute of your game it compares your move
 with the options high-elo players actually chose in similar spots. A *key moment* is when your

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import icon, search_form, tier_badge, wr, pos_icon %}
+{% from "_macros.html" import icon, search_form, tier_badge, wr, pos_icon, patch_row %}
 {% block content %}
 <section class="hero">
   <div class="container">
@@ -50,12 +50,7 @@
   <div class="watch panel">
     <div class="watch-rows" style="border-top:0">
       {% for w in watch %}
-      <div class="watch-row">
-        <div class="wlab"><b>{{ w.patch }}</b><span class="{{ 'preview' if w.status == 'preview' else '' }}">{{ 'preview' if w.status == 'preview' else 'live' }} &middot; {{ w.date[5:] }}</span><a href="{{ w.source }}" rel="noopener" target="_blank">notes &#8599;</a></div>
-        <div class="wchips">
-          {% for c in w.changes %}<a class="pchip {{ c.kind }}" href="/champions/{{ c.slug }}" data-tip="{{ c.champion }} &middot; {{ {'buff': 'buffed', 'nerf': 'nerfed', 'adjust': 'changed'}[c.kind] }} in {{ w.patch }}{{ ' (preview)' if w.status == 'preview' }}&#10;{{ c.text }}"><img src="{{ c.icon }}" alt="{{ c.champion }}" loading="lazy"><i>{{ {'buff': '▲', 'nerf': '▼', 'adjust': '◆'}[c.kind] }}</i></a>{% endfor %}
-        </div>
-      </div>
+      {{ patch_row(w) }}
       {% endfor %}
     </div>
   </div>

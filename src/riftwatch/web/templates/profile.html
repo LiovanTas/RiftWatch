@@ -120,6 +120,19 @@
         </div>
       </div>
       {% endif %}
+      {% if rank_json %}
+      <div class="panel rankprog" data-rank="{{ rank_json }}">
+        <div class="panel-head">
+          <span>Rank progression <span class="muted small">season {{ year }}</span></span>
+          <div class="rp-controls">
+            <nav class="seg" data-rp="queue"><button type="button" class="on" data-v="solo">Solo/Duo</button><button type="button" data-v="flex">Flex</button></nav>
+            <nav class="seg" data-rp="range"><button type="button" data-v="7">7D</button><button type="button" data-v="30">30D</button><button type="button" data-v="90">90D</button><button type="button" class="on" data-v="0">Season</button></nav>
+          </div>
+        </div>
+        <div class="rp-body"><svg class="rp-chart" viewBox="0 0 720 210" role="img" aria-label="Rank over time"></svg><div class="rp-tip" hidden></div></div>
+        <div class="rp-foot"></div>
+      </div>
+      {% endif %}
       <div id="match-list">
         {% include "_match_rows.html" %}
       </div>

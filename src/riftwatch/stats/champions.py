@@ -85,13 +85,15 @@ def shrunk(wins: float, games: float) -> float:
 
 
 def tier_list(conn: psycopg.Connection, patch: str | None = None, rank: str = "all",
-              changes: dict[int, list[dict]] | None = None) -> dict:
+              changes: dict[int, list[dict]] | None = None,
+              systems: list[dict] | None = None) -> dict:
     """Every champion in every role it's really played in, with win, pick and ban rates and a
     tier, plus its hardest lane matchups. With ``changes`` (champion id -> patch-note changes,
     see stats.patches) each changed champion's score is nudged for buffs and nerfs the data
-    predates, and ``tier_raw`` keeps the tier the data alone gives."""
-    return _cached(("tiers", patch, rank, bool(changes)),
-                   lambda: _tier_list(conn, patch, rank, changes or {}))
+    predates, and ``tier_raw`` keeps the tier the data alone gives. ``systems`` (item changes
+    from stats.patches.systems) move each champion by how often it buys the item."""
+    return _cached(("tiers", patch, rank, bool(changes or systems)),
+                   lambda: _tier_list(conn, patch, rank, changes or {}, systems or []))
 
 
 def _assign_tiers(group: list[dict], key: str, field: str) -> None:
@@ -102,7 +104,7 @@ def _assign_tiers(group: list[dict], key: str, field: str) -> None:
 
 
 def _tier_list(conn: psycopg.Connection, patch: str | None, rank: str,
-               changes: dict[int, list[dict]]) -> dict:
+               changes: dict[int, list[dict]], systems: list[dict]) -> dict:
     scope, params = _scope(patch, rank)
     total = conn.execute(f"SELECT count(*) FROM ({scope}) s", params).fetchone()[0]
     if not total:
@@ -140,15 +142,30 @@ def _tier_list(conn: psycopg.Connection, patch: str | None, rank: str,
                                    "win_rate": 100 * cw / cn} for _, opp, cn, cw in counters]})
     counts = ([(patch, total)] if patch else
               [(v, n) for v, n in patches(conn)])
+    # How often each champion in each role bought a changed item (bought at any point, from
+    # the timeline's purchases, or finished with it).
+    item_ids = sorted({i for c in systems for i in c["ids"]})
+    bought: dict[tuple, dict[int, int]] = defaultdict(dict)
+    if item_ids:
+        for champ, pos, item, n in conn.execute(
+                f"""SELECT b.champion_id, b.position, x.item, count(DISTINCT b.match_id)
+                      FROM participant_builds b JOIN ({scope}) s USING (match_id),
+                           LATERAL unnest(coalesce(b.purchases, '{{}}'::int[]) || coalesce(b.items, '{{}}'::int[])) x(item)
+                     WHERE NOT b.remake AND b.position <> '' AND x.item = ANY(%s)
+                     GROUP BY 1, 2, 3""", [*params, item_ids]):
+            bought[(champ, pos)][item] = n
     for pos in {r["position"] for r in rows}:
         group = [r for r in rows if r["position"] == pos]
         mid_pick = median(r["pick_rate"] for r in group)
         for r in group:
             r["score_raw"] = (r["win_rate_shrunk"] - 50) + 1.5 * math.log(r["pick_rate"] / mid_pick)
             mine = changes.get(r["champion_id"], [])
+            usage = {i: n / r["games"] for i, n in bought[(r["champion_id"], pos)].items()}
+            item_shift, items = patch_notes.system_shift(systems, usage, counts)
             r["patch_changes"] = mine
-            r["patch_mark"] = patch_notes.mark(mine)
-            r["patch_shift"] = patch_notes.shift(mine, counts)
+            r["item_changes"] = items
+            r["patch_mark"] = patch_notes.mark(mine, items)
+            r["patch_shift"] = patch_notes.shift(mine, counts) + item_shift
             r["score"] = r["score_raw"] + r["patch_shift"]
         _assign_tiers(group, "score_raw", "tier_raw")
         _assign_tiers(group, "score", "tier")
@@ -318,3 +335,21 @@ def matchup_table(conn: psycopg.Connection, champion_id: int, position: str | No
     return sorted(({"champion_id": opp, "games": n, "wins": w, "win_rate": 100 * w / n,
                     "shrunk": 100 * shrunk(w, n), "gold15": g, "cs15": cs, "lane_games": lg}
                    for opp, n, w, g, cs, lg in rows), key=lambda r: -r["games"])
+
+
+def item_usage(conn: psycopg.Connection, champion_id: int, position: str | None,
+               item_ids: list[int]) -> dict[int, float]:
+    """Share of the champion's ranked games (in this role) in which it bought each item."""
+    if not item_ids or not position:
+        return {}
+    n = conn.execute("""SELECT count(*) FROM participant_builds WHERE champion_id = %s AND position = %s
+                          AND queue_id = %s AND NOT remake""", (champion_id, position, RANKED_SOLO)).fetchone()[0]
+    if not n:
+        return {}
+    rows = conn.execute(
+        """SELECT x.item, count(DISTINCT b.match_id)
+             FROM participant_builds b,
+                  LATERAL unnest(coalesce(b.purchases, '{}'::int[]) || coalesce(b.items, '{}'::int[])) x(item)
+            WHERE b.champion_id = %s AND b.position = %s AND b.queue_id = %s AND NOT b.remake
+              AND x.item = ANY(%s) GROUP BY 1""", (champion_id, position, RANKED_SOLO, item_ids)).fetchall()
+    return {item: count / n for item, count in rows}

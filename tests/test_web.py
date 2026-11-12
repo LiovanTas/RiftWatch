@@ -51,6 +51,10 @@ def web(request, tmp_path):
                                   **getattr(request, "param", {})})
     from riftwatch.web.gamedata import GameData
 
+    from riftwatch.web import insights, mapview
+
+    mapview.clear_cache()         # module-level caches would carry one test's games into the next
+    insights.clear_cache()
     gd = GameData()
     gd.loaded = True              # no Data Dragon in tests: names fall back, icons are empty
     app = create_app(settings, api=api, coach=coach, pool=pool, jobs=jobs, gamedata=gd)
@@ -412,3 +416,17 @@ def test_tier_board_can_show_raw_data(web):
     assert "Patch watch" in client.get("/champions").text
     raw = client.get("/champions?notes=raw").text
     assert "Showing the raw data" in raw
+
+
+def test_rank_progression_and_comparison_state(web):
+    client, api, _, jobs = web
+    sync(client, jobs)
+    page = client.get("/players/na/Me-NA1").text
+    assert 'class="panel rankprog"' in page and "Rank progression" in page
+    state = client.get(f"/api/players/na/Me-NA1/matches/{api.ids[0]}/map").json()
+    minute = state["minutes"][10]
+    assert {"lead", "dragons", "level", "hp", "unspent"} <= set(minute["state"])
+    assert "dragon" in state["pits"] and isinstance(minute["this_minute"], list)
+    # No high-elo model in tests, so there's no minute for the coach to explain.
+    r = client.post(f"/api/players/na/Me-NA1/matches/{api.ids[0]}/map/10/explain")
+    assert r.status_code == 404

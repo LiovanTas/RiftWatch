@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import wr, tier_badge, pos_icon %}
+{% from "_macros.html" import wr, tier_badge, pos_icon, patch_row %}
 {% block title %}Champion Tier List{{ ' - ' ~ role_name if role_name }} | RiftWatch{% endblock %}
 {% block description %}League of Legends champion tier list by role: win rate, pick rate and ban rate from {{ '{:,}'.format(games) }} ranked games.{% endblock %}
 {% block content %}
@@ -8,19 +8,14 @@
     <div class="eyebrow">Tier board{{ ' · patch ' ~ patch if patch }}{{ ' · ' ~ role_name if role_name }}</div>
     <h1>Champion tier list</h1>
     <p>Built from {{ '{:,}'.format(games) }} ranked solo/duo games RiftWatch has analysed. Each champion is placed by win rate in its role, pulled towards 50% when the sample is small, and by how often it's picked.
-    {% if adjusted %}Most of these games are from patch {% if data_patch %}{% set dp = data_patch.split('.') %}{{ dp[0]|int + 10 }}.{{ dp[1] }}{% endif %}, so champions changed since then are nudged: a buff adds {{ shift|round|int }} win-rate point and a nerf takes one away, for the games played before the change, and a previewed change counts {{ (preview_weight * 100)|round|int }}%. <a href="?{{ qs(notes='raw') }}">See the raw data</a>.{% else %}Showing the raw data, without patch notes. <a href="?{{ qs(notes=None) }}">Include patch notes</a>.{% endif %}</p>
+    {% if adjusted %}Most of these games are from patch {% if data_patch %}{% set dp = data_patch.split('.') %}{{ dp[0]|int + 10 }}.{{ dp[1] }}{% endif %}, so champions changed since then are nudged: a buff adds {{ shift|round|int }} win-rate point and a nerf takes one away, for the games played before the change, and a previewed change counts {{ (preview_weight * 100)|round|int }}%. Item changes move every champion that buys the item, in proportion to how often they buy it. <a href="?{{ qs(notes='raw') }}">See the raw data</a>.{% else %}Showing the raw data, without patch notes. <a href="?{{ qs(notes=None) }}">Include patch notes</a>.{% endif %}</p>
   </div>
   {% if watch %}
   <details class="watch panel" open>
     <summary><span class="eyebrow">Patch watch</span> <span class="muted small">recent and upcoming champion changes &middot; ▲ buff &middot; ▼ nerf &middot; ◆ mixed or rework</span></summary>
     <div class="watch-rows">
       {% for w in watch %}
-      <div class="watch-row">
-        <div class="wlab"><b>{{ w.patch }}</b><span class="{{ 'preview' if w.status == 'preview' else '' }}">{{ 'preview' if w.status == 'preview' else 'live' }} &middot; {{ w.date[5:] }}</span><a href="{{ w.source }}" rel="noopener" target="_blank">notes &#8599;</a></div>
-        <div class="wchips">
-          {% for c in w.changes %}<a class="pchip {{ c.kind }}" href="/champions/{{ c.slug }}" data-tip="{{ c.champion }} &middot; {{ {'buff': 'buffed', 'nerf': 'nerfed', 'adjust': 'changed'}[c.kind] }} in {{ w.patch }}{{ ' (preview)' if w.status == 'preview' }}&#10;{{ c.text }}"><img src="{{ c.icon }}" alt="{{ c.champion }}" loading="lazy"><i>{{ {'buff': '▲', 'nerf': '▼', 'adjust': '◆'}[c.kind] }}</i></a>{% endfor %}
-        </div>
-      </div>
+      {{ patch_row(w) }}
       {% endfor %}
     </div>
   </details>
@@ -67,7 +62,7 @@
           <td data-v="{{ r.ban_rate }}">{{ '%.1f'|format(r.ban_rate) }}%</td>
           <td data-v="{{ r.games }}">{{ '{:,}'.format(r.games) }}</td>
           <td data-v="{{ r.kda }}">{{ '%.2f'|format(r.kda) }}</td>
-          <td class="l">{% if r.patch_mark %}<span class="pm-text {{ r.patch_mark }}" data-tip="{{ r.name }}{% for c in r.patch_changes %}&#10;{{ c.patch }}{{ ' preview' if c.status == 'preview' }}: {{ c.text }}{% endfor %}">{{ {'buff': '▲', 'nerf': '▼', 'adjust': '◆'}[r.patch_mark] }} {{ r.patch_changes[0].patch }}{% if r.tier_raw != r.tier %} &middot; {{ r.tier_raw }}&rarr;{{ r.tier }}{% endif %}</span>{% else %}<span class="muted">-</span>{% endif %}</td>
+          <td class="l">{% if r.patch_mark %}<span class="pm-text {{ r.patch_mark }}" data-tip="{{ r.name }}{% for c in r.patch_changes %}&#10;{{ c.patch }}{{ ' preview' if c.status == 'preview' }}: {{ c.text }}{% endfor %}{% for c in r.item_changes %}&#10;{{ c.patch }} item: {{ c.name }} {{ c.kind }}, bought in {{ c.usage }}% of games{% endfor %}">{{ {'buff': '▲', 'nerf': '▼', 'adjust': '◆'}[r.patch_mark] }} {{ (r.patch_changes or r.item_changes)[0].patch }}{% if not r.patch_changes %} item{% endif %}{% if r.tier_raw != r.tier %} &middot; {{ r.tier_raw }}&rarr;{{ r.tier }}{% endif %}</span>{% else %}<span class="muted">-</span>{% endif %}</td>
           <td><div class="counters">{% for c in r.counters %}<a href="/champions/{{ c.slug }}"><img src="{{ c.icon }}" alt="{{ c.name }}" data-tip="{{ c.name }}&#10;{{ r.name }} wins {{ c.win_rate|round|int }}% of {{ c.games }} games against them" loading="lazy"></a>{% endfor %}</div></td>
         </tr>
       {% endfor %}
@@ -82,7 +77,7 @@
         <div class="champs">
           {% for r in picks %}
           <a class="tile" data-name="{{ r.name|lower }}" href="/champions/{{ r.slug }}?role={{ r.position|lower }}"
-             data-tip="{{ r.name }} &middot; {{ r.role }}&#10;{{ '%.1f'|format(r.win_rate) }}% win rate, {{ '%.1f'|format(r.pick_rate) }}% pick rate, {{ '%.1f'|format(r.ban_rate) }}% ban rate over {{ '{:,}'.format(r.games) }} games.{% for c in r.patch_changes %} {{ c.patch }}{{ ' preview' if c.status == 'preview' }} {{ c.kind }}: {{ c.text }}.{% endfor %}{% if adjusted and r.tier_raw != r.tier %} Tier from the games alone: {{ r.tier_raw }}.{% endif %}">
+             data-tip="{{ r.name }} &middot; {{ r.role }}&#10;{{ '%.1f'|format(r.win_rate) }}% win rate, {{ '%.1f'|format(r.pick_rate) }}% pick rate, {{ '%.1f'|format(r.ban_rate) }}% ban rate over {{ '{:,}'.format(r.games) }} games.{% for c in r.patch_changes %} {{ c.patch }}{{ ' preview' if c.status == 'preview' }} {{ c.kind }}: {{ c.text }}.{% endfor %}{% for c in r.item_changes %} {{ c.name }} ({{ c.usage }}% of games) {{ c.kind }} in {{ c.patch }}.{% endfor %}{% if adjusted and r.tier_raw != r.tier %} Tier from the games alone: {{ r.tier_raw }}.{% endif %}">
             <div class="pic"><img class="c" src="{{ r.icon }}" alt="" loading="lazy">{% if not role %}<img class="p" src="{{ gd.position_icon(r.position) }}" alt="" loading="lazy">{% endif %}{% if r.patch_mark %}<i class="pm {{ r.patch_mark }}">{{ {'buff': '▲', 'nerf': '▼', 'adjust': '◆'}[r.patch_mark] }}</i>{% endif %}</div>
             <b>{{ r.name }}</b>
             <span>{{ wr(r.win_rate) }}</span>

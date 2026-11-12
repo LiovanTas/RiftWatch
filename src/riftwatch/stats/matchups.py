@@ -26,18 +26,20 @@ from riftwatch.web.gamedata import POSITIONS, GameData, plain
 
 QUEUES = (420, 440)
 SMALL_SAMPLE = 30
+# Part of the stored answer's key: raising it rewrites answers made under an older prompt.
+PROMPT_VERSION = 2
 
 
 class MatchupPoint(BaseModel):
-    title: str = Field(description="A short claim, e.g. 'Renekton wins the level 3 all-in'.")
-    explanation: str = Field(description="Two or three sentences tying the kits to how trades go.")
+    title: str = Field(description="A short claim, at most 8 words, e.g. 'Renekton wins the level 3 all-in'.")
+    explanation: str = Field(description="One or two short sentences, at most 40 words, tying the kits to how trades go.")
     evidence_ids: list[str] = Field(description="Ids of the evidence items this point relies on.")
 
 
 class MatchupOutput(BaseModel):
-    verdict: str = Field(description="One sentence: who the matchup favours, how much, and why.")
-    points: list[MatchupPoint]
-    tips: list[str] = Field(description="Two or three concrete things to do in this lane.")
+    verdict: str = Field(description="One sentence, at most 25 words: who the matchup favours, how much, and why.")
+    points: list[MatchupPoint] = Field(description="Exactly three reasons.")
+    tips: list[str] = Field(description="Two tips, each at most 16 words.")
 
 
 SYSTEM_PROMPT = """You explain League of Legends lane matchups for a stats website. You get \
@@ -45,21 +47,22 @@ evidence items: measured lane numbers from ranked games between two champions in
 each champion's kit from the game data (base stats, attack range, and each ability's cooldown, \
 range and description).
 
-Write from the FIRST champion's point of view.
-- verdict: one sentence on whether the matchup favours them, how strongly, and the main reason.
-- points: three or four reasons. Each connects the two kits to how lane trades actually play \
-out: range and who can poke, cooldown windows to punish, short trades against all-ins, crowd \
-control that sets up kills or ganks, mobility to engage or escape, sustain, and when each side \
-spikes (levels, scaling). Use the lane numbers to show each reason is real: who is ahead at 10 \
-minutes, who dies early, how the result changes with game length.
-- tips: two or three concrete things the first champion's player should do in this lane.
+Write from the FIRST champion's point of view, and keep it short: players read this in a \
+pop-up between games.
+- verdict: one sentence (at most 25 words) on whether the matchup favours them, how strongly, \
+and the main reason. If the games number fewer than 30, say "small sample" here.
+- points: exactly three reasons. Title at most 8 words; explanation one or two sentences, at \
+most 40 words. Each connects the two kits to how lane trades play out (range and poke, cooldown \
+windows to punish, short trades against all-ins, crowd control, mobility, sustain, level and \
+scaling spikes) and backs it with one or two lane numbers.
+- tips: two tips, each at most 16 words, things to actually do in this lane.
 
 Rules:
 - Every number you write must appear in an evidence item you cite (rounding is fine). The \
 verdict and tips cite nothing, so their numbers must appear somewhere in the evidence.
 - Only mention abilities, stats and effects that are in the evidence. No items, runes or patch \
 changes.
-- If the games number fewer than 30, say the record is a small sample and lean on the kits.
+- With few games, lean on the kits rather than the record.
 - Plain sentences, no markdown, second person ("you") for the first champion's player."""
 
 
@@ -113,7 +116,7 @@ MOBILITY_WORDS = ("dash", "blink", "leap", "jump", "lunge", "teleport", "untarge
 SUSTAIN_WORDS = ("heal", "restore", "shield", "life steal", "omnivamp", "regenerat")
 
 
-def _short(text: str, limit: int = 320) -> str:
+def _short(text: str, limit: int = 240) -> str:
     text = " ".join(text.split())
     return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0] + "..."
 
@@ -147,8 +150,26 @@ def kit_lines(gd: GameData, champion_id: int) -> list[str]:
     return lines
 
 
+def glance(vs: dict[str, Any], overall: dict[str, Any]) -> dict[str, Any]:
+    """The few numbers shown above an explanation: record, usual win rate, gold leads at 10 and
+    15 minutes, and how often each side had died by 10."""
+    m10, m15 = vs["minutes"].get(10) or {}, vs["minutes"].get(15) or {}
+    return {"games": vs["games"], "wins": vs["wins"],
+            "win_rate": round(100 * vs["wins"] / vs["games"]) if vs["games"] else None,
+            "usual": round(100 * overall["wins"] / overall["games"]) if overall["games"] else None,
+            "gold10": round(m10["gold"]) if m10.get("gold") is not None else None,
+            "gold15": round(m15["gold"]) if m15.get("gold") is not None else None,
+            "died10": round(100 * m10["died"]) if m10.get("died") is not None else None,
+            "opp_died10": round(100 * m10["opp_died"]) if m10.get("opp_died") is not None else None}
+
+
 def evidence(conn: psycopg.Connection, gd: GameData, a: int, b: int, role: str) -> list[dict[str, str]]:
     """Evidence items (id, text) for champion ``a`` against ``b`` in ``role``."""
+    return build(conn, gd, a, b, role)["evidence"]
+
+
+def build(conn: psycopg.Connection, gd: GameData, a: int, b: int, role: str) -> dict[str, Any]:
+    """The evidence items and the at-a-glance numbers for ``a`` against ``b`` in ``role``."""
     an, bn = gd.champion(a).name, gd.champion(b).name
     where = POSITIONS.get(role, role.title()).lower()
     vs, overall = _lane(conn, a, b, role), _lane(conn, a, None, role)
@@ -186,7 +207,8 @@ def evidence(conn: psycopg.Connection, gd: GameData, a: int, b: int, role: str) 
     items += kit_lines(gd, a) + kit_lines(gd, b)
     items.append("Lane power spikes: levels 2 and 3 add a second and third basic ability, and "
                  "level 6 unlocks the ultimate (R).")
-    return [{"id": f"E{i}", "text": t} for i, t in enumerate(items, 1)]
+    return {"evidence": [{"id": f"E{i}", "text": t} for i, t in enumerate(items, 1)],
+            "glance": glance(vs, overall)}
 
 
 # -- grounding -----------------------------------------------------------------------------
@@ -274,19 +296,24 @@ def cached(conn: psycopg.Connection, a: int, b: int, role: str, version: str) ->
             "cached": True}
 
 
-def explain(conn: psycopg.Connection, gd: GameData, coach, a: int, b: int, role: str) -> dict:
+def cache_version(gd: GameData) -> str:
+    return f"{gd.version}/p{PROMPT_VERSION}"
+
+
+def explain(conn: psycopg.Connection, gd: GameData, coach, a: int, b: int, role: str,
+            items: list[dict[str, str]] | None = None) -> dict:
     """The stored explanation, or a new one written now (and stored)."""
-    hit = cached(conn, a, b, role, gd.version)
+    hit = cached(conn, a, b, role, cache_version(gd))
     if hit:
         return hit
-    items = evidence(conn, gd, a, b, role)
+    items = items or evidence(conn, gd, a, b, role)
     output, dropped, usage = write(coach, items, gd.champion(a).name, gd.champion(b).name,
                                    POSITIONS.get(role, role.title()))
     conn.execute(
         """INSERT INTO matchup_notes (champion_id, opponent_id, position, version, model, evidence,
                                       output, dropped, usage)
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
-        (a, b, role, gd.version, coach.model, json.dumps(items), json.dumps(output.model_dump()),
+        (a, b, role, cache_version(gd), coach.model, json.dumps(items), json.dumps(output.model_dump()),
          json.dumps(dropped), json.dumps(usage)))
     return {"output": output.model_dump(), "evidence": items, "model": coach.model,
             "written": None, "cached": False}
