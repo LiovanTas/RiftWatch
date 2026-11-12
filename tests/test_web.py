@@ -494,3 +494,15 @@ def test_benchmarks_page(web):
     page = client.get("/benchmarks?role=jungle")
     assert page.status_code == 200 and "What jungle players do at each rank" in page.text
     assert client.get("/benchmarks?role=nonsense").status_code == 200
+
+
+def test_death_map_matchup_page_and_timeline_tab(web):
+    client, api, _, jobs = web
+    sync(client, jobs)
+    dm = client.get("/api/players/na/Me-NA1/deathmap").json()
+    assert dm["games"] > 0 and {"points", "zones", "deaths", "kills"} <= set(dm)
+    assert client.get("/api/players/na/Nobody-NA1/deathmap").status_code == 404
+    assert 'data-deathmap="/api/players/na/Me-NA1/deathmap"' in client.get("/players/na/Me-NA1").text
+    detail = client.get(f"/fragments/players/na/Me-NA1/matches/{api.ids[0]}").text
+    assert 'data-pane="log"' in detail and 'class="event-log"' in detail
+    assert client.get("/matchups/nobody/noone").status_code == 404

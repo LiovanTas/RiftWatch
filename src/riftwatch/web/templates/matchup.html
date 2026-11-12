@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% from "_macros.html" import wr, item_slot %}
+{% block title %}{{ a.name }} vs {{ b.name }} {{ role_name }} Matchup | RiftWatch{% endblock %}
+{% block description %}{{ a.name }} against {{ b.name }} in {{ role_name|lower }}: record, lane numbers, builds that won it, and Master+ games of the matchup to study.{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="mu-hero">
+    <a href="/champions/{{ a.slug }}?role={{ role|lower }}"><img src="{{ a_icon }}" alt="{{ a.name }}"></a>
+    <span class="vs-word">vs</span>
+    <a href="/champions/{{ b.slug }}?role={{ role|lower }}"><img src="{{ b_icon }}" alt="{{ b.name }}"></a>
+    <div>
+      <div class="eyebrow">{{ role_name }} matchup</div>
+      <h1>{{ a.name }} vs {{ b.name }}</h1>
+      <div class="meta-line"><a href="{{ reverse_url }}">See it from {{ b.name }}'s side &rarr;</a></div>
+    </div>
+    <button class="btn primary" type="button" data-why="{{ why_url }}" data-icons="{{ a_icon }} {{ b_icon }}" data-title="{{ a.name }} vs {{ b.name }} &middot; {{ role_name }}">Why? (AI explanation)</button>
+  </div>
+
+  {% if not d['all'].games %}
+  <div class="panel empty"><h3>No stored ranked games of this matchup yet</h3><p>Try another role, or the other side of the matchup.</p></div>
+  {% else %}
+  <div class="recap-tiles mu-tiles">
+    <div class="rt big"><span>{{ a.name }}'s record</span><b>{{ d['all'].wins }}-{{ d['all'].games - d['all'].wins }}</b><small>{{ wr(d['all'].win_rate) }} of {{ d['all'].games }} games</small></div>
+    <div class="rt"><span>In Master+</span><b>{% if d.high.games %}{{ d.high.wins }}-{{ d.high.games - d.high.wins }}{% else %}-{% endif %}</b><small>{% if d.high.games %}{{ d.high.win_rate|round|int }}% of {{ d.high.games }}{% else %}no Master+ games stored{% endif %}</small></div>
+    {% if glance %}
+    <div class="rt"><span>Gold at 10 / 15</span><b>{{ '%+d'|format(glance.gold10) if glance.gold10 is not none else '-' }} / {{ '%+d'|format(glance.gold15) if glance.gold15 is not none else '-' }}</b><small>{{ a.name }}'s average lead</small></div>
+    <div class="rt"><span>Died by 10 minutes</span><b>{{ glance.died10 ~ '%' if glance.died10 is not none else '-' }}</b><small>{{ b.name }}: {{ glance.opp_died10 ~ '%' if glance.opp_died10 is not none else '-' }}</small></div>
+    {% endif %}
+  </div>
+
+  {% if note and note.verdict %}<div class="panel mu-note"><span class="eyebrow">AI verdict</span><p>{{ note.verdict }}</p>{% for p in note.points %}<p class="pt"><b>{{ p.title }}</b> {{ p.explanation }}</p>{% endfor %}</div>{% endif %}
+
+  <div class="cols-2" style="margin-top:12px">
+    <div class="panel">
+      <div class="panel-head"><span><span class="n">01</span>First two items in this matchup</span><span class="muted small">most common, with their record</span></div>
+      <div class="panel-body">{% for x in builds %}<div class="build-row"><div class="its">{% for it in x['items'] %}{{ item_slot(it) }}{% if not loop.last %}<span class="arrow">&rsaquo;</span>{% endif %}{% endfor %}</div><div class="rt"><b>{{ wr(x.win_rate) }}</b><span class="muted">{{ x.games }} games</span></div></div>{% else %}<p class="muted small">Not enough games with timelines yet.</p>{% endfor %}</div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><span><span class="n">02</span>Keystones</span></div>
+      <div class="panel-body">{% for k in keystones %}<div class="build-row"><div class="its"><div class="slot rune" data-tip="{{ k.name }}"><img src="{{ k.icon }}" alt=""></div><span class="small">{{ k.name }}</span></div><div class="rt"><b>{{ wr(k.win_rate) }}</b><span class="muted">{{ k.games }} games</span></div></div>{% else %}<p class="muted small">Not enough games yet.</p>{% endfor %}</div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:12px">
+    <div class="panel-head"><span><span class="n">03</span>Master+ games to study</span><span class="muted small">{{ a.name }} players in Master+, newest first</span></div>
+    <div class="panel-body mu-games">{% for g in high_games %}<a class="rg {{ 'win' if g.win else 'loss' }}" href="{{ g.url }}"><span class="res">{{ 'W' if g.win else 'L' }}</span><b>{{ g.kda }}</b><span class="nm">{{ g.name }}</span><span class="its">{% for it in g['items'] %}<img src="{{ it.icon }}" alt="{{ it.name }}" data-tip="{{ it.name }}">{% endfor %}</span><span class="muted when">{{ g.when }}</span></a>{% else %}<p class="muted small">No Master+ games of this matchup stored.</p>{% endfor %}</div>
+  </div>
+
+  <div class="panel" style="margin:12px 0 40px">
+    <div class="panel-head"><span><span class="n">04</span>Your games of this matchup</span>
+      <form class="mini-form" action="" method="get"><input type="hidden" name="role" value="{{ role|lower }}"><input name="me" value="{{ me }}" placeholder="Your Riot ID" aria-label="Your Riot ID"><button class="btn" type="submit">Show</button></form></div>
+    <div class="panel-body mu-games">{% if my_games %}{% for g in my_games %}<a class="rg {{ 'win' if g.win else 'loss' }}" href="{{ g.url }}"><span class="res">{{ 'W' if g.win else 'L' }}</span><b>{{ g.kda }}</b><span class="its">{% for it in g['items'] %}<img src="{{ it.icon }}" alt="{{ it.name }}" data-tip="{{ it.name }}">{% endfor %}</span><span class="muted when">{{ g.when }}</span></a>{% endfor %}{% elif me and me_found %}<p class="muted small">No stored games of {{ me }} on {{ a.name }} against {{ b.name }}.</p>{% elif me %}<p class="muted small">RiftWatch hasn't seen {{ me }} yet.</p>{% else %}<p class="muted small">Enter your Riot ID to see your own games of this matchup.</p>{% endif %}</div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

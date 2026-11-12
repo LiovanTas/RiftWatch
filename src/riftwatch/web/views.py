@@ -547,6 +547,8 @@ def match_detail(conn: psycopg.Connection, gd: GameData, match_id: str, puuid: s
                  "opponent_icon": gd.champion_icon(opp["champion_id"]) if opp else None}
     return {
         "insights": notes, "has_timeline": timeline is not None, "damage_profile": profile,
+        "events": event_log(timeline[0] if timeline else None, players, gd,
+                            me["participant_id"] if me else None, me["team_id"] if me else None),
         "role": me["position"] if me else None,
         "match_id": match_id, "duration": clock(players[0]["duration_s"]),
         "date": players[0]["game_start"].strftime("%b %d, %Y %H:%M UTC"), "when": ago(players[0]["game_start"]),
@@ -987,3 +989,44 @@ def benchmarks(table: dict, position: str, mine: dict | None = None, tier: str |
             step = {"next": insights.TIER_NAME.get(nxt, nxt.title()), "label": label, "have": have, "want": want}
     return {"tiers": [insights.TIER_NAME.get(t, t.title()) for t in tiers], "tier_keys": tiers,
             "rows": rows, "step": step, "mine": mine}
+
+
+# -- a game's event log ------------------------------------------------------------------------
+
+def event_log(timeline: dict | None, players: list[dict], gd: GameData, me_pid: int | None,
+              me_team: int | None) -> list[dict]:
+    """Kills, objectives and towers for everyone, and the player's own finished items and
+    level 6/11/16, in order."""
+    from riftwatch.web.mapview import _describe
+
+    if not timeline:
+        return []
+    champ_of = {p["participant_id"]: gd.champion(p["champion_id"]).name for p in players}
+    team = me_team or 100
+    out = []
+    for frame in timeline.get("info", {}).get("frames", []):
+        for ev in frame.get("events", []):
+            kind, ts = ev.get("type"), ev.get("timestamp", 0)
+            t = f"{ts // 60000}:{(ts // 1000) % 60:02d}"
+            mine = me_pid is not None and me_pid in (ev.get("killerId"), ev.get("victimId"),
+                                                     ev.get("participantId"), *(ev.get("assistingParticipantIds") or []))
+            if kind == "CHAMPION_KILL":
+                text = _describe(ev, champ_of, me_pid or -1, team)
+                icon = "kill" if ev.get("killerId") == me_pid else "death" if ev.get("victimId") == me_pid else "fight"
+            elif kind in ("ELITE_MONSTER_KILL", "BUILDING_KILL"):
+                text = _describe(ev, champ_of, me_pid or -1, team)
+                icon = "objective" if kind == "ELITE_MONSTER_KILL" else "tower"
+                ours = (ev.get("killerTeamId") == team) if kind == "ELITE_MONSTER_KILL" else (ev.get("teamId") != team)
+                icon += " ours" if ours else " theirs"
+            elif kind == "ITEM_PURCHASED" and ev.get("participantId") == me_pid:
+                it = gd.item(ev.get("itemId", 0))
+                if not it or not (it.is_legendary or it.is_boots):
+                    continue
+                text, icon = f"{t} You finished {it.name}", "item"
+            elif kind == "LEVEL_UP" and ev.get("participantId") == me_pid and ev.get("level") in (6, 11, 16):
+                text, icon = f"{t} You reached level {ev['level']}", "level"
+            else:
+                continue
+            if text:
+                out.append({"t": ts, "text": text, "icon": icon, "mine": bool(mine)})
+    return sorted(out, key=lambda e: e["t"])

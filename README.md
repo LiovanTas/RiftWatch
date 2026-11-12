@@ -247,7 +247,9 @@ with RiftWatch's coaching built in.
   loads on the spot: the page downloads their games from Riot and shows its progress.
 - **Player file:** a stat band with ranked solo and flex, the last 20 games' win rate and
   streak, average KDA and most-played champion and role; a form strip of the last 20 results;
-  a score-per-game chart; **rank progression** over 7, 30 or 90 days or the season, for
+  a score-per-game chart; **where you die** (deaths and kills from the last 20 games on the
+  minimap, drawn from the player's side, by game phase, with the share of deaths in each area);
+  **rank progression** over 7, 30 or 90 days or the season, for
   solo and flex (see *Rank progression* below); **Patterns**, the strengths and problems that
   keep recurring (say, "bottom-20% farm for the rank in 13 of 19 games"); a **Focus** card for
   the most frequent problem, game by game against the rank's typical value with whether it's
@@ -257,7 +259,8 @@ with RiftWatch's coaching built in.
   the left. Each champion in the player's lists opens **their page on that champion**
   (`/players/<region>/<id>/champions/<champion>`): their season numbers beside other players'
   on the same champion and role at their rank and in Master+ (win rate, KDA, CS per minute
-  and at 10 minutes, damage, gold, vision, kill participation, deaths), their most-finished
+  and at 10 minutes, damage, gold, vision, kill participation, deaths, and when the first and
+  second items are finished), their most-finished
   items and keystone beside the Master+ core and keystone, their record in every matchup
   with a Why?, and their recent games on it.
 - **Match timeline,** filtered by queue and champion, and grouped by day with each day's record. Each game
@@ -272,6 +275,8 @@ with RiftWatch's coaching built in.
   - the player's item build by minute, skill order and rune page
   - a team gold graph; hovering shows each minute's exact gold for both teams, the player
     and their lane opponent
+  - **Timeline:** every kill, objective and tower in order, with the player's finished items
+    and levels 6, 11 and 16, filterable to what involved them
   - **High Elo Comparison:** the game replayed minute by minute on the minimap (every
     champion, kills, objectives, Dragon and Baron when they're up), with a slider, play button
     and previous/next key moment. For every minute the models cover (2 to the end of the game)
@@ -315,6 +320,11 @@ with RiftWatch's coaching built in.
   each objective first, by dragons taken, by gold lead at 15 minutes (and how often 3k-behind
   teams come back), game lengths and side; and every finished item's pick and win rate, the
   champions that build it most, and its recent patch changes. Filter by rank.
+- **Matchup pages** (`/matchups/<champion>/<opponent>?role=...`): one lane matchup on its own
+  page -- the record overall and in Master+, gold at 10 and 15 and early deaths, the first two
+  items and keystones with their records, the saved AI verdict, Master+ games of the matchup
+  to study (each opening its game page), and with a Riot ID the player's own games of it.
+  Linked from every Why? and from the champion pages' matchup table.
 - **Counter picks** (`/counters`): pick the enemy champion and see who has done best against
   it in its lane (win rate adjusted for sample size, gold and CS at 15 minutes), each with a
   Why?. With a Riot ID it adds the player's own record on each pick and their pool in that

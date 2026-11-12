@@ -141,6 +141,13 @@
         <div class="rp-foot"></div>
       </div>
       {% endif %}
+      <div class="panel deathmap" data-deathmap="/api/players/{{ region }}/{{ profile_base.rsplit('/', 1)[1] }}/deathmap">
+        <div class="panel-head"><span>Where you die</span>
+          <nav class="seg" data-dm="filter"><button type="button" class="on" data-v="death">Deaths</button><button type="button" data-v="kill">Kills</button><button type="button" data-v="all">Both</button></nav>
+          <nav class="seg" data-dm="phase"><button type="button" class="on" data-v="all">Whole game</button><button type="button" data-v="early">0-14</button><button type="button" data-v="mid">15-24</button><button type="button" data-v="late">25+</button></nav>
+        </div>
+        <div class="dm-body"><div class="empty"><span class="spinner"></span></div></div>
+      </div>
       <div id="match-list">
         {% include "_match_rows.html" %}
       </div>

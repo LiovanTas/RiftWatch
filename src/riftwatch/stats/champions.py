@@ -466,3 +466,47 @@ def _build_paths(conn, champion_id, position, is_legendary, firsts, seconds):
         out.append({"item": item, "games": n, "win_rate": 100 * w / n,
                     "next": [{"item": m, "games": pn, "win_rate": 100 * pw / pn} for m, (pn, pw) in nexts]})
     return out
+
+
+def matchup_detail(conn: psycopg.Connection, champion_id: int, opponent_id: int, position: str,
+                   is_legendary, puuid: str | None = None) -> dict:
+    """One lane matchup in depth: the record overall and in Master+, the item starts and
+    keystones that won it, recent Master+ games of it, and the player's own games of it."""
+    from psycopg.rows import dict_row
+
+    with conn.cursor(row_factory=dict_row) as cur:
+        rows = cur.execute(
+            """SELECT b.*, s.tier_bucket FROM participant_builds b
+                 LEFT JOIN match_samples s ON s.match_id = b.match_id
+                WHERE b.champion_id = %s AND b.opponent_champion_id = %s AND b.position = %s
+                  AND b.queue_id IN (420, 440) AND NOT b.remake
+                ORDER BY b.game_start DESC""", (champion_id, opponent_id, position)).fetchall()
+
+    def record(rs):
+        return {"games": len(rs), "wins": sum(r["win"] for r in rs),
+                "win_rate": 100 * sum(r["win"] for r in rs) / len(rs) if rs else None}
+
+    starts: dict[tuple, list[int]] = defaultdict(lambda: [0, 0])
+    keys: dict[int, list[int]] = defaultdict(lambda: [0, 0])
+    for r in rows:
+        seq: list[int] = []
+        for i in (r["purchases"] or r["items"] or []):
+            if i and i not in seq and is_legendary(i):
+                seq.append(i)
+            if len(seq) == 2:
+                break
+        if len(seq) == 2:
+            starts[tuple(seq)][0] += 1
+            starts[tuple(seq)][1] += r["win"]
+        if r["keystone"]:
+            keys[r["keystone"]][0] += 1
+            keys[r["keystone"]][1] += r["win"]
+
+    def ranked(d, n):
+        return [{"key": k, "games": g, "win_rate": 100 * w / g, "shrunk": 100 * shrunk(w, g)}
+                for k, (g, w) in sorted(d.items(), key=lambda kv: -kv[1][0]) if g >= 3][:n]
+
+    high = [r for r in rows if r["tier_bucket"] == "MASTER_PLUS"]
+    return {"all": record(rows), "high": record(high), "builds": ranked(starts, 4), "keystones": ranked(keys, 3),
+            "high_games": high[:10],
+            "mine": [r for r in rows if puuid and r["puuid"] == puuid][:10]}

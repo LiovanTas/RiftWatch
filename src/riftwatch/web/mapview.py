@@ -402,3 +402,50 @@ def own_zone_name(p: dict, team: int) -> str:
 def clear_cache() -> None:
     with _lock:
         _cache.clear()
+
+
+# -- where a player dies and gets kills ---------------------------------------------------------
+
+ZONE_NAME = {"own_jungle": "your jungle", "enemy_jungle": "the enemy jungle", "river": "the river",
+             "top_lane": "top lane", "mid_lane": "mid lane", "bot_lane": "bot lane", "own_base": "your base",
+             "enemy_base": "the enemy base"}
+
+
+def death_map(conn: psycopg.Connection, gd: GameData, puuid: str, games: int = 20) -> dict[str, Any]:
+    """The player's deaths and kills over their recent games with timelines, drawn from their
+    own side (red-side games are mirrored so their base is always bottom left), and where on
+    the map the deaths happened."""
+    from collections import Counter
+
+    from riftwatch.ml.situations import own_zone
+
+    mine = conn.execute(
+        """SELECT b.match_id, b.participant_id, b.team_id FROM participant_builds b
+             JOIN match_timelines t ON t.match_id = b.match_id
+            WHERE b.puuid = %s AND b.queue_id IN (420, 440, 400) AND NOT b.remake
+            ORDER BY b.game_start DESC LIMIT %s""", (puuid, games)).fetchall()
+    who = {m: (pid, team) for m, pid, team in mine}
+    points, zones = [], Counter()
+    for match_id, ev in conn.execute(
+            """SELECT match_id, jsonb_path_query(raw, '$.info.frames[*].events[*] ? (@.type == "CHAMPION_KILL")')
+                 FROM match_timelines WHERE match_id = ANY(%s)""", (list(who),)):
+        pid, team = who[match_id]
+        where = ev.get("position")
+        if not where:
+            continue
+        if ev.get("victimId") == pid:
+            kind = "death"
+            zones[own_zone(where["x"], where["y"], team)] += 1
+        elif ev.get("killerId") == pid:
+            kind = "kill"
+        else:
+            continue
+        x, y = (where["x"], where["y"]) if team == 100 else (X1 + X0 - where["x"], Y1 + Y0 - where["y"])
+        points.append({**_pct(x, y), "kind": kind, "minute": ev.get("timestamp", 0) // 60000})
+    deaths = sum(zones.values())
+    return {
+        "games": len(who), "map": f"https://ddragon.leagueoflegends.com/cdn/{gd.version}/img/map/map11.png",
+        "points": points, "deaths": deaths, "kills": sum(1 for p in points if p["kind"] == "kill"),
+        "zones": [{"zone": ZONE_NAME.get(z, z.replace("_", " ")), "share": round(100 * n / deaths), "deaths": n}
+                  for z, n in zones.most_common()] if deaths else [],
+    }

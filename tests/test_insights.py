@@ -401,3 +401,23 @@ def test_build_paths_follow_purchase_order():
     assert paths[0]["item"] == 3031 and paths[0]["games"] == 18
     assert {n["item"]: n["games"] for n in paths[0]["next"]} == {3036: 12, 6672: 6}
     assert all(p["games"] >= 10 for p in paths)                     # 6672 first only 3 times
+
+
+def test_event_log_lists_fights_objectives_and_my_items_in_order():
+    from riftwatch.web.gamedata import GameData, Item
+    from riftwatch.web.views import event_log
+    gd = GameData()
+    gd.loaded = True
+    gd.items[3031] = Item(3031, "Infinity Edge", "", 3400, ["Damage"], [], 3)
+    players = [{"participant_id": i, "champion_id": 0} for i in range(1, 11)]
+    timeline = {"info": {"frames": [{"events": [
+        {"type": "ITEM_PURCHASED", "timestamp": 600_000, "participantId": 3, "itemId": 3031},
+        {"type": "CHAMPION_KILL", "timestamp": 90_000, "killerId": 3, "victimId": 8, "position": {"x": 1, "y": 1}},
+        {"type": "LEVEL_UP", "timestamp": 400_000, "participantId": 3, "level": 6},
+        {"type": "LEVEL_UP", "timestamp": 410_000, "participantId": 3, "level": 7},
+        {"type": "ELITE_MONSTER_KILL", "timestamp": 500_000, "killerTeamId": 200, "monsterType": "DRAGON"},
+    ]}]}}
+    log = event_log(timeline, players, gd, 3, 100)
+    assert [e["icon"] for e in log] == ["kill", "level", "objective theirs", "item"]
+    assert log[0]["text"].startswith("1:30 You killed") and log[-1]["text"] == "10:00 You finished Infinity Edge"
+    assert log[0]["mine"] and not log[2]["mine"]

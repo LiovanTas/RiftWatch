@@ -665,6 +665,15 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             log.warning("moment note %s %s failed: %s", match_id, minute, exc)
             raise HTTPException(502, "the coach couldn't write this right now") from exc
 
+    @app.get("/api/players/{region}/{riot_id}/deathmap")
+    def player_death_map(region: str, riot_id: str, games: int = Query(20, ge=5, le=50)) -> dict:
+        """Where the player died and got kills over their recent games (profile map panel)."""
+        with pool.connection() as conn:
+            _, _, account = find_account(conn, region, riot_id)
+            if account is None:
+                raise HTTPException(404, "player not synced")
+            return mapview.death_map(conn, game_data(), account["puuid"], games)
+
     @app.get("/api/players/{region}/{riot_id}/matches/{match_id}/map")
     def match_map(region: str, riot_id: str, match_id: str) -> dict:
         """The High-elo map tab's data: positions, kills and objectives each minute, and for
@@ -866,6 +875,44 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                              "cooldown": sp.get("cooldownBurn")})
             ctx["abilities"] = abil
         return render("champion.html", nav="champions", **ctx)
+
+    @app.get("/matchups/{slug}/{opponent}", response_class=HTMLResponse)
+    def matchup_page(slug: str, opponent: str, role: str = "", me: str = "") -> HTMLResponse:
+        """One lane matchup on its own page: numbers, winning builds, Master+ games to study."""
+        gd_ = game_data()
+        a, b = gd_.champion_by_slug(slug), gd_.champion_by_slug(opponent)
+        if a is None or b is None:
+            return error_page("Champion not found", "One of these champions doesn't exist.")
+        with pool.connection() as conn:
+            position = role.upper() if role.upper() in gamedata.POSITIONS else champ_stats.main_position(conn, a.id)
+            if position is None:
+                return error_page("Not enough games", f"RiftWatch has no ranked games of {a.name} yet.")
+            found = recap.locate(conn, *views.parse_lobby(me)[0]) if views.parse_lobby(me) else None
+            data = champ_stats.matchup_detail(
+                conn, a.id, b.id, position, lambda i: bool(gd_.item(i) and gd_.item(i).is_legendary),
+                found[0] if found else None)
+            glance = matchups.build(conn, gd_, a.id, b.id, position)["glance"] if data["all"]["games"] else None
+            note = matchups.cached(conn, a.id, b.id, position, matchups.cache_version(gd_))
+
+        def item(i):
+            it = gd_.item(i)
+            return {"id": i, "icon": gd_.item_icon(i), "name": it.name if it else str(i), "text": it.text if it else ""}
+
+        def game(r, as_=None):
+            return {"name": r["riot_name"] or "Unknown", "kda": f"{r['kills']}/{r['deaths']}/{r['assists']}",
+                    "win": r["win"], "when": views.ago(r["game_start"]), "items": [item(i) for i in (r["items"] or [])[:6] if i],
+                    "url": f"/games/{r['match_id']}" + (f"?as={as_}" if as_ else "")}
+        me_as = (f"{PLATFORM_REGION.get(found[1], found[1])}/{views.path_id(found[2], found[3])}" if found else None)
+        return render(
+            "matchup.html", nav="champions", a=a, b=b, role=position, role_name=gamedata.POSITIONS.get(position, ""),
+            a_icon=gd_.champion_icon(a.id), b_icon=gd_.champion_icon(b.id), d=data, glance=glance,
+            note=(note or {}).get("output"), me=me, me_found=found is not None,
+            builds=[{**x, "items": [item(i) for i in x["key"]]} for x in data["builds"]],
+            keystones=[{**x, "icon": gd_.rune_icon(x["key"]), "name": gd_.rune_name(x["key"])} for x in data["keystones"]],
+            high_games=[game(r) for r in data["high_games"]],
+            my_games=[game(r, me_as) for r in data["mine"]],
+            why_url=f"/api/champions/{a.slug}/matchups/{b.slug}?role={position.lower()}",
+            reverse_url=f"/matchups/{b.slug}/{a.slug}?role={position.lower()}")
 
     @app.post("/api/champions/{slug}/matchups/{opponent}")
     def matchup_note(request: Request, slug: str, opponent: str, role: str) -> dict:

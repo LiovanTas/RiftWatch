@@ -174,7 +174,7 @@
     <div class="scroll" style="max-height:420px;overflow-y:auto"><table class="data">
       <thead><tr><th class="l" data-sort>Opponent</th><th data-sort>Games</th><th data-sort>Win rate</th><th data-sort>Gold at 15</th><th data-sort>CS at 15</th><th></th></tr></thead>
       <tbody id="mu-body">{% for m in matchup_rows %}<tr data-name="{{ m.name|lower }}">
-        <td class="l" data-v="{{ m.name }}"><a class="champ-cell" href="/champions/{{ m.slug }}"><img src="{{ m.icon }}" alt="" loading="lazy"><b>{{ m.name }}</b></a></td>
+        <td class="l" data-v="{{ m.name }}"><a class="champ-cell" href="/matchups/{{ champ.slug }}/{{ m.slug }}?role={{ s.position|lower }}" title="{{ champ.name }} vs {{ m.name }}: the full matchup"><img src="{{ m.icon }}" alt="" loading="lazy"><b>{{ m.name }}</b></a></td>
         <td data-v="{{ m.games }}">{{ m.games }}</td>
         <td data-v="{{ m.shrunk }}">{{ wr(m.win_rate) }}</td>
         <td data-v="{{ m.gold15 if m.gold15 is not none else 0 }}" class="{{ 'win-text' if (m.gold15 or 0) > 150 else ('loss-text' if (m.gold15 or 0) < -150 else '') }}">{{ '%+d'|format(m.gold15) if m.gold15 is not none else '-' }}</td>

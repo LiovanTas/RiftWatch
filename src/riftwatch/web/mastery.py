@@ -30,25 +30,33 @@ METRICS = (  # key, label, format, higher is better
     ("vision_min", "Vision per minute", "{:.2f}", True),
     ("kp", "Kill participation", "{:.0f}%", True),
     ("deaths_10", "Deaths per 10 minutes", "{:.1f}", False),
+    ("first_item", "First item finished at", "clock", False),
+    ("second_item", "Second item finished at", "clock", False),
 )
 
 
-def _aggregate(conn: psycopg.Connection, where: str, params: list) -> dict[str, float] | None:
+def _aggregate(conn: psycopg.Connection, where: str, params: list,
+               legendary: list[int] | None = None) -> dict[str, float] | None:
+    # The first and second legendary items finished, from the timeline's purchase times.
     row = conn.execute(f"""
         SELECT count(*), sum(b.win::int), sum(b.kills), sum(b.deaths), sum(b.assists), sum(b.cs),
                sum(b.damage), sum(b.gold), sum(b.vision_score), sum(b.duration_s),
-               avg((b.kills + b.assists)::float8 / greatest(b.team_kills, 1)), avg(f.cs)::float8
+               avg((b.kills + b.assists)::float8 / greatest(b.team_kills, 1)), avg(f.cs)::float8,
+               avg(x.t1)::float8, avg(x.t2)::float8
           FROM participant_builds b
           LEFT JOIN participant_minute_features f
                  ON f.match_id = b.match_id AND f.participant_id = b.participant_id AND f.minute = 10
-         WHERE NOT b.remake AND {where}""", params).fetchone()
-    n, wins, k, d, a, cs, dmg, gold, vision, secs, kp, cs10 = row
+          LEFT JOIN LATERAL (SELECT (array_agg(u.s ORDER BY u.s))[1] t1, (array_agg(u.s ORDER BY u.s))[2] t2
+                               FROM unnest(b.purchases, b.purchase_s) u(item, s) WHERE u.item = ANY(%s)) x ON true
+         WHERE NOT b.remake AND {where}""", [legendary or [], *params]).fetchone()
+    n, wins, k, d, a, cs, dmg, gold, vision, secs, kp, cs10, t1, t2 = row
     if not n:
         return None
     minutes = secs / 60
     return {"games": n, "win_rate": 100 * wins / n, "kda": (k + a) / max(d, 1), "cs_min": cs / minutes,
             "cs10": cs10, "dmg_min": dmg / minutes, "gold_min": gold / minutes,
-            "vision_min": vision / minutes, "kp": 100 * kp, "deaths_10": d / (minutes / 10)}
+            "vision_min": vision / minutes, "kp": 100 * kp, "deaths_10": d / (minutes / 10),
+            "first_item": t1, "second_item": t2}
 
 
 def player_champion(conn: psycopg.Connection, gd: GameData, puuid: str, champion_id: int,
@@ -65,20 +73,21 @@ def player_champion(conn: psycopg.Connection, gd: GameData, puuid: str, champion
     roles = Counter(g["position"] for g in games if g["position"])
     position = roles.most_common(1)[0][0] if roles else None
 
+    legendary = [i for i, it in gd.items.items() if it.is_legendary]
     mine = _aggregate(conn, "b.puuid = %s AND b.champion_id = %s AND b.game_start >= %s AND b.queue_id = ANY(%s)",
-                      [puuid, champion_id, start, list(QUEUES)])
+                      [puuid, champion_id, start, list(QUEUES)], legendary)
     peers_label, peers = None, None
     if position:
         # Other players only: the player's own games would make "your rank" look like them.
         base = "b.champion_id = %s AND b.position = %s AND b.queue_id = 420 AND b.puuid <> %s"
         if tier != "ALL":
             peers = _aggregate(conn, base + " AND b.match_id IN (SELECT match_id FROM match_samples WHERE tier_bucket = %s)",
-                               [champion_id, position, puuid, tier])
+                               [champion_id, position, puuid, tier], legendary)
             peers_label = insights.TIER_NAME.get(tier, tier.title())
         if not peers or peers["games"] < MIN_PEERS:
-            peers, peers_label = _aggregate(conn, base, [champion_id, position, puuid]), "All ranks"
+            peers, peers_label = _aggregate(conn, base, [champion_id, position, puuid], legendary), "All ranks"
         high = _aggregate(conn, base + " AND b.match_id IN (SELECT match_id FROM match_samples WHERE tier_bucket = 'MASTER_PLUS')",
-                          [champion_id, position, puuid])
+                          [champion_id, position, puuid], legendary)
     else:
         high = None
 
@@ -92,8 +101,9 @@ def player_champion(conn: psycopg.Connection, gd: GameData, puuid: str, champion
         if others:
             ref = others[-1]                                 # Master+ when there is one
             verdict = "up" if (values[0] >= ref) == higher else "down"
-        rows.append({"label": label, "values": [fmt.format(v) if v is not None else "-" for v in values],
-                     "verdict": verdict})
+        shown = [(f"{int(v) // 60}:{int(v) % 60:02d}" if fmt == "clock" else fmt.format(v)) if v is not None else "-"
+                 for v in values]
+        rows.append({"label": label, "values": shown, "verdict": verdict})
 
     # Build: the player's most-finished legendary items against the high-elo core.
     def legendary(i: int) -> bool:

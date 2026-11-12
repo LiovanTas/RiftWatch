@@ -633,7 +633,8 @@
         html += `<p class="muted small">${esc(data.note || 'No explanation available.')}</p>`;
       }
       html += `<details><summary>Evidence (${ev.length} items)</summary><ol class="ev">${ev.map((x) => `<li><b>${esc(x.id)}</b>${esc(x.text)}</li>`).join('')}</ol></details>`;
-      if (out) html += `<div class="foot">Written by AI from this evidence; every number is checked against it.</div>`;
+      const page = btn.dataset.why.replace(/^\/api\/champions\/([^/]+)\/matchups\//, '/matchups/$1/');
+      html += `<div class="foot">${out ? 'Written by AI from this evidence; every number is checked against it. ' : ''}${location.pathname.startsWith('/matchups/') ? '' : `<a href="${esc(page)}">Full matchup page, with Master+ games to study &rarr;</a>`}</div>`;
       body.innerHTML = html;
     } catch (err) {
       body.innerHTML = head + `<div class="empty">${esc(friendly(String(err.message || err)))}</div>`;
@@ -704,6 +705,51 @@
       const m = src.match(/^\/fragments\/players\/([^/]+)\/([^/]+)\/matches\/([^/?]+)/);
       if (m) location.href = `/games/${m[3]}?as=${m[1]}/${m[2]}`;
     }
+  });
+
+  // -- where the player dies: loaded when the panel scrolls into view -----------------------
+  for (const panel of $$('[data-deathmap]')) {
+    const state = { filter: 'death', phase: 'all' };
+    let data = null;
+    const body = $('.dm-body', panel);
+    const draw = () => {
+      if (!data) return;
+      const inPhase = (p) => state.phase === 'all' || (state.phase === 'early' ? p.minute < 15 : state.phase === 'mid' ? p.minute >= 15 && p.minute < 25 : p.minute >= 25);
+      const pts = data.points.filter((p) => (state.filter === 'all' || p.kind === state.filter) && inPhase(p));
+      body.innerHTML = `<div class="dm-stage"><img src="${esc(data.map)}" alt="Summoner's Rift">${pts.map((p) => `<i class="${p.kind}" style="left:${p.x}%;top:${p.y}%" data-tip="${p.kind === 'death' ? 'Died' : 'Kill'} at ${p.minute} min"></i>`).join('')}</div>
+        <div class="dm-side"><p><b>${data.deaths}</b> deaths and <b>${data.kills}</b> kills in the last ${data.games} games, drawn from your side (your base bottom left). Showing ${pts.length}.</p>
+        ${data.zones.length ? `<h5>Where the deaths happened</h5>${data.zones.map((z) => `<div class="dz"><span>${esc(z.zone)}</span><div class="bar"><i style="width:${z.share}%"></i></div><b>${z.share}%</b></div>`).join('')}` : ''}</div>`;
+    };
+    const load = async () => {
+      try {
+        const r = await fetch(panel.dataset.deathmap);
+        if (!r.ok) throw new Error();
+        data = await r.json();
+        if (!data.points.length) { body.innerHTML = '<p class="muted small" style="padding:12px 16px">No games with timelines stored yet.</p>'; return; }
+        draw();
+      } catch { body.innerHTML = '<p class="muted small" style="padding:12px 16px">Could not load the map.</p>'; }
+    };
+    if ('IntersectionObserver' in window) {
+      const seen = new IntersectionObserver((entries) => { if (entries.some((e) => e.isIntersecting)) { seen.disconnect(); load(); } });
+      seen.observe(panel);
+    } else { load(); }
+    for (const nav of $$('[data-dm]', panel)) {
+      nav.addEventListener('click', (e) => {
+        const b = e.target.closest('button');
+        if (!b) return;
+        $$('button', nav).forEach((x) => x.classList.toggle('on', x === b));
+        state[nav.dataset.dm] = b.dataset.v;
+        draw();
+      });
+    }
+  }
+
+  // -- a game's event log: only the events that involved the player --------------------------
+  document.addEventListener('change', (e) => {
+    const box = e.target.closest('[data-log-mine]');
+    if (!box) return;
+    const log = box.closest('.d-pane').querySelector('.event-log');
+    log.classList.toggle('only-mine', box.checked);
   });
 
   // -- copy link ---------------------------------------------------------------------------

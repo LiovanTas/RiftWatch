@@ -1135,3 +1135,51 @@ table.bench .like { font-family: var(--display); font-weight: 600; }
 .lobby-sum > div:first-child { border-left: 0; }
 .lobby-sum > div > span { display: block; font-family: var(--mono); font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; }
 .lobby-sum b { font-family: var(--display); font-size: 17px; }
+
+/* a game's event log */
+.log-filter { display: inline-flex; gap: 6px; align-items: center; font-size: 12.5px; color: var(--text-2); margin-bottom: 8px; cursor: pointer; }
+.event-log { list-style: none; margin: 0; padding: 0; max-height: 460px; overflow-y: auto; columns: 2; column-gap: 24px; }
+@media (max-width: 760px) { .event-log { columns: 1; } }
+.event-log li { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; font-family: var(--mono); font-size: 12px; color: var(--text-2); break-inside: avoid; }
+.event-log li i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--line-2); transform: translateY(1px); }
+.event-log li.mine span { color: var(--text); }
+.event-log li.ev-kill i { background: var(--green); } .event-log li.ev-death i { background: var(--loss); }
+.event-log li.ev-fight i { background: var(--muted); }
+.event-log li.ev-objective i, .event-log li.ev-tower i { border-radius: 2px; transform: rotate(45deg); }
+.event-log li.ev-ours i { background: var(--win); } .event-log li.ev-theirs i { background: var(--loss); }
+.event-log li.ev-item i { background: var(--accent); border-radius: 2px; } .event-log li.ev-level i { background: var(--violet); }
+.event-log.only-mine li:not(.mine) { display: none; }
+
+/* where you die */
+.deathmap { margin-top: 12px; }
+.deathmap .panel-head { flex-wrap: wrap; }
+.deathmap .seg button { padding: 4px 9px; font-size: 12px; }
+.dm-body { display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 16px; padding: 14px 16px; }
+@media (max-width: 760px) { .dm-body { grid-template-columns: 1fr; } }
+.dm-body > .empty { grid-column: 1 / -1; }
+.dm-stage { position: relative; aspect-ratio: 1; border-radius: 8px; overflow: hidden; border: 1px solid var(--line-2); }
+.dm-stage img { width: 100%; height: 100%; filter: saturate(.6) brightness(.7); }
+.dm-stage i { position: absolute; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; border-radius: 50%; }
+.dm-stage i.death { background: rgba(255,100,100,.85); box-shadow: 0 0 6px rgba(255,100,100,.8); }
+.dm-stage i.kill { background: rgba(78,161,255,.9); box-shadow: 0 0 6px rgba(78,161,255,.8); }
+.dm-side p { margin: 0 0 10px; font-size: 13px; color: var(--text-2); } .dm-side p b { font-family: var(--mono); color: var(--text); }
+.dm-side h5 { margin: 0 0 6px; font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font-family: var(--mono); font-weight: 500; }
+.dz { display: grid; grid-template-columns: 130px minmax(0, 1fr) 40px; gap: 8px; align-items: center; padding: 3px 0; font-size: 12.5px; }
+.dz span { color: var(--text-2); } .dz b { font-family: var(--mono); font-size: 12px; text-align: right; }
+.dz .bar { height: 6px; background: var(--panel-3); border-radius: 3px; overflow: hidden; } .dz .bar i { display: block; height: 100%; background: var(--loss); }
+
+/* matchup page */
+.mu-hero { display: flex; align-items: center; gap: 14px; padding: 30px 0 18px; flex-wrap: wrap; }
+.mu-hero > a img { width: 68px; height: 68px; border-radius: 30%; border: 1px solid var(--line-2); }
+.mu-hero .vs-word { font-family: var(--mono); color: var(--muted); }
+.mu-hero > div { flex: 1; min-width: 220px; }
+.mu-hero h1 { margin: 4px 0; font-size: 30px; letter-spacing: -0.04em; }
+.mu-hero .meta-line a { font-size: 13px; color: var(--text-2); }
+.mu-tiles { margin-bottom: 12px; }
+.mu-note { padding: 14px 16px; border-left: 3px solid var(--accent); }
+.mu-note p { margin: 6px 0 0; font-size: 13.5px; } .mu-note p.pt { color: var(--text-2); font-size: 13px; } .mu-note p.pt b { color: var(--text); }
+.mu-games { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 6px; }
+.rg .nm { color: var(--text-2); max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rg .its { display: inline-flex; gap: 2px; } .rg .its img { width: 20px; height: 20px; border-radius: 4px; }
+.mini-form { display: flex; gap: 6px; } .mini-form input { background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--radius); padding: 5px 8px; font-size: 12.5px; }
+.why-modal .foot a { color: var(--accent); }

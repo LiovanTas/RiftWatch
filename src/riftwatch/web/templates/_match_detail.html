@@ -5,6 +5,7 @@
     {% if d.insights %}<button type="button" data-pane="insights">Insights</button>{% endif %}
     {% if d.me %}<button type="button" data-pane="build">Build</button>{% endif %}
     {% if d.gold_chart %}<button type="button" data-pane="gold">Gold graph</button>{% endif %}
+    {% if d.events %}<button type="button" data-pane="log">Timeline</button>{% endif %}
     {% if map_url %}<button type="button" data-pane="map" class="map-tab">{{ 'High Elo Comparison' if map_compared else 'Map replay' }}</button>{% endif %}
     <span class="d-links">{% if game_url and not on_game_page %}<a class="btn" href="{{ game_url }}" title="This game on its own page, to share">Game page &#8599;</a>{% endif %}{% if analysis_url %}<a class="btn" href="{{ analysis_url }}">RiftWatch analysis &rarr;</a>{% endif %}</span>
   </div>
@@ -130,6 +131,12 @@
   {% endif %}
   {% if map_url %}
   <div class="d-pane" data-pane="map" data-map-url="{{ map_url }}"{% if map_compared %} data-ask="1"{% endif %}></div>
+  {% endif %}
+  {% if d.events %}
+  <div class="d-pane" data-pane="log">
+    {% if d.me %}<label class="log-filter"><input type="checkbox" data-log-mine> Only what involved me</label>{% endif %}
+    <ol class="event-log">{% for e in d.events %}<li class="ev-{{ e.icon|replace(' ', ' ev-') }}{{ ' mine' if e.mine }}"><i></i><span>{{ e.text }}</span></li>{% endfor %}</ol>
+  </div>
   {% endif %}
   {% if d.gold_chart %}
   <div class="d-pane" data-pane="gold">
