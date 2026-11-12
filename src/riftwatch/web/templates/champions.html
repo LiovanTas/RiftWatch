@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% from "_macros.html" import wr, tier_badge, pos_icon %}
+{% block title %}Champion Tier List{{ ' - ' ~ role_name if role_name }} | RiftWatch{% endblock %}
+{% block description %}League of Legends champion tier list by role: win rate, pick rate and ban rate from {{ '{:,}'.format(games) }} ranked games.{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="page-title">
+    <h1>Champion tier list</h1>
+    <p>From {{ '{:,}'.format(games) }} ranked solo/duo games RiftWatch has analysed{{ ' on patch ' ~ patch if patch }}. Tiers rank each role by win rate (shrunk towards 50% for small samples) and popularity.</p>
+  </div>
+  <div class="panel" style="margin-bottom:40px">
+    <div class="toolbar">
+      <div class="pills">
+        <a href="?{{ qs(role=None) }}" class="{{ 'on' if not role }}">All roles</a>
+        {% for key, name in positions %}<a href="?{{ qs(role=key|lower) }}" class="{{ 'on' if role == key }}">{{ pos_icon(gd, key) }}{{ name }}</a>{% endfor %}
+      </div>
+      <div class="grow"></div>
+      <select name="rank" data-nav aria-label="Rank">
+        {% for key, label in ranks %}<option value="{{ key }}"{{ ' selected' if rank == key }}>{{ label }}</option>{% endfor %}
+      </select>
+      <select name="patch" data-nav aria-label="Patch">
+        <option value="">All patches</option>
+        {% for p, n in patches %}<option value="{{ p }}"{{ ' selected' if patch == p }}>Patch {{ p }} ({{ '{:,}'.format(n) }})</option>{% endfor %}
+      </select>
+      <input type="search" placeholder="Find a champion" data-filter="#tier-body tr" aria-label="Find a champion">
+    </div>
+    {% if rows %}
+    <div class="scroll">
+    <table class="data" data-renumber>
+      <thead><tr><th class="l">#</th><th class="l" data-sort>Champion</th><th data-sort>Tier</th><th class="l">Role</th><th data-sort>Win rate</th><th data-sort>Pick rate</th><th data-sort>Ban rate</th><th data-sort>Games</th><th data-sort>KDA</th><th>Counters</th></tr></thead>
+      <tbody id="tier-body">
+      {% for r in rows %}
+        <tr data-name="{{ r.name|lower }}">
+          <td class="rank">{{ loop.index }}</td>
+          <td class="l" data-v="{{ r.name }}"><a class="champ-cell" href="/champions/{{ r.slug }}?role={{ r.position|lower }}"><img src="{{ r.icon }}" alt="" loading="lazy"><b>{{ r.name }}</b></a></td>
+          <td data-v="{{ r.score }}">{{ tier_badge(r.tier) }}</td>
+          <td class="l"><span style="display:inline-flex;gap:6px;align-items:center">{{ pos_icon(gd, r.position) }}{{ r.role }}</span></td>
+          <td data-v="{{ r.win_rate }}"><b>{{ wr(r.win_rate) }}</b></td>
+          <td data-v="{{ r.pick_rate }}"><div class="bar-cell">{{ '%.1f'|format(r.pick_rate) }}%<div class="bar"><i style="width:{{ [r.pick_rate * 6, 100]|min }}%"></i></div></div></td>
+          <td data-v="{{ r.ban_rate }}">{{ '%.1f'|format(r.ban_rate) }}%</td>
+          <td data-v="{{ r.games }}">{{ '{:,}'.format(r.games) }}</td>
+          <td data-v="{{ r.kda }}">{{ '%.2f'|format(r.kda) }}</td>
+          <td><div class="counters">{% for c in r.counters %}<a href="/champions/{{ c.slug }}"><img src="{{ c.icon }}" alt="{{ c.name }}" data-tip="{{ c.name }}&#10;{{ r.name }} wins {{ c.win_rate|round|int }}% of {{ c.games }} games against them" loading="lazy"></a>{% endfor %}</div></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}<div class="empty"><h3>Not enough games for this filter</h3><p>Try all ranks or all patches.</p></div>{% endif %}
+  </div>
+</div>
+{% endblock %}

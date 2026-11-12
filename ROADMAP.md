@@ -105,6 +105,9 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
       features; trees+network blend; patch/tier weighting; conformal intervals; `brain needs`
 - [ ] Readers for the archived snapshots: champion icons on the minimap, CS/KDA/items/gold from the
       scoreboard; a mid/late-game brain from the whole-game readings
+- [x] **Public website in the mould of op.gg/u.gg**: search with autocomplete, profiles, match history with
+      expandable scoreboards, builds, skill order, runes and gold graphs, champion tier list and
+      champion pages, leaderboard, live game, AI coach tab, dark/light themes, mobile layout
 - [ ] A sequence model (transformer over the raw readings) once the library has a few hundred games
 - [ ] Fill the library: high-elo videos per role (and your own games, linked to their matches);
       then tie bars to champions and read the player-view HUD clock

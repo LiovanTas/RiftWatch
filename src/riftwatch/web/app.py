@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from psycopg_pool import ConnectionPool
 from starlette.datastructures import MutableHeaders
 from starlette.middleware.gzip import GZipMiddleware
@@ -38,8 +38,8 @@ from riftwatch.ingest import Ingestor, NotFound
 from riftwatch.report.html import game_html
 from riftwatch.riot.api import QUEUE_NAMES, SUPPORTED_QUEUES, RiotApi
 from riftwatch.riot.client import RiotApiError, RiotClient
-from riftwatch.riot.routing import RiotId, UnknownRegion, parse_riot_id, platform_for
-from riftwatch.web import limits, pages, serialize
+from riftwatch.riot.routing import RiotId, UnknownRegion, platform_for
+from riftwatch.web import limits, serialize, site
 from riftwatch.web.jobs import JobQueue
 
 SECURITY_HEADERS = (
@@ -98,6 +98,7 @@ def create_app(
     coach: Coach | None = None,
     pool: ConnectionPool | None = None,
     jobs: JobQueue | None = None,
+    gamedata=None,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     if api is None and settings.riot_api_key:
@@ -169,6 +170,14 @@ def create_app(
                 baseline_build.warm(conn)
         except Exception:   # a cold cache is only slower, never wrong
             pass
+        try:
+            # Games stored before match-history rows existed (a no-op once they're filled).
+            from riftwatch.stats import extract
+
+            with pool.connection() as conn:
+                extract.backfill(conn)
+        except Exception:
+            pass
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -187,7 +196,8 @@ def create_app(
 
     # Every handler declares its return type, so FastAPI serializes straight to JSON bytes;
     # no custom response class needed.
-    app = FastAPI(title="RiftWatch", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="RiftWatch", version=__version__, lifespan=lifespan,
+                  docs_url="/api/docs", redoc_url=None, openapi_url="/api/openapi.json")
     app.state.services = services
     # Pages carry their CSS and JavaScript inline; compressed they are a fraction of the size.
     # Starlette never compresses text/event-stream, so streamed coaching still streams.
@@ -328,16 +338,6 @@ def create_app(
                            "tag_line": rid.tag_line}, owner=owner)
         return {"job": job.to_json(), "created": created}
 
-    @app.get("/scout/{region}/{riot_id}", response_class=HTMLResponse)
-    def scout_page(region: str, riot_id: str, job: str | None = None) -> HTMLResponse:
-        platform_for(region)
-        parse_path_riot_id(riot_id)
-        found = services.jobs.get(job) if job is not None else None
-        if found is not None and found.kind == "scout" and found.status == "done":
-            return HTMLResponse(pages.scout_page(region, riot_id, found.result))
-        error = found.error if found is not None and found.status == "failed" else None
-        return HTMLResponse(pages.scout_page(region, riot_id, None, error))
-
     @app.get("/api/jobs/{job_id}")
     def job_status(job_id: str) -> dict[str, Any]:
         job = services.jobs.get(job_id)
@@ -469,54 +469,10 @@ def create_app(
                      if coach is not None else None)
         links = [("RiftWatch", "/"),
                  (f"{account['game_name']}#{account['tag_line']}", f"/players/{region}/{riot_id}")]
-        return HTMLResponse(game_html(result, coach_url=coach_url, links=links))
+        return HTMLResponse(app.state.site_chrome(game_html(result, coach_url=coach_url, links=links),
+                                                  region.lower()))
 
-    # -- pages ------------------------------------------------------------------------------
-
-    @app.get("/", response_class=HTMLResponse)
-    def home() -> HTMLResponse:
-        return HTMLResponse(pages.search_page())
-
-    @app.get("/search")
-    def search(region: str, riot_id: str):
-        try:
-            platform_for(region)
-            rid = parse_riot_id(riot_id)
-        except ValueError as exc:
-            return HTMLResponse(pages.search_page(str(exc)), status_code=400)
-        return RedirectResponse(
-            f"/players/{region.lower()}/{pages.path_id(rid.game_name, rid.tag_line)}", 303)
-
-    @app.get("/players/{region}/{riot_id}", response_class=HTMLResponse)
-    def player_page(region: str, riot_id: str) -> HTMLResponse:
-        platform_for(region)
-        parse_path_riot_id(riot_id)
-        with pool.connection() as conn:
-            try:
-                account = account_or_404(conn, region, riot_id)
-            except HTTPException:
-                return HTMLResponse(pages.player_page(region, riot_id, None, None, None))
-            data = player_data(conn, account)
-            try:
-                recent = recent_report(conn, account["puuid"], coach=coach, generate=False)
-            except ReportError:
-                recent = None
-            try:
-                champs = champion_pool(conn, account["puuid"])
-            except ReportError:
-                champs = None
-            try:
-                progress_data = progress_report(conn, account["puuid"])
-            except ReportError:
-                progress_data = None
-            try:
-                session_data = sessions_report(conn, account["puuid"])
-            except ReportError:
-                session_data = None
-        coach_url = (f"/api/players/{region}/{riot_id}/recent/coach/stream"
-                     if coach is not None else None)
-        return HTMLResponse(pages.player_page(region, riot_id, data, recent, coach_url, champs,
-                                              progress_data, session_data))
+    site.register(app, services, coach=coach, advisor=advisor, brain=brain, gd=gamedata)
 
     return app
 

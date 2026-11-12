@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% from "_macros.html" import wr, pos_icon, item_slot %}
+{% block title %}{{ champ.name }} {{ role_name }} Build, Runes & Counters | RiftWatch{% endblock %}
+{% block description %}{{ champ.name }} {{ role_name }}: {{ '%.1f'|format(s.win_rate or 0) }}% win rate, best runes, core build, skill order and counters from {{ '{:,}'.format(s.games or 0) }} ranked games.{% endblock %}
+{% block content %}
+<section class="champ-hero">
+  <div class="bg" style="background-image:url('{{ splash }}')"></div>
+  <div class="shade"></div>
+  <div class="container">
+    <div class="portrait"><img src="{{ champ_icon }}" alt="{{ champ.name }}"></div>
+    <div>
+      <h1>{{ champ.name }}</h1>
+      <div class="title">{{ champ.title }}{% if champ.tags %} &middot; {{ champ.tags|join(', ') }}{% endif %}</div>
+      {% if abilities %}
+      <div class="abil">{% for a in abilities %}<div class="slot" data-tip="{{ a.key }} &middot; {{ a.name }}&#10;{{ a.text }}"><img src="{{ a.icon }}" alt="{{ a.name }}" loading="lazy"><span>{{ a.key }}</span></div>{% endfor %}</div>
+      {% endif %}
+    </div>
+  </div>
+</section>
+<div class="container" style="padding-bottom:40px">
+  {% if not s.games %}
+  <div class="panel empty" style="margin-top:20px"><h3>Not enough ranked games with {{ champ.name }} yet</h3><p>Try all ranks or all patches.</p></div>
+  {% else %}
+  <div class="toolbar panel" style="margin-top:16px">
+    <div class="pills">
+      {% for r in s.roles %}<a href="?{{ qs(role=r.position|lower) }}" class="{{ 'on' if r.position == s.position }}">{{ pos_icon(gd, r.position) }}{{ positions[r.position] }} <span class="muted">{{ r.share|round|int }}%</span></a>{% endfor %}
+    </div>
+    <div class="grow"></div>
+    <select name="rank" data-nav aria-label="Rank">
+      {% for key, label in ranks %}<option value="{{ key }}"{{ ' selected' if rank == key }}>{{ label }}</option>{% endfor %}
+    </select>
+    <select name="patch" data-nav aria-label="Patch">
+      <option value="">All patches</option>
+      {% for p, n in patches %}<option value="{{ p }}"{{ ' selected' if patch == p }}>Patch {{ p }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="kpis">
+    <div class="kpi"><span>Win rate</span><b>{{ wr(s.win_rate) }}</b></div>
+    <div class="kpi"><span>Pick rate</span><b>{{ '%.1f'|format(s.pick_rate) }}%</b></div>
+    <div class="kpi"><span>Ban rate</span><b>{{ '%.1f'|format(s.ban_rate) }}%</b></div>
+    <div class="kpi"><span>Games</span><b>{{ '{:,}'.format(s.games) }}</b></div>
+    <div class="kpi"><span>KDA</span><b>{{ '%.2f'|format(s.kda) }}</b></div>
+    <div class="kpi"><span>CS / min</span><b>{{ '%.1f'|format(s.cs_min) }}</b></div>
+    <div class="kpi"><span>Damage / min</span><b>{{ '{:,}'.format(s.dmg_min|round|int) }}</b></div>
+  </div>
+
+  <div class="cols-2">
+    <div class="panel">
+      <div class="panel-head">Runes <span class="muted small">most played</span></div>
+      <div class="panel-body">
+        {% if page %}
+        <div class="runepage" style="margin-bottom:12px">
+          {% for st in page.styles %}
+          <div class="style"><h4><img src="{{ st.icon }}" alt="" loading="lazy">{{ st.name }}</h4>
+            {% for row in st.rows %}<div class="rrow{{ ' keys' if loop.first and loop.length == 4 }}">{% for r in row %}<img class="{{ 'on' if r.on }}" src="{{ r.icon }}" alt="{{ r.name }}" data-tip="{{ r.name }}{% if r.text %}&#10;{{ r.text }}{% endif %}" loading="lazy">{% endfor %}</div>{% endfor %}
+          </div>
+          {% endfor %}
+          {% if page.shards %}<div class="shards"><h4 style="margin:0 0 4px">Shards</h4>{% for sh in page.shards %}<span>{{ sh.name }}</span>{% endfor %}</div>{% endif %}
+        </div>
+        {% endif %}
+        {% for r in runes %}
+        <div class="build-row">
+          <div class="its"><div class="slot" style="border-radius:50%;background:#000" data-tip="{{ r.keystone }}"><img src="{{ r.keystone_icon }}" alt="" loading="lazy"></div><div class="slot" style="width:24px;height:24px" data-tip="{{ r.primary }}"><img src="{{ r.primary_icon }}" alt="" loading="lazy"></div><div class="slot" style="width:24px;height:24px" data-tip="{{ r.sub }}"><img src="{{ r.sub_icon }}" alt="" loading="lazy"></div><span class="small">{{ r.keystone }} + {{ r.sub }}</span></div>
+          <div class="rt"><b>{{ wr(r.win_rate) }}</b><span class="muted">{{ r.games }} games &middot; {{ r.pick_rate|round|int }}%</span></div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">Summoner spells &amp; skills</div>
+      <div class="panel-body">
+        {% for sp in spells %}
+        <div class="build-row"><div class="its">{% for x in sp.spells %}<div class="slot" data-tip="{{ x.name }}{% if x.text %}&#10;{{ x.text }}{% endif %}"><img src="{{ x.icon }}" alt="{{ x.name }}" loading="lazy"></div>{% endfor %}</div>
+          <div class="rt"><b>{{ wr(sp.win_rate) }}</b><span class="muted">{{ sp.games }} games &middot; {{ sp.pick_rate|round|int }}%</span></div></div>
+        {% endfor %}
+        {% for m in skill_max %}
+        <div class="build-row"><div class="its">{% for k in m.order %}<span class="tier-b" style="background:var(--accent)">{{ k }}</span>{% if not loop.last %}<span class="arrow">&rsaquo;</span>{% endif %}{% endfor %}<span class="small muted" style="margin-left:6px">skill max order</span></div>
+          <div class="rt"><b>{{ wr(m.win_rate) }}</b><span class="muted">{{ m.games }} games &middot; {{ m.pick_rate|round|int }}%</span></div></div>
+        {% endfor %}
+        {% if skill_grid %}
+        <div class="skills" style="margin-top:12px">
+          {% for row in skill_grid %}<div class="k">{{ row.key }}</div>{% for lvl in range(1, 16) %}<div class="c{{ ' on' if lvl in row.levels }}{{ ' r' if row.key == 'R' }}">{{ lvl if lvl in row.levels }}</div>{% endfor %}{% for _ in range(3) %}<div></div>{% endfor %}{% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="cols-2" style="margin-top:12px">
+    <div class="panel">
+      <div class="panel-head">Core builds <span class="muted small">first three finished items</span></div>
+      <div class="panel-body">
+        {% for b in core %}
+        <div class="build-row"><div class="its">{% for it in b['items'] %}{{ item_slot(it) }}{% if not loop.last %}<span class="arrow">&rsaquo;</span>{% endif %}{% endfor %}</div>
+          <div class="rt"><b>{{ wr(b.win_rate) }}</b><span class="muted">{{ b.games }} games &middot; {{ b.pick_rate|round|int }}%</span></div></div>
+        {% else %}<p class="muted">Not enough timelines for this filter.</p>{% endfor %}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">Starting items &amp; boots</div>
+      <div class="panel-body">
+        {% for b in starting %}
+        <div class="build-row"><div class="its">{% for it in b['items'] %}{{ item_slot(it) }}{% endfor %}</div>
+          <div class="rt"><b>{{ wr(b.win_rate) }}</b><span class="muted">{{ b.games }} games &middot; {{ b.pick_rate|round|int }}%</span></div></div>
+        {% endfor %}
+        {% for b in boots %}
+        <div class="build-row"><div class="its">{{ item_slot(b.item) }}<span class="small">{{ b.item.name }}</span></div>
+          <div class="rt"><b>{{ wr(b.win_rate) }}</b><span class="muted">{{ b.games }} games &middot; {{ b.pick_rate|round|int }}%</span></div></div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  {% if late %}
+  <div class="panel" style="margin-top:12px">
+    <div class="panel-head">Later items <span class="muted small">by slot</span></div>
+    <div class="panel-body cols-2" style="grid-template-columns:repeat(3,1fr)">
+      {% for slot in late %}
+      <div><div class="muted small" style="margin-bottom:6px;font-weight:700">{{ slot.label }}</div>
+        {% for b in slot['items'] %}<div class="build-row"><div class="its">{{ item_slot(b.item) }}<span class="small">{{ b.item.name }}</span></div><div class="rt"><b>{{ wr(b.win_rate) }}</b><span class="muted">{{ b.games }}</span></div></div>{% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="cols-2" style="margin-top:12px">
+    <div class="panel">
+      <div class="panel-head">Toughest matchups <span class="muted small">lane opponents</span></div>
+      <div class="panel-body vs-list">
+        {% for v in counters %}<a class="vs" href="/champions/{{ v.slug }}"><img src="{{ v.icon }}" alt="" loading="lazy"><div><b>{{ v.name }}</b><span class="loss-text">{{ v.win_rate|round|int }}% WR</span> <span>&middot; {{ v.games }}</span></div></a>
+        {% else %}<p class="muted">Not enough games against any one champion yet.</p>{% endfor %}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">Best matchups</div>
+      <div class="panel-body vs-list">
+        {% for v in best %}<a class="vs" href="/champions/{{ v.slug }}"><img src="{{ v.icon }}" alt="" loading="lazy"><div><b>{{ v.name }}</b><span class="wr-hi">{{ v.win_rate|round|int }}% WR</span> <span>&middot; {{ v.games }}</span></div></a>
+        {% else %}<p class="muted">Not enough games against any one champion yet.</p>{% endfor %}
+      </div>
+    </div>
+  </div>
+
+  {% if abilities %}
+  <div class="panel" style="margin-top:12px">
+    <div class="panel-head">Abilities</div>
+    <div class="panel-body">
+      {% for a in abilities %}
+      <div class="ability"><div class="slot"><img src="{{ a.icon }}" alt="" loading="lazy"><span>{{ a.key }}</span></div><div><b>{{ a.name }}</b>{% if a.cooldown %}<span class="muted small"> &middot; cooldown {{ a.cooldown }}s</span>{% endif %}<p>{{ a.text }}</p></div></div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, rank_card, wr, pos_icon %}
+{% block title %}{{ shown }} - Match History & Stats | RiftWatch{% endblock %}
+{% block description %}{{ shown }}'s League of Legends match history, ranked stats, champion stats and coaching on RiftWatch.{% endblock %}
+{% block content %}
+<div data-profile="{{ profile_json }}" hidden></div>
+<section class="profile-top">
+  <div class="container">
+    <div class="profile-head">
+      <div class="avatar">
+        <img src="{{ head.icon if head else gd.profile_icon(None) }}" alt="">
+        {% if head and head.level %}<span class="lv">{{ head.level }}</span>{% endif %}
+      </div>
+      <div class="who">
+        <h1>{{ name }} <span class="tag">#{{ tag }}</span></h1>
+        <div class="meta-line">
+          <span class="reg">{{ region|upper }}</span>
+          {% if head and head.updated %}<span>Updated {{ head.updated }}</span>{% endif %}
+          {% if games_cached %}<span>&middot; {{ '{:,}'.format(games_cached) }} games on RiftWatch</span>{% endif %}
+        </div>
+        <div class="actions">
+          <button class="btn primary" data-sync="{{ sync_url }}" type="button">{{ icon('refresh') }} Update</button>
+          <a class="btn" href="?tab=live">{{ icon('live') }} Live game</a>
+          <button class="btn star" id="fav" type="button" aria-label="Favourite">{{ icon('star') }}</button>
+          <button class="btn" data-copy type="button" aria-label="Copy link">{{ icon('link') }}</button>
+          <span class="status" id="sync-status"></span>
+        </div>
+      </div>
+      {% if solo %}
+      <div class="head-rank">
+        <img src="{{ solo.crest }}" alt="" loading="lazy">
+        <div><span class="muted small">Ranked Solo/Duo</span><b class="t-{{ solo.key }}">{{ solo.tier }} {{ solo.division }}</b><span class="small muted">{{ solo.lp }} LP &middot; {{ solo.win_rate }}% WR</span></div>
+      </div>
+      {% endif %}
+    </div>
+    {% if synced %}
+    <nav class="tabs">
+      <a href="?tab=overview" class="{{ 'on' if tab == 'overview' }}">Overview</a>
+      <a href="?tab=champions" class="{{ 'on' if tab == 'champions' }}">Champions</a>
+      <a href="?tab=coach" class="{{ 'on' if tab == 'coach' }}">AI Coach</a>
+      <a href="?tab=live" class="{{ 'on' if tab == 'live' }}">Live Game</a>
+    </nav>
+    {% endif %}
+  </div>
+</section>
+
+<div class="container">
+{% if not synced and tab != 'live' %}
+  <div class="panel" data-autosync="{{ sync_url }}" style="margin:32px auto;max-width:640px">
+    <div class="empty">
+      <span class="spinner"></span>
+      <h3 id="auto-title">Loading {{ shown }} from Riot</h3>
+      <p id="auto-status" class="muted">Looking up the account and downloading recent games...</p>
+      <p id="auto-retry" hidden><button class="btn primary" type="button" onclick="location.reload()">Try again</button></p>
+    </div>
+  </div>
+
+{% elif tab == 'overview' %}
+  <div class="profile-grid">
+    <aside>
+      {{ rank_card(solo, 'Ranked Solo/Duo') }}
+      <div style="height:12px"></div>
+      {{ rank_card(flex, 'Ranked Flex') }}
+      {% if season %}
+      <div class="panel" style="margin-top:12px">
+        <div class="panel-head">Season {{ year }} champions <a class="muted small" href="?tab=champions">All &rarr;</a></div>
+        <div class="panel-body" style="padding-top:6px;padding-bottom:6px">
+          <table class="mini-table">
+          {% for c in season[:7] %}
+            <tr>
+              <td><a class="champ-cell" href="/champions/{{ c.slug }}"><img src="{{ c.icon }}" alt="" loading="lazy"><div><b>{{ c.name }}</b><span>CS {{ c.cs_min }}/min</span></div></a></td>
+              <td class="r"><b>{{ c.kda }}{% if c.kda != 'Perfect' %}:1{% endif %}</b><span class="muted">{{ c.kills }} / {{ c.deaths }} / {{ c.assists }}</span></td>
+              <td class="r"><b>{{ wr(c.win_rate) }}</b><span class="muted">{{ c.games }} games</span></td>
+            </tr>
+          {% endfor %}
+          </table>
+        </div>
+      </div>
+      {% endif %}
+      {% if friends %}
+      <div class="panel" style="margin-top:12px">
+        <div class="panel-head">Recently played with <span class="muted small">last 60 games</span></div>
+        <div class="panel-body" style="padding-top:6px;padding-bottom:6px">
+          <table class="mini-table">
+          {% for f in friends %}
+            <tr>
+              <td>{% if f.url %}<a href="{{ f.url }}"><b>{{ f.name }}</b> <span class="muted">#{{ f.tag }}</span></a>{% else %}<b>{{ f.name }}</b>{% endif %}</td>
+              <td class="r">{{ f.games }} games</td>
+              <td class="r">{{ f.wins }}W {{ f.losses }}L <b>{{ wr(f.win_rate) }}</b></td>
+            </tr>
+          {% endfor %}
+          </table>
+        </div>
+      </div>
+      {% endif %}
+    </aside>
+    <div>
+      <div class="panel">
+        <div class="filters">
+          <div class="pills">
+            {% for key, label in queues %}<a href="?tab=overview&amp;queue={{ key }}" class="{{ 'on' if queue == key }}">{{ label }}</a>{% endfor %}
+          </div>
+          <span class="muted small">Recent {{ summary.games if summary else 0 }} games</span>
+        </div>
+        {% if summary %}
+        <div class="summary">
+          <div class="donut-wrap">
+            <svg class="donut" viewBox="0 0 42 42" role="img" aria-label="{{ summary.win_rate }}% wins">
+              <circle class="base" cx="21" cy="21" r="15.9" fill="none" stroke-width="5"/>
+              <circle class="val" cx="21" cy="21" r="15.9" fill="none" stroke-width="5" stroke-dasharray="{{ summary.win_rate }} {{ 100 - summary.win_rate }}" stroke-dashoffset="25" stroke-linecap="butt"/>
+              <text x="21" y="24" text-anchor="middle">{{ summary.win_rate }}%</text>
+            </svg>
+            <div class="kda-big">
+              {{ summary.games }}G {{ summary.wins }}W {{ summary.losses }}L
+              <b>{{ summary.kills }} / <span class="loss-text">{{ summary.deaths }}</span> / {{ summary.assists }}</b>
+              <span class="ratio">{{ summary.kda }}{% if summary.kda != 'Perfect' %}:1{% endif %}</span> <span class="loss-text">P/Kill {{ summary.kp }}%</span>
+            </div>
+          </div>
+          <div class="sum-champs">
+            {% for c in summary.champions %}
+            <div class="c"><img src="{{ c.icon }}" alt="" loading="lazy"><b>{{ c.name }}</b> {{ wr(c.win_rate) }} <span class="muted">({{ c.wins }}W {{ c.losses }}L) {{ c.kda }} KDA</span></div>
+            {% endfor %}
+          </div>
+          <div>
+            <div class="muted small" style="text-align:center;margin-bottom:6px">Preferred position</div>
+            <div class="roles">
+              {% for p in summary.positions %}
+              <div class="r" title="{{ p.name }} {{ p.share }}%"><div class="bar"><i style="height:{{ p.share }}%"></i></div>{{ pos_icon(gd, p.key) }}</div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+      <div class="matches" id="match-list" style="margin-top:12px">
+        {% include "_match_rows.html" %}
+      </div>
+      {% if not rows %}
+      <div class="panel empty" style="margin-top:12px"><h3>No games here yet</h3><p>Try another queue, or press Update to download the newest games.</p></div>
+      {% elif rows|length >= 20 %}
+      <button class="btn more" type="button" data-more="{{ more_url }}" data-offset="{{ rows|length }}">Show more games</button>
+      {% endif %}
+    </div>
+  </div>
+
+{% elif tab == 'champions' %}
+  <div class="panel" style="margin:16px 0 40px">
+    <div class="toolbar">
+      <b>Season {{ year }} champion stats</b>
+      <div class="pills">
+        {% for key, label in champ_queues %}<a href="?tab=champions&amp;cq={{ key }}" class="{{ 'on' if cq == key }}">{{ label }}</a>{% endfor %}
+      </div>
+    </div>
+    {% if season %}
+    <div class="scroll">
+    <table class="data" data-renumber>
+      <thead><tr><th class="l">#</th><th class="l" data-sort>Champion</th><th data-sort>Games</th><th data-sort>Win rate</th><th data-sort>KDA</th><th data-sort>Kills</th><th data-sort>Deaths</th><th data-sort>Assists</th><th data-sort>P/Kill</th><th data-sort>CS/min</th><th data-sort>Damage/min</th><th data-sort>Gold/min</th><th data-sort>Vision</th><th data-sort>Multikills</th></tr></thead>
+      <tbody>
+      {% for c in season %}
+        <tr>
+          <td class="rank">{{ loop.index }}</td>
+          <td class="l" data-v="{{ c.name }}"><a class="champ-cell" href="/champions/{{ c.slug }}"><img src="{{ c.icon }}" alt="" loading="lazy"><b>{{ c.name }}</b></a></td>
+          <td data-v="{{ c.games }}">{{ c.games }} <span class="muted small">{{ c.wins }}W {{ c.losses }}L</span></td>
+          <td data-v="{{ c.win_rate }}"><div class="bar-cell">{{ wr(c.win_rate) }}<div class="bar"><i style="width:{{ c.win_rate }}%"></i></div></div></td>
+          <td data-v="{{ c.kda_value }}"><b>{{ c.kda }}</b></td>
+          <td>{{ c.kills }}</td><td>{{ c.deaths }}</td><td>{{ c.assists }}</td>
+          <td data-v="{{ c.kp }}">{{ c.kp }}%</td><td>{{ c.cs_min }}</td><td>{{ '{:,}'.format(c.dmg_min) }}</td><td>{{ c.gold_min }}</td><td>{{ c.vision }}</td>
+          <td data-v="{{ c.pentas * 1000000 + c.quadras * 10000 + c.triples * 100 + c.doubles }}" data-tip="Multikills&#10;{{ c.pentas }} penta, {{ c.quadras }} quadra, {{ c.triples }} triple, {{ c.doubles }} double kills">
+            {%- if c.pentas %}<span class="badge multi">Penta &times;{{ c.pentas }}</span>{% elif c.quadras %}<span class="badge multi">Quadra &times;{{ c.quadras }}</span>{% elif c.triples %}Triple &times;{{ c.triples }}{% elif c.doubles %}<span class="muted">Double &times;{{ c.doubles }}</span>{% else %}<span class="muted">-</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}<div class="empty"><h3>No games this season in this queue</h3></div>{% endif %}
+  </div>
+
+{% elif tab == 'coach' %}
+  <div class="coach-wrap" style="margin:6px 0 40px">
+    {% if coaching %}<h2>AI coaching on recent games</h2><div class="card coach">{{ coaching|safe }}</div>
+    {% else %}<div class="panel empty" style="margin-top:16px"><h3>Not enough analysed games yet</h3><p>Coaching needs at least a few ranked or draft games with their timelines. Press Update to download them.</p></div>{% endif %}
+    {{ progress_html|safe }}
+    {{ sessions_html|safe }}
+    {{ pool_html|safe }}
+  </div>
+
+{% elif tab == 'live' %}
+  <div style="margin:16px 0 40px">
+    {% if live %}
+      <div class="panel" style="margin-bottom:12px"><div class="panel-head">{{ live.queue }} &middot; {{ live.platform|upper }} &middot; {{ live.clock }} in when scouted
+        <button class="btn" data-scout="{{ scout_url }}" type="button">{{ icon('refresh') }} Refresh</button></div></div>
+      {% for team in live.teams %}
+      <div class="panel live-team">
+        <div class="team-head {{ 'win' if team.id == 100 else 'loss' }}"><span class="res">{{ team.label }}</span>
+          {% if team.bans %}<span class="bans">Bans {% for b in team.bans %}<img src="{{ b.icon }}" alt="{{ b.name }}" data-tip="{{ b.name }}" loading="lazy">{% endfor %}</span>{% endif %}</div>
+        <div class="scroll"><table class="data">
+          <thead><tr><th class="l">Player</th><th class="l">Champion</th><th class="l">Ranked Solo</th><th>Last games</th><th>On this champion</th><th>Mastery</th></tr></thead>
+          <tbody>
+          {% for p in team.players %}
+            <tr class="live-row{{ ' me' if p.me }}">
+              <td class="l">{% if p.me %}<strong>{{ p.name }}</strong>{% elif p.url %}<a href="{{ p.url }}"><b>{{ p.name }}</b></a>{% else %}<b>{{ p.name }}</b>{% endif %}
+                {% if p.flags %}<div class="flags">{% for f in p.flags %}<span class="flag">{{ f }}</span>{% endfor %}</div>{% endif %}</td>
+              <td class="l"><div class="champ-cell"><img src="{{ p.icon }}" alt="" loading="lazy"><b>{{ p.champion }}</b></div></td>
+              <td class="l">{% if p.rank %}<span class="t-{{ p.rank_key }}"><b>{{ p.rank }}</b></span> <span class="muted small">{{ p.lp }} LP &middot; {{ p.season }}</span>{% else %}<span class="muted">Unranked</span>{% endif %}</td>
+              <td>{{ p.recent }}<div class="muted small">{{ p.role }}</div></td>
+              <td>{{ p.champ_games }}</td>
+              <td>{{ p.mastery }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table></div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="panel empty">
+        {{ icon('live') }}
+        <h3>{{ live_error or ('Is ' ~ name ~ ' in a game right now?') }}</h3>
+        <p>Scouting looks up the ranks, recent form, mains and champion experience of all ten players.</p>
+        <p><button class="btn primary" data-scout="{{ scout_url }}" type="button">Scout live game</button> <span class="status" id="scout-status"></span></p>
+      </div>
+    {% endif %}
+  </div>
+{% endif %}
+</div>
+{% endblock %}
+{% block scripts %}{% if tab == 'coach' %}<script>{{ action_js|safe }}</script>{% endif %}{% endblock %}

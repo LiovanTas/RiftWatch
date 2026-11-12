@@ -1,0 +1,52 @@
+{% from "_macros.html" import icon, item_slot, spell_slot, rune_slot %}
+{% for m in rows %}
+<article class="match {{ m.result_key }}">
+  <div class="row">
+    <div class="m-info">
+      <div class="q">{{ m.queue }}</div>
+      <div title="{{ m.date }}">{{ m.when }}</div>
+      <hr>
+      <div class="res">{{ m.result }}</div>
+      <div>{{ m.duration }}</div>
+    </div>
+    <div class="m-champ">
+      <div class="loadout">
+        <a class="portrait" href="/champions/{{ m.champion_slug }}" data-tip="{{ m.champion }}"><img src="{{ m.champion_icon }}" alt="{{ m.champion }}" loading="lazy"><span class="lvl">{{ m.level }}</span></a>
+        <div class="sr">{{ spell_slot(m.spells[0]) }}{{ rune_slot(m.keystone) }}{{ spell_slot(m.spells[1]) }}{{ rune_slot(m.sub_style) }}</div>
+      </div>
+      <div class="kda">
+        <div class="line">{{ m.kills }} / <span class="d">{{ m.deaths }}</span> / {{ m.assists }}</div>
+        <div class="ratio"><b>{{ m.kda }}</b>{% if m.kda != 'Perfect' %}:1{% endif %} KDA</div>
+      </div>
+      <div class="tags">
+        {% if m.multikill %}<span class="badge multi">{{ m.multikill }}</span>{% endif %}
+        {% if m.badge %}<span class="badge {{ m.badge|lower }}" data-tip="{{ m.badge }}&#10;{{ 'Best performance on the winning team' if m.badge == 'MVP' else 'Best performance on the losing team' }}">{{ m.badge }}</span>
+        {% elif m.result_key != 'remake' %}<span class="badge rank" data-tip="Performance {{ m.rank_in_game|ordinal }} of 10&#10;KDA, kill share, damage, gold, farm and vision, against everyone in this game">{{ m.rank_in_game|ordinal }}</span>{% endif %}
+      </div>
+    </div>
+    <div class="m-stats">
+      <div class="kp">P/Kill {{ m.kp }}%</div>
+      <div>Control ward {{ m.control_wards }}</div>
+      <div>CS {{ m.cs }} ({{ m.cs_min }})</div>
+      <div>Score {{ m.score }}</div>
+    </div>
+    <div class="m-items">
+      <div class="grid">
+        {{ item_slot(m['items'][0]) }}{{ item_slot(m['items'][1]) }}{{ item_slot(m['items'][2]) }}{{ item_slot(m.trinket) }}
+        {{ item_slot(m['items'][3]) }}{{ item_slot(m['items'][4]) }}{{ item_slot(m['items'][5]) }}
+      </div>
+    </div>
+    <div class="m-teams">
+      {% for team in (m.blue, m.red) %}
+      <div>
+        {% for p in team %}
+        <div class="p{{ ' me' if p.me }}"><img src="{{ p.icon }}" alt="" loading="lazy" data-tip="{{ p.champion }}">{% if p.url and not p.me %}<a href="{{ p.url }}">{{ p.name }}</a>{% else %}<span>{{ p.name }}</span>{% endif %}</div>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+    <button class="m-expand" type="button" data-detail="{{ detail_base }}/{{ m.match_id }}" aria-label="Show the full game">{{ icon('chevron') }}</button>
+  </div>
+  <div class="m-detail"></div>
+</article>
+{% endfor %}

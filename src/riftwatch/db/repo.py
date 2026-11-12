@@ -173,16 +173,23 @@ def insert_match(conn: psycopg.Connection, raw: dict[str, Any]) -> None:
                     for p in info["participants"]
                 ],
             )
+        from riftwatch.stats import extract
+
+        extract.save_match(conn, raw)
 
 
 def insert_timeline(conn: psycopg.Connection, match_id: str, raw: dict[str, Any]) -> None:
-    conn.execute(
+    cur = conn.execute(
         """
         INSERT INTO match_timelines (match_id, raw) VALUES (%s, %s)
         ON CONFLICT (match_id) DO NOTHING
         """,
         (match_id, Jsonb(raw)),
     )
+    if cur.rowcount:
+        from riftwatch.stats import extract
+
+        extract.save_timeline(conn, match_id, extract.timeline_events(raw))
 
 
 def mark_sample(conn: psycopg.Connection, match_id: str, bucket: str, source: str) -> None:

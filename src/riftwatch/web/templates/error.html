@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% from "_macros.html" import search_form %}
+{% block title %}{{ title }} | RiftWatch{% endblock %}
+{% block content %}
+<div class="container" style="max-width:720px">
+  <div class="panel empty" style="margin:48px 0">
+    <h3 style="font-size:22px">{{ title }}</h3>
+    <p>{{ message }}</p>
+    <div style="max-width:520px;margin:20px auto 0">{{ search_form(regions, region) }}</div>
+  </div>
+</div>
+{% endblock %}

@@ -25,11 +25,27 @@ services:
     volumes:
       - ./out/ml/models:/app/models:ro
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"     # only this machine; the public reaches it through caddy
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
 
+  # HTTPS for a public server with a domain pointed at it (certificates are automatic):
+  #   SITE_DOMAIN=riftwatch.example.com docker compose --profile https up -d --build
+  caddy:
+    image: caddy:2
+    profiles: ["https"]
+    command: caddy reverse-proxy --from ${SITE_DOMAIN:-localhost} --to web:8000
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+    depends_on:
+      - web
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  caddy_data:

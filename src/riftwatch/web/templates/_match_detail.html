@@ -1,0 +1,98 @@
+{% from "_macros.html" import item_slot, spell_slot, rune_slot %}
+<div class="detail-root">
+  <div class="d-tabs">
+    <button class="on" type="button" data-pane="overview">Overview</button>
+    {% if d.me %}<button type="button" data-pane="build">Build</button>{% endif %}
+    {% if d.gold_chart %}<button type="button" data-pane="gold">Gold graph</button>{% endif %}
+    {% if analysis_url %}<a class="btn" style="margin:0 0 6px auto" href="{{ analysis_url }}">RiftWatch analysis &rarr;</a>{% endif %}
+  </div>
+  <div class="d-pane on" data-pane="overview">
+    {% for t in d.teams %}
+    <div class="team-head {{ 'win' if t.win else 'loss' }}">
+      <span class="res">{{ 'Victory' if t.win else 'Defeat' }}</span>
+      <span>({{ t.label }})</span>
+      <span class="muted">{{ t.kills }} / {{ t.deaths }} / {{ t.assists }}</span>
+      {% if t.bans %}<span class="bans"><span class="muted small">Bans</span>{% for b in t.bans %}<img src="{{ b.icon }}" alt="{{ b.name }}" data-tip="{{ b.name }}" loading="lazy">{% endfor %}</span>{% endif %}
+      <div class="obj">
+        {% for o in t.objectives %}<span>{{ o.name }} <b>{{ o.kills }}</b></span>{% endfor %}
+        <span>Gold <b>{{ '%.1f'|format(t.gold / 1000) }}k</b></span>
+      </div>
+    </div>
+    <div class="scroll">
+    <table class="board">
+      <thead><tr><th>Champion</th><th>Player</th><th>Score</th><th>KDA</th><th>Damage</th><th>Taken</th><th>Wards</th><th>CS</th><th>Gold</th><th>Items</th></tr></thead>
+      <tbody>
+      {% for p in t.players %}
+      <tr class="{{ 'me' if p.me }}">
+        <td><div class="b-champ">
+          <a class="portrait" href="/champions/{{ p.champion_slug }}" data-tip="{{ p.champion }}"><img src="{{ p.champion_icon }}" alt="{{ p.champion }}" loading="lazy"><span class="lvl">{{ p.level }}</span></a>
+          <div class="sr">{{ spell_slot(p.spells[0]) }}{{ rune_slot(p.keystone) }}{{ spell_slot(p.spells[1]) }}{{ rune_slot(p.sub_style) }}</div>
+        </div></td>
+        <td>{% if p.url and not p.me %}<a class="b-name" href="{{ p.url }}">{{ p.name }}</a>{% else %}<span class="b-name">{{ p.name }}</span>{% endif %}
+          <span class="muted small">{{ p.position_name }}</span></td>
+        <td>{% if p.badge %}<span class="badge {{ p.badge|lower }}">{{ p.badge }}</span>{% else %}<b>{{ p.score }}</b>{% endif %}</td>
+        <td><b>{{ p.kills }}/{{ p.deaths }}/{{ p.assists }}</b> <span class="muted">({{ p.kp }}%)</span><div class="muted small">{{ p.kda }}{% if p.kda != 'Perfect' %}:1{% endif %}</div></td>
+        <td class="dmg">{{ '{:,}'.format(p.damage) }}<div class="bar"><i style="width:{{ p.damage_pct }}%"></i></div></td>
+        <td class="dmg">{{ '{:,}'.format(p.damage_taken) }}<div class="bar taken"><i style="width:{{ p.taken_pct }}%"></i></div></td>
+        <td data-tip="Wards&#10;{{ p.control_wards }} control wards bought, {{ p.wards_placed }} placed, {{ p.wards_killed }} destroyed">{{ p.control_wards }}<div class="muted small">{{ p.wards_placed }} / {{ p.wards_killed }}</div></td>
+        <td>{{ p.cs }}<div class="muted small">{{ p.cs_min }}/m</div></td>
+        <td>{{ '%.1f'|format(p.gold / 1000) }}k</td>
+        <td><div class="b-items">{% for it in p['items'] %}{{ item_slot(it) }}{% endfor %}{{ item_slot(p.trinket) }}</div></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% endfor %}
+  </div>
+  {% if d.me %}
+  <div class="d-pane" data-pane="build">
+    <div class="detail-grid">
+      <div>
+        <h4>Item build</h4>
+        {% if d.me.build %}
+        <div class="build-steps">
+          {% for s in d.me.build %}
+          <div class="step"><div class="its">{% for it in s['items'] %}<div class="slot" data-tip="{{ it.name }}{% if it.text %}&#10;{{ it.text }}{% endif %}"><img src="{{ it.icon }}" alt="{{ it.name }}" loading="lazy"></div>{% endfor %}</div><span>{{ s.minute }} min</span></div>
+          {% if not loop.last %}<span class="arrow">&rsaquo;</span>{% endif %}
+          {% endfor %}
+        </div>
+        {% else %}<p class="muted">The timeline for this game isn't stored.</p>{% endif %}
+      </div>
+      {% if d.me.skill_order %}
+      <div>
+        <h4>Skill order</h4>
+        <div class="skills">
+          {% for row in d.me.skills %}
+          <div class="k">{{ row.key }}</div>
+          {% for lvl in range(1, 19) %}<div class="c{{ ' on' if lvl in row.levels }}{{ ' r' if row.key == 'R' }}">{{ lvl if lvl in row.levels }}</div>{% endfor %}
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+      {% if d.me.runes %}
+      <div>
+        <h4>Runes</h4>
+        <div class="runepage">
+          {% for st in d.me.runes.styles %}
+          <div class="style">
+            <h4><img src="{{ st.icon }}" alt="" loading="lazy">{{ st.name }}</h4>
+            {% for row in st.rows %}
+            <div class="rrow{{ ' keys' if loop.first and loop.length == 4 }}">{% for r in row %}<img class="{{ 'on' if r.on }}" src="{{ r.icon }}" alt="{{ r.name }}" data-tip="{{ r.name }}{% if r.text %}&#10;{{ r.text }}{% endif %}" loading="lazy">{% endfor %}</div>
+            {% endfor %}
+          </div>
+          {% endfor %}
+          {% if d.me.runes.shards %}<div class="shards"><h4 style="margin:0 0 4px">Shards</h4>{% for s in d.me.runes.shards %}<span>{{ s.name }}</span>{% endfor %}</div>{% endif %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+  {% if d.gold_chart %}
+  <div class="d-pane" data-pane="gold">
+    <h4 style="margin:0 0 8px;font-size:13px;color:var(--text-2)">Team gold lead &middot; blue above the line, red below</h4>
+    {{ d.gold_chart|safe }}
+  </div>
+  {% endif %}
+</div>

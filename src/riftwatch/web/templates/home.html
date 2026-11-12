@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, search_form, tier_badge, wr %}
+{% block content %}
+<section class="hero">
+  <div class="glow"></div>
+  <div class="container">
+    <h1>Know your games.<br><b>Win your next one.</b></h1>
+    <p class="lead">Match history, ranked stats and builds for any player, plus coaching that compares every minute of your game with players at your rank.</p>
+    {{ search_form(regions, region, big=True) }}
+    {% if error %}<p class="loss-text" style="margin-top:12px;position:relative">{{ error }}</p>{% endif %}
+    <div class="chips" id="recent-chips"></div>
+  </div>
+</section>
+<div class="container">
+  <div class="stats-strip">
+    <div><b class="num">{{ '{:,}'.format(stats.games) }}</b><span>Games analysed</span></div>
+    <div><b class="num">{{ '{:,}'.format(stats.players) }}</b><span>Players seen</span></div>
+    <div><b class="num">{{ stats.champions }}</b><span>Champions</span></div>
+    <div><b>{{ stats.patch }}</b><span>Patch</span></div>
+  </div>
+
+  {% if top_champions %}
+  <div class="section-title"><h2>Strongest champions right now</h2><a href="/champions">Full tier list &rarr;</a></div>
+  <div class="champ-strip">
+    {% for c in top_champions %}
+    <a class="champ-tile" href="/champions/{{ c.slug }}?role={{ c.position|lower }}">
+      <img src="{{ c.icon }}" alt="" loading="lazy">
+      <b>{{ c.name }}</b>
+      <span>{{ c.role }} &middot; {{ wr(c.win_rate) }}</span>
+      <div style="margin-top:6px">{{ tier_badge(c.tier) }}</div>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="section-title"><h2>What you get</h2></div>
+  <div class="features">
+    <div class="feature"><div class="ico" style="background:var(--accent-soft);color:var(--accent)">{{ icon('history') }}</div>
+      <h3>Full match history</h3><p>Every ranked and draft game: items, runes, KDA, CS, vision, multikills, MVP and ACE, all ten players, gold graphs, build and skill order.</p></div>
+    <div class="feature"><div class="ico" style="background:rgba(169,121,255,.15);color:var(--purple)">{{ icon('brain') }}</div>
+      <h3>AI coaching that shows its work</h3><p>Every minute of your game is scored against players at your rank in your role, and an AI coach explains it, citing only numbers it can prove.</p></div>
+    <div class="feature"><div class="ico" style="background:rgba(46,194,126,.15);color:var(--green)">{{ icon('chart') }}</div>
+      <h3>Progress and habits</h3><p>Week-by-week progress against a fixed yardstick, champion pool strengths, and whether you tilt late in a session or after losses.</p></div>
+    <div class="feature"><div class="ico" style="background:rgba(255,138,60,.15);color:var(--orange)">{{ icon('trophy') }}</div>
+      <h3>Champion tier lists and builds</h3><p>Win, pick and ban rates by role and rank, core builds, runes, skill orders and matchups from {{ '{:,}'.format(stats.ranked) }} ranked games.</p></div>
+    <div class="feature"><div class="ico" style="background:rgba(255,84,112,.15);color:var(--loss)">{{ icon('live') }}</div>
+      <h3>Live game scouting</h3><p>Ranks, recent form, mains and champion experience for all ten players in a game in progress.</p></div>
+    <div class="feature"><div class="ico" style="background:rgba(242,184,75,.15);color:var(--gold)">{{ icon('eye') }}</div>
+      <h3>Learned from high-elo video</h3><p>A laning model trained on Master+ replays tells you which trades high-elo players take, and which ones you missed.</p></div>
+  </div>
+</div>
+{% endblock %}

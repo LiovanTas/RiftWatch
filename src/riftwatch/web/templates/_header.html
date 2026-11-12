@@ -1,0 +1,13 @@
+{% from "_macros.html" import icon, logo, search_form %}
+<header class="site-header">
+  <div class="container">
+    <a class="logo" href="/">{{ logo() }}<span>Rift<b>Watch</b></span></a>
+    <nav class="site-nav">
+      <a href="/champions" class="{{ 'on' if nav == 'champions' }}">Champions</a>
+      <a href="/leaderboard/{{ region }}" class="{{ 'on' if nav == 'leaderboard' }}">Leaderboard</a>
+      <a href="/about" class="{{ 'on' if nav == 'about' }}">How it works</a>
+    </nav>
+    {% if nav != 'home' %}<div class="header-search">{{ search_form(regions, region) }}</div>{% else %}<div style="margin-left:auto"></div>{% endif %}
+    <button class="icon-btn" id="theme-toggle" type="button" aria-label="Switch light or dark theme">{{ icon('moon') }}</button>
+  </div>
+</header>

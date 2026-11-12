@@ -1,0 +1,537 @@
+"""The website's pages: home, player profiles with match history, champion tier list and
+champion pages, leaderboard, live-game scouting.
+
+Pages are rendered on the server from Jinja2 templates (``templates/``) with one stylesheet
+and one script (``static/``); images come from Riot's Data Dragon CDN. Expanding a game or
+loading more games fetches small HTML fragments, so a profile opens fast and stays light.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import threading
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlencode
+
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from jinja2 import Environment, PackageLoader, select_autoescape
+
+from riftwatch.coach.pipeline import ReportError, champion_pool, progress_report, recent_report, sessions_report
+from riftwatch.db import repo
+from riftwatch.riot.routing import UnknownRegion, parse_riot_id, platform_for
+from riftwatch.stats import champions as champ_stats
+from riftwatch.web import gamedata, pages, views
+
+REGIONS = pages.REGIONS
+PLATFORM_REGION = {"na1": "na", "euw1": "euw", "eun1": "eune", "kr": "kr", "br1": "br",
+                   "la1": "lan", "la2": "las", "oc1": "oce", "tr1": "tr", "jp1": "jp",
+                   "me1": "me", "sg2": "sg", "tw2": "tw", "vn2": "vn", "ru": "ru"}
+QUEUE_TABS = (("all", "All"), ("solo", "Ranked Solo"), ("flex", "Ranked Flex"), ("normal", "Normal"))
+CHAMP_QUEUES = (("ranked", "Ranked"), ("solo", "Solo/Duo"), ("flex", "Flex"), ("all", "All"))
+STATIC = Path(__file__).parent / "static"
+LEADERBOARD_S = 1800
+
+
+def _ordinal(n: int) -> str:
+    n = int(n)
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def _asset_version() -> str:
+    """Changes whenever a static file does, so browsers fetch the new stylesheet and script."""
+    stamp = "".join(f"{p.name}{p.stat().st_mtime_ns}" for p in sorted(STATIC.glob("*")))
+    return hashlib.sha1(stamp.encode()).hexdigest()[:10]
+
+
+def register(app: FastAPI, services, *, coach, advisor, brain,
+             gd: gamedata.GameData | None = None) -> None:
+    """Mount the website on ``app`` (the JSON API stays in app.py)."""
+    pool = services.pool
+    env = Environment(loader=PackageLoader("riftwatch.web", "templates"),
+                      autoescape=select_autoescape(["html"]), trim_blocks=True, lstrip_blocks=True)
+    env.filters["ordinal"] = _ordinal
+    app.mount("/static", StaticFiles(directory=STATIC), name="static")
+    state: dict[str, Any] = {"gd": gd}
+    boards: dict[str, tuple[float, dict]] = {}
+
+    def game_data() -> gamedata.GameData:
+        if state["gd"] is None:
+            state["gd"] = gamedata.shared()
+        return state["gd"]
+
+    def warm() -> None:
+        try:
+            game_data()
+        except Exception:
+            pass
+
+    threading.Thread(target=warm, name="game-data", daemon=True).start()
+
+    def render(template: str, status: int = 200, **ctx) -> HTMLResponse:
+        region = ctx.pop("region", None) or "na"
+        ctx.setdefault("positions", list(gamedata.POSITIONS.items()))
+        html = env.get_template(template).render(
+            regions=REGIONS, region=region, gd=game_data(), asset_version=_asset_version(), **ctx)
+        return HTMLResponse(html, status_code=status)
+
+    def error_page(title: str, message: str, status: int = 404, region: str = "na") -> HTMLResponse:
+        return render("error.html", status=status, title=title, message=message, region=region)
+
+    def region_or_none(region: str) -> str | None:
+        try:
+            return platform_for(region)
+        except UnknownRegion:
+            return None
+
+    def find_account(conn, region: str, riot_id: str):
+        platform = platform_for(region)
+        name, sep, tag = riot_id.rpartition("-")
+        if not sep or not name.strip() or not tag.strip():
+            raise HTTPException(400, "expected Name-TAG in the URL")
+        account = repo.find_account(conn, name.strip(), tag.strip())
+        if account is not None and account["platform"] != platform:
+            account = None
+        return name.strip(), tag.strip(), account
+
+    # -- home, search, about ----------------------------------------------------------------
+
+    @app.get("/", response_class=HTMLResponse)
+    def home() -> HTMLResponse:
+        gd = game_data()
+        with pool.connection() as conn:
+            games = conn.execute("SELECT count(*) FROM matches").fetchone()[0]
+            ranked = conn.execute("SELECT count(*) FROM matches WHERE queue_id = 420").fetchone()[0]
+            players = conn.execute(
+                "SELECT count(DISTINCT puuid) FROM participant_builds").fetchone()[0]
+            top = []
+            if ranked:
+                rows = champ_stats.tier_list(conn)["rows"]
+                for r in [r for r in rows if r["tier"] in ("S+", "S")][:12]:
+                    c = gd.champion(r["champion_id"])
+                    top.append({"name": c.name, "slug": c.slug, "icon": gd.champion_icon(c.id),
+                                "role": gamedata.POSITIONS.get(r["position"], ""),
+                                "position": r["position"], "tier": r["tier"],
+                                "win_rate": r["win_rate"]})
+        stats = {"games": games, "ranked": ranked, "players": players,
+                 "champions": len(gd.champions) or 170, "patch": ".".join(gd.version.split(".")[:2])}
+        return render("home.html", nav="home", stats=stats, top_champions=top)
+
+    @app.get("/search")
+    def search(region: str, riot_id: str):
+        try:
+            platform_for(region)
+            rid = parse_riot_id(riot_id)
+        except ValueError as exc:
+            return render("home.html", status=400, nav="home", error=str(exc),
+                          stats={"games": 0, "ranked": 0, "players": 0, "champions": 0,
+                                 "patch": ""}, top_champions=[])
+        return RedirectResponse(
+            f"/players/{region.lower()}/{views.path_id(rid.game_name, rid.tag_line)}", 303)
+
+    @app.get("/about", response_class=HTMLResponse)
+    def about() -> HTMLResponse:
+        with pool.connection() as conn:
+            ranked = conn.execute("SELECT count(*) FROM matches WHERE queue_id = 420").fetchone()[0]
+        return render("about.html", nav="about", ranked=ranked)
+
+    @app.get("/api/autocomplete")
+    def autocomplete(q: str = Query(..., min_length=1, max_length=40), region: str = "") -> dict[str, Any]:
+        """Players RiftWatch has seen whose Riot ID starts with ``q`` (``Name`` or ``Name#TA``)."""
+        gd = game_data()
+        name, _, tag = q.strip().partition("#")
+        if not name:
+            return {"players": []}
+        like = name.lower().replace("\\", "").replace("%", "").replace("_", "\\_") + "%"
+        tag_like = tag.lower().replace("%", "").replace("_", "\\_") + "%"
+        with pool.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT riot_name, riot_tag, platform, icon, games FROM (
+                  SELECT DISTINCT ON (puuid) puuid, riot_name, riot_tag,
+                         lower(split_part(match_id, '_', 1)) platform, profile_icon icon,
+                         count(*) OVER (PARTITION BY puuid) games
+                    FROM participant_builds
+                   WHERE lower(riot_name) LIKE %s AND lower(coalesce(riot_tag, '')) LIKE %s
+                   ORDER BY puuid, game_start DESC) seen
+                 ORDER BY (lower(riot_name) = %s) DESC, games DESC LIMIT 8
+                """, (like, tag_like, name.lower())).fetchall()
+        wanted = region.lower()
+        players = [{"name": n, "tag": t, "region": PLATFORM_REGION.get(p, p),
+                    "icon": gd.profile_icon(i)} for n, t, p, i, _ in rows if n and t]
+        players.sort(key=lambda p: p["region"] != wanted)
+        return {"players": players}
+
+    # -- player profile ---------------------------------------------------------------------
+
+    @app.get("/players/{region}/{riot_id}", response_class=HTMLResponse)
+    def player_page(region: str, riot_id: str, tab: str = "overview", queue: str = "all",
+                    cq: str = "ranked", job: str | None = None) -> HTMLResponse:
+        if region_or_none(region) is None:
+            return error_page("Unknown region", f"RiftWatch doesn't know the region {region!r}.")
+        region = region.lower()
+        gd = game_data()
+        tab = tab if tab in ("overview", "champions", "coach", "live") else "overview"
+        queue = queue if queue in views.QUEUE_FILTERS else "all"
+        cq = cq if cq in dict(CHAMP_QUEUES) else "ranked"
+        try:
+            with pool.connection() as conn:
+                name, tag, account = find_account(conn, region, riot_id)
+                base = {"region": region, "name": name, "tag": tag, "shown": f"{name}#{tag}",
+                        "sync_url": f"/api/players/{region}/{riot_id}/sync",
+                        "scout_url": f"/api/scout/{region}/{riot_id}", "tab": tab,
+                        "queue": queue, "queues": QUEUE_TABS, "cq": cq,
+                        "champ_queues": CHAMP_QUEUES, "year": datetime.now(UTC).year}
+                if account is None:
+                    base["profile_json"] = json.dumps({"region": region, "name": name, "tag": tag,
+                                                       "synced": False})
+                    live = _live_tab(job, region) if tab == "live" else {}
+                    return render("profile.html", synced=False, head=None, solo=None, **base, **live)
+                puuid = account["puuid"]
+                head = views.header(conn, gd, account)
+                name, tag = account["game_name"], account["tag_line"]
+                base.update(name=name, tag=tag, shown=f"{name}#{tag}")
+                ctx: dict[str, Any] = {
+                    "synced": True, "head": head,
+                    "solo": views.rank_card(repo.latest_rank(conn, puuid), gd),
+                    "flex": views.rank_card(repo.latest_rank(conn, puuid, "RANKED_FLEX_SR"), gd),
+                    "games_cached": conn.execute(
+                        "SELECT count(*) FROM participant_builds WHERE puuid = %s",
+                        (puuid,)).fetchone()[0],
+                    "profile_json": json.dumps({"region": region, "name": name, "tag": tag,
+                                                "icon": head["icon"], "synced": True}),
+                }
+                if tab == "overview":
+                    rows = views.match_rows(conn, gd, puuid, region, queue)
+                    ctx.update(rows=rows, summary=views.summary(rows),
+                               season=views.champion_stats(conn, gd, puuid, "ranked"),
+                               friends=views.played_with(conn, puuid, region),
+                               detail_base=f"/fragments/players/{region}/{riot_id}/matches",
+                               more_url=f"/fragments/players/{region}/{riot_id}/matches?queue={queue}")
+                elif tab == "champions":
+                    ctx["season"] = views.champion_stats(conn, gd, puuid, cq)
+                elif tab == "coach":
+                    ctx.update(_coach_tab(conn, puuid, region, riot_id))
+                elif tab == "live":
+                    ctx.update(_live_tab(job, region))
+        except HTTPException as exc:
+            return error_page("Not a Riot ID", str(exc.detail), 400, region)
+        return render("profile.html", **base, **ctx)
+
+    def _coach_tab(conn, puuid: str, region: str, riot_id: str) -> dict[str, Any]:
+        from riftwatch.report.html import ACTION_JS, coach_html
+
+        coach_url = (f"/api/players/{region}/{riot_id}/recent/coach/stream"
+                     if coach is not None else None)
+        out: dict[str, Any] = {"action_js": ACTION_JS}
+        try:
+            out["coaching"] = coach_html(recent_report(conn, puuid, coach=coach, generate=False),
+                                         coach_url)
+        except ReportError:
+            out["coaching"] = None
+        for key, build, html in (("progress_html", progress_report, pages.progress_html),
+                                 ("sessions_html", sessions_report, pages.sessions_html),
+                                 ("pool_html", champion_pool, pages.pool_html)):
+            try:
+                out[key] = html(build(conn, puuid))
+            except ReportError:
+                out[key] = ""
+        return out
+
+    def _live_tab(job_id: str | None, region: str) -> dict[str, Any]:
+        found = services.jobs.get(job_id) if job_id else None
+        if found is None or found.kind != "scout":
+            return {"live": None, "live_error": None}
+        if found.status == "failed":
+            return {"live": None, "live_error": found.error}
+        if found.status != "done":
+            return {"live": None, "live_error": "Still scouting -- refresh in a moment."}
+        return {"live": _live_view(found.result, region)}
+
+    def _live_view(report: dict, region: str) -> dict:
+        gd = game_data()
+        teams = []
+        for team_id, label in ((100, "Blue team"), (200, "Red team")):
+            players = []
+            for p in report["players"]:
+                if p["team_id"] != team_id:
+                    continue
+                champ = gd.champion_by_slug(p["champion"] or "")
+                r = p["rank"]
+                url = None
+                if p["puuid"] and "#" in p["riot_id"]:
+                    n, t = p["riot_id"].rsplit("#", 1)
+                    url = f"/players/{region}/{views.path_id(n, t)}"
+                players.append({
+                    "name": p["riot_id"], "url": url, "flags": p["flags"],
+                    "me": p["puuid"] == report.get("me"),
+                    "champion": p["champion"], "icon": gd.champion_icon(champ.id) if champ else "",
+                    "rank": (f"{r['tier'].title()} {r['division'] or ''}".strip() if r else None),
+                    "rank_key": r["tier"].lower() if r else "", "lp": r["lp"] if r else None,
+                    "season": (f"{round(100 * r['wins'] / max(r['wins'] + r['losses'], 1))}% of "
+                               f"{r['wins'] + r['losses']}" if r else ""),
+                    "recent": (f"{p['wins']}W {p['games'] - p['wins']}L · "
+                               f"{p['kills']}/{p['deaths']}/{p['assists']}" if p["games"] else "none"),
+                    "role": (f"{p['main_role'].title()} {round(100 * p['main_role_share'])}%"
+                             if p["main_role"] else ""),
+                    "champ_games": (f"{p['champion_games']} games · "
+                                    f"{round(100 * p['champion_wins'] / p['champion_games'])}%"
+                                    if p["champion_games"] else "first time"),
+                    "mastery": "" if p["mastery_points"] is None else f"{p['mastery_points']:,}"})
+            bans = [{"name": b["champion"],
+                     "icon": gd.champion_icon((gd.champion_by_slug(b["champion"] or "") or gd.champion(0)).id)}
+                    for b in report["bans"] if b["team_id"] == team_id]
+            teams.append({"id": team_id, "label": label, "players": players, "bans": bans})
+        minutes, seconds = divmod(max(report["game_length_s"], 0), 60)
+        return {"queue": report["queue"], "platform": report["platform"],
+                "clock": f"{minutes}:{seconds:02d}", "teams": teams}
+
+    @app.get("/fragments/players/{region}/{riot_id}/matches", response_class=HTMLResponse)
+    def more_matches(region: str, riot_id: str, queue: str = "all",
+                     offset: int = Query(0, ge=0)) -> HTMLResponse:
+        with pool.connection() as conn:
+            _, _, account = find_account(conn, region, riot_id)
+            if account is None:
+                raise HTTPException(404, "player not synced")
+            rows = views.match_rows(conn, game_data(), account["puuid"], region.lower(),
+                                    queue if queue in views.QUEUE_FILTERS else "all", offset=offset)
+        html = env.get_template("_match_rows.html").render(
+            rows=rows, detail_base=f"/fragments/players/{region}/{riot_id}/matches")
+        return HTMLResponse(html)
+
+    @app.get("/fragments/players/{region}/{riot_id}/matches/{match_id}", response_class=HTMLResponse)
+    def match_fragment(region: str, riot_id: str, match_id: str) -> HTMLResponse:
+        with pool.connection() as conn:
+            _, _, account = find_account(conn, region, riot_id)
+            detail = views.match_detail(conn, game_data(), match_id,
+                                        account["puuid"] if account else None, region.lower())
+        if detail is None:
+            raise HTTPException(404, "game not stored")
+        analysis = (f"/players/{region}/{riot_id}/matches/{match_id}"
+                    if account is not None and detail["me"] else None)
+        return HTMLResponse(env.get_template("_match_detail.html").render(
+            d=detail, analysis_url=analysis))
+
+    @app.get("/scout/{region}/{riot_id}")
+    def scout_page(region: str, riot_id: str, job: str | None = None):
+        suffix = f"&job={job}" if job else ""
+        return RedirectResponse(f"/players/{region}/{riot_id}?tab=live{suffix}", 303)
+
+    # -- champions --------------------------------------------------------------------------
+
+    def _query_string(request: Request):
+        def qs(**changes) -> str:
+            params = dict(request.query_params)
+            for k, v in changes.items():
+                if v is None:
+                    params.pop(k, None)
+                else:
+                    params[k] = v
+            return urlencode(params)
+        return qs
+
+    def _rank(rank: str) -> str:
+        return rank if rank in champ_stats.RANKS else "all"
+
+    @app.get("/champions", response_class=HTMLResponse)
+    def champions_page(request: Request, role: str | None = None, rank: str = "all",
+                       patch: str | None = None) -> HTMLResponse:
+        gd = game_data()
+        role = role.upper() if role and role.upper() in gamedata.POSITIONS else None
+        rank = _rank(rank)
+        with pool.connection() as conn:
+            known = dict(champ_stats.patches(conn))
+            patch = patch if patch in known else None
+            data = champ_stats.tier_list(conn, patch, rank)
+        rows = []
+        for r in data["rows"]:
+            if role and r["position"] != role:
+                continue
+            c = gd.champion(r["champion_id"])
+            rows.append({**r, "name": c.name, "slug": c.slug, "icon": gd.champion_icon(c.id),
+                         "role": gamedata.POSITIONS.get(r["position"], ""),
+                         "counters": [{"name": gd.champion(x["champion_id"]).name,
+                                       "slug": gd.champion(x["champion_id"]).slug,
+                                       "icon": gd.champion_icon(x["champion_id"]),
+                                       "win_rate": x["win_rate"], "games": x["games"]}
+                                      for x in r["counters"]]})
+        return render("champions.html", nav="champions", rows=rows, games=data["games"],
+                      role=role, role_name=gamedata.POSITIONS.get(role or "", ""), rank=rank,
+                      ranks=[(k, v[0]) for k, v in champ_stats.RANKS.items()], patch=patch,
+                      patches=list(known.items())[:12], qs=_query_string(request))
+
+    @app.get("/champions/{slug}", response_class=HTMLResponse)
+    def champion_page(request: Request, slug: str, role: str | None = None, rank: str = "all",
+                      patch: str | None = None) -> HTMLResponse:
+        gd = game_data()
+        champ = gd.champion_by_slug(slug)
+        if champ is None:
+            return error_page("Champion not found", f"There's no champion called {slug!r}.")
+        rank = _rank(rank)
+
+        def item_check(attr):
+            return lambda i: bool(gd.item(i) and getattr(gd.item(i), attr))
+
+        def is_starter(i):
+            it = gd.item(i)
+            return bool(it and it.is_starter and "Trinket" not in it.tags)
+
+        with pool.connection() as conn:
+            known = dict(champ_stats.patches(conn))
+            patch = patch if patch in known else None
+            s = champ_stats.champion(conn, champ.id, role.upper() if role else None, patch, rank,
+                                     is_legendary=item_check("is_legendary"),
+                                     is_boots=item_check("is_boots"), is_starter=is_starter)
+
+        def item_view(i):
+            it = gd.item(i)
+            return {"id": i, "icon": gd.item_icon(i), "name": it.name if it else str(i),
+                    "text": it.text if it else ""}
+
+        def stat(e, **extra):
+            return {"games": e["games"], "win_rate": e["win_rate"], "pick_rate": e["pick_rate"], **extra}
+
+        ctx: dict[str, Any] = {"champ": champ, "s": s, "champ_icon": gd.champion_icon(champ.id),
+                               "splash": gd.champion_splash(champ.id), "rank": rank,
+                               "ranks": [(k, v[0]) for k, v in champ_stats.RANKS.items()],
+                               "patch": patch, "patches": list(known.items())[:12],
+                               "positions": gamedata.POSITIONS,
+                               "role_name": gamedata.POSITIONS.get(s.get("position", ""), ""),
+                               "qs": _query_string(request)}
+        if s.get("games"):
+            ctx["runes"] = [stat(e, keystone=gd.rune_name(e["key"][0]), keystone_icon=gd.rune_icon(e["key"][0]),
+                                 primary=gd.rune_name(e["key"][1]), primary_icon=gd.rune_icon(e["key"][1]),
+                                 sub=gd.rune_name(e["key"][2]), sub_icon=gd.rune_icon(e["key"][2]))
+                            for e in s["runes"]]
+            page = s["rune_pages"][0]["key"] if s["rune_pages"] else None
+            best = s["runes"][0]["key"] if s["runes"] else (None, None, None)
+            ctx["page"] = (views._rune_page({"perks": list(page), "primary_style": best[1],
+                                             "sub_style": best[2]}, gd) if page else None)
+            ctx["spells"] = [stat(e, spells=[{"icon": gd.spell_icon(x), "name": gd.spell_name(x),
+                                              "text": gd.spells.get(x, {}).get("text", "")}
+                                             for x in e["key"]]) for e in s["spells"]]
+            ctx["skill_max"] = [stat(e, order=list(e["key"])) for e in s["skill_max"]]
+            ctx["skill_grid"] = (views._skill_grid(s["skill_order"]) if s["skill_order"] else None)
+            ctx["core"] = [stat(e, items=[item_view(i) for i in e["key"]]) for e in s["core"]]
+            ctx["starting"] = [stat(e, items=[item_view(i) for i in e["key"]]) for e in s["starting"]]
+            ctx["boots"] = [stat(e, item=item_view(e["key"])) for e in s["boots"]]
+            ctx["late"] = [{"label": label, "items": [stat(e, item=item_view(e["key"])) for e in s[key]]}
+                           for key, label in (("fourth", "Fourth item"), ("fifth", "Fifth item"),
+                                              ("sixth", "Sixth item")) if s[key]]
+
+            def vs(v):
+                c = gd.champion(v["champion_id"])
+                return {"name": c.name, "slug": c.slug, "icon": gd.champion_icon(c.id),
+                        "games": v["games"], "win_rate": v["win_rate"]}
+            ctx["counters"] = [vs(v) for v in s["counters"]]
+            ctx["best"] = [vs(v) for v in s["best_against"]]
+        detail = gd.champion_detail(champ)
+        if detail:
+            abil = [{"key": "P", "name": detail["passive"]["name"],
+                     "text": gamedata.plain(detail["passive"]["description"]),
+                     "icon": gd.passive_icon(detail["passive"]["image"]["full"]), "cooldown": None}]
+            for key, sp in zip("QWER", detail["spells"], strict=False):
+                abil.append({"key": key, "name": sp["name"], "text": gamedata.plain(sp["description"]),
+                             "icon": gd.ability_icon(sp["image"]["full"]),
+                             "cooldown": sp.get("cooldownBurn")})
+            ctx["abilities"] = abil
+        return render("champion.html", nav="champions", **ctx)
+
+    # -- leaderboard ------------------------------------------------------------------------
+
+    @app.get("/leaderboard", include_in_schema=False)
+    def leaderboard_root():
+        return RedirectResponse("/leaderboard/na", 303)
+
+    @app.get("/leaderboard/{region}", response_class=HTMLResponse)
+    def leaderboard(region: str) -> HTMLResponse:
+        platform = region_or_none(region)
+        if platform is None:
+            return error_page("Unknown region", f"RiftWatch doesn't know the region {region!r}.")
+        region = region.lower()
+        hit = boards.get(platform)
+        if hit is None or time.monotonic() - hit[0] > LEADERBOARD_S:
+            board = _leaderboard(platform, region)
+            boards[platform] = (time.monotonic(), board)
+        else:
+            board = hit[1]
+        return render("leaderboard.html", nav="leaderboard", region=region,
+                      board_regions=("na", "euw", "kr", "eune", "br", "oce", "jp", "vn"), **board)
+
+    def _leaderboard(platform: str, region: str) -> dict:
+        gd = game_data()
+        error = None
+        players: list[dict] = []
+        source = ""
+        if services.api is not None:
+            try:
+                entries = []
+                for tier in ("CHALLENGER", "GRANDMASTER"):
+                    entries += [dict(e, tier=tier) for e in
+                                services.api.league_entries(platform, tier, "I")]
+                    if len(entries) >= 100:
+                        break
+                entries.sort(key=lambda e: (e["tier"] != "CHALLENGER", -e.get("leaguePoints", 0)))
+                entries = entries[:100]
+                with pool.connection() as conn:
+                    names = champ_stats.leaderboard_names(conn, [e["puuid"] for e in entries if e.get("puuid")])
+                for i, e in enumerate(entries, 1):
+                    n, t = names.get(e.get("puuid"), (None, None))
+                    games = e.get("wins", 0) + e.get("losses", 0)
+                    players.append({"rank": i, "name": n, "tag": t, "tier": e["tier"],
+                                    "crest": gd.tier_crest(e["tier"]), "lp": e.get("leaguePoints"),
+                                    "wins": e.get("wins"), "losses": e.get("losses"),
+                                    "win_rate": round(100 * e.get("wins", 0) / games) if games else None,
+                                    "url": f"/players/{region}/{views.path_id(n, t)}" if n and t else None})
+                source = (f"Top {len(players)} ranked solo/duo players on {region.upper()}, live "
+                          "from Riot (refreshed every 30 minutes).")
+            except Exception as exc:          # an expired key shouldn't take the page down
+                error = f"Riot didn't answer ({exc})."
+                players = []
+        if not players:
+            with pool.connection() as conn:
+                rows = conn.execute(
+                    """SELECT puuid, tier FROM crawl_players WHERE platform = %s
+                         AND tier IN ('CHALLENGER', 'GRANDMASTER', 'MASTER')
+                       ORDER BY array_position(ARRAY['CHALLENGER','GRANDMASTER','MASTER'], tier),
+                                matches_found DESC LIMIT 100""", (platform,)).fetchall()
+                names = champ_stats.leaderboard_names(conn, [r[0] for r in rows])
+            for i, (puuid, tier) in enumerate(rows, 1):
+                n, t = names.get(puuid, (None, None))
+                players.append({"rank": i, "name": n, "tag": t, "tier": tier,
+                                "crest": gd.tier_crest(tier), "lp": None, "wins": None,
+                                "losses": None, "win_rate": None,
+                                "url": f"/players/{region}/{views.path_id(n, t)}" if n and t else None})
+            source = ("Apex-tier players RiftWatch has analysed games from (live LP needs the Riot "
+                      "API).") if players else ""
+        return {"players": players, "source": source, "error": error}
+
+    # -- the match analysis page, inside the site's header -----------------------------------
+
+    def site_chrome(page_html: str, region: str) -> str:
+        asset_version = _asset_version()
+        head = (f'<link rel="stylesheet" href="/static/site.css?v={asset_version}">'
+                '<script>try{var t=JSON.parse(localStorage.getItem("rw-theme"));'
+                'document.documentElement.dataset.theme=t||"dark"}catch(e){'
+                'document.documentElement.dataset.theme="dark"}</script>')
+        header = env.get_template("_header.html").render(regions=REGIONS, region=region,
+                                                         nav="match")
+        script = f'<script src="/static/site.js?v={asset_version}" defer></script>'
+        page_html = page_html.replace("</head>", head + "</head>", 1)
+        page_html = page_html.replace("<body><main>", f'<body class="report">{header}<main>', 1)
+        return page_html.replace("</body>", script + "</body>", 1)
+
+    app.state.site_chrome = site_chrome
+
+    @app.exception_handler(404)
+    async def not_found(request: Request, exc) -> Any:
+        if request.url.path.startswith(("/api/", "/fragments/")):
+            detail = getattr(exc, "detail", "not found")
+            return JSONResponse({"detail": detail}, status_code=404)
+        return error_page("Page not found", "That page doesn't exist. Search for a player instead.")

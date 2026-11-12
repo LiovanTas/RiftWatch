@@ -46,7 +46,11 @@ def web(request):
     coach, coach_calls = fake_coach(ok, ok, ok)
     # Tests can pass extra settings with @pytest.mark.parametrize("web", [{...}], indirect=True).
     settings = Settings.from_env({"RIFTWATCH_DATABASE_URL": TEST_DB, **getattr(request, "param", {})})
-    app = create_app(settings, api=api, coach=coach, pool=pool, jobs=jobs)
+    from riftwatch.web.gamedata import GameData
+
+    gd = GameData()
+    gd.loaded = True              # no Data Dragon in tests: names fall back, icons are empty
+    app = create_app(settings, api=api, coach=coach, pool=pool, jobs=jobs, gamedata=gd)
     with TestClient(app) as client:
         yield client, api, coach_calls, jobs
     pool.close()
@@ -141,17 +145,18 @@ def test_review_of_a_game_the_player_wasnt_in(web):
 
 def test_search_redirects_to_player_page(web):
     client, *_ = web
-    assert "Name#TAG" in client.get("/").text
+    home = client.get("/").text
+    assert 'action="/search"' in home and 'name="riot_id"' in home
     r = client.get("/search?region=NA&riot_id=Some%20One%23NA1", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"] == "/players/na/Some%20One-NA1"
     assert client.get("/search?region=na&riot_id=nohash").status_code == 400
 
 
-def test_unsynced_player_page_offers_update(web):
+def test_unsynced_player_page_loads_the_player(web):
     client, *_ = web
     page = client.get("/players/na/Me-NA1").text
-    assert "Not on RiftWatch yet" in page and 'id="sync"' in page
-    assert "/api/players/na/Me-NA1/sync" in page
+    assert 'data-autosync="/api/players/na/Me-NA1/sync"' in page   # starts the sync itself
+    assert "Loading Me#NA1 from Riot" in page
 
 
 def test_player_and_match_pages(web):
@@ -159,24 +164,34 @@ def test_player_and_match_pages(web):
     sync(client, jobs)
     page = client.get("/players/na/Me-NA1").text
     assert "Me#NA1" in page and "Emerald" in page
-    assert f"/players/na/Me-NA1/matches/{api.ids[0]}" in page
-    assert "/api/players/na/Me-NA1/recent/coach" in page           # coaching not cached yet
+    assert page.count('class="match ') == 5                        # every synced game
+    assert f'data-detail="/fragments/players/na/Me-NA1/matches/{api.ids[0]}"' in page
+    assert "Victory" in page or "Defeat" in page
+    detail = client.get(f"/fragments/players/na/Me-NA1/matches/{api.ids[0]}")
+    assert detail.status_code == 200 and "Blue team" in detail.text and "Red team" in detail.text
+    assert f'href="/players/na/Me-NA1/matches/{api.ids[0]}"' in detail.text   # analysis link
+    more = client.get("/fragments/players/na/Me-NA1/matches?queue=all&offset=3").text
+    assert more.count('class="match ') == 2
+    coach_tab = client.get("/players/na/Me-NA1?tab=coach").text
+    assert "/api/players/na/Me-NA1/recent/coach" in coach_tab      # coaching not cached yet
+    assert client.get("/players/na/Me-NA1?tab=champions").status_code == 200
     match = client.get(f"/players/na/Me-NA1/matches/{api.ids[0]}").text
     assert f"/api/players/na/Me-NA1/matches/{api.ids[0]}/coach" in match
     assert 'href="/players/na/Me-NA1"' in match                    # back to the player
+    assert 'class="site-header"' in match                          # inside the site's header
 
 
 def test_scout_job_and_page(web):
     client, api, _, jobs = web
-    assert 'href="/scout/na/Me-NA1">Live game' in client.get("/players/na/Me-NA1").text
-    page = client.get("/scout/na/Me-NA1")
+    page = client.get("/scout/na/Me-NA1")                          # old URL: now the Live tab
     assert page.status_code == 200 and "Scout live game" in page.text
+    assert 'data-scout="/api/scout/na/Me-NA1"' in page.text
     r = client.post("/api/scout/na/Me-NA1")
     assert r.status_code == 202
     job = jobs.wait(r.json()["job"]["id"])
     assert job.status == "done", job.error
     assert len(job.result["players"]) == 10
-    html = client.get(f"/scout/na/Me-NA1?job={job.token}").text
+    html = client.get(f"/players/na/Me-NA1?tab=live&job={job.token}").text
     assert "Blue team" in html and "Red team" in html and "<strong>Me#NA1</strong>" in html
     assert 'href="/players/na/Player2-NA1"' in html
 
@@ -184,7 +199,7 @@ def test_scout_job_and_page(web):
     jobs.cooldown_s = 0
     failed = jobs.wait(client.post("/api/scout/na/Me-NA1").json()["job"]["id"])
     assert failed.status == "failed" and "isn't in a game" in failed.error
-    assert "isn&#x27;t in a game" in client.get(f"/scout/na/Me-NA1?job={failed.token}").text
+    assert "in a game" in client.get(f"/players/na/Me-NA1?tab=live&job={failed.token}").text
 
 
 def test_champion_pool_api_and_page_section(web):
@@ -193,7 +208,7 @@ def test_champion_pool_api_and_page_section(web):
     body = client.get("/api/players/na/Me-NA1/champions").json()
     assert body["tier"] == "EMERALD" and body["champions"][0]["champion"] == "Aatrox"
     assert body["champions"][0]["games"] == 5
-    assert "Champion pool" in client.get("/players/na/Me-NA1").text
+    assert "Champion pool" in client.get("/players/na/Me-NA1?tab=coach").text
 
 
 def test_progress_api(web):
@@ -210,11 +225,11 @@ def test_progress_section_renders_chart_and_trend():
     from datetime import date
 
     from riftwatch.analysis.progress import ProgressReport, Trend, Week
-    from riftwatch.web.pages import _progress_html
+    from riftwatch.web.pages import progress_html
 
     weeks = [Week(date(2026, 9, 7), 10, 6, 44.0, {"farming": 40.0}),
              Week(date(2026, 9, 14), 8, 3, 39.5, {"farming": 35.0})]
-    html = _progress_html(ProgressReport("PLATINUM", weeks, Trend(-0.4, 0.1, 18), [],
+    html = progress_html(ProgressReport("PLATINUM", weeks, Trend(-0.4, 0.1, 18), [],
                                          {"farming": Trend(-0.6, 0.2, 18)}))
     assert "<h2>Progress</h2>" in html and "<polyline" in html and "declining" in html
     assert "farming declining" in html and "Week of Sep 07: better than 44%" in html
@@ -225,7 +240,7 @@ def test_recent_coaching_streams_on_the_player_page(web):
 
     client, api, coach_calls, jobs = web
     sync(client, jobs)
-    page = client.get("/players/na/Me-NA1").text
+    page = client.get("/players/na/Me-NA1?tab=coach").text
     assert 'data-stream="/api/players/na/Me-NA1/recent/coach/stream"' in page
     r = client.post("/api/players/na/Me-NA1/recent/coach/stream")
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
@@ -303,3 +318,36 @@ def test_parse_limits():
         parse_limits("coach=lots")
     with pytest.raises(ValueError):
         parse_limits("download=5")
+
+
+# -- the rest of the site ---------------------------------------------------------------------
+
+def test_champion_pages_and_tier_list(web):
+    client, *_ = web
+    from riftwatch.stats import champions
+
+    champions.clear_cache()
+    tiers = client.get("/champions")
+    assert tiers.status_code == 200 and "Champion tier list" in tiers.text
+    assert client.get("/champions?role=top&rank=master_plus&patch=99.1").status_code == 200
+    assert client.get("/champions/not-a-champion").status_code == 404
+
+
+def test_autocomplete_finds_players_seen_in_games(web):
+    client, api, _, jobs = web
+    sync(client, jobs)
+    found = client.get("/api/autocomplete?q=pla").json()["players"]
+    assert found and all(p["name"].lower().startswith("pla") for p in found)
+    assert {"name", "tag", "region", "icon"} <= set(found[0])
+    assert client.get("/api/autocomplete?q=zzzz").json()["players"] == []
+
+
+def test_leaderboard_about_and_missing_pages(web):
+    client, *_ = web
+    assert client.get("/leaderboard/na").status_code == 200
+    assert client.get("/leaderboard/atlantis").status_code == 404
+    assert "How RiftWatch works" in client.get("/about").text
+    missing = client.get("/no/such/page")
+    assert missing.status_code == 404 and "Page not found" in missing.text
+    assert client.get("/api/nope").json()["detail"]
+    assert client.get("/static/site.css").status_code == 200

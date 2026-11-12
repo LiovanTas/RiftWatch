@@ -238,9 +238,42 @@ Things measurement changed along the way:
 
 ## Website
 
-`riftwatch serve` starts the site. Search a Riot ID, press **Update** to pull the newest games
-(a background job; the page shows its progress), open any game for the full review, and ask
-for AI coaching on a game or on your recent games.
+`riftwatch serve` starts the site on http://localhost:8000, a League stats site in the mould
+of op.gg and u.gg, with RiftWatch's coaching built in:
+
+- **Search** any Riot ID by region, with autocomplete from every player RiftWatch has seen,
+  recent searches and favourites. A player RiftWatch hasn't seen yet loads on the spot: the
+  page downloads their games from Riot and shows its progress.
+- **Profiles:** ranked solo and flex, season champion stats, recently played with, and a
+  summary of the last 20 games (win rate, KDA, kill participation, top champions, positions).
+- **Match history** filtered by queue, one card per game: champion, level, summoner spells,
+  runes, KDA, kill participation, control wards, CS, items, all ten players, multikills and
+  MVP/ACE badges. Expanding a game shows:
+  - both teams' full scoreboards with damage, wards, gold, bans and objectives
+  - the player's item build by minute, skill order and rune page
+  - a team gold graph
+  - a link to RiftWatch's minute-by-minute analysis and AI coaching.
+- **Tabs:** Champions (sortable season stats), AI Coach (coaching on recent games, weekly
+  progress, sessions, champion pool) and Live Game (scouting all ten players in a game in
+  progress).
+- **Champion tier list** from every stored ranked game: win, pick and ban rates, S+ to D tiers
+  by role, counters, and filters by role, rank group and patch.
+- **Champion pages:** runes (with the full most-played page), summoner spells, skill max order
+  and level-by-level order, core builds, starting items, boots, later items by slot,
+  toughest and best matchups, and abilities.
+- **Leaderboard:** the top 100 of each region live from Riot, refreshed every 30 minutes.
+  Without an API key it falls back to the apex players RiftWatch has stored.
+
+The pages are server-rendered Jinja2 templates (`web/templates/`) with one stylesheet and one
+script (`web/static/`). There's no build step. Dark and light themes follow the visitor's choice
+or their system, and the layout works on a phone. Champion, item, rune and rank images load
+from Riot's Data Dragon and CommunityDragon CDNs.
+
+Match history comes from `participant_builds` (`stats/extract.py`): one row per player per
+game, holding everything a match card and the champion statistics need. That includes skill
+order and purchase order from the timeline. It is filled as games are stored, and backfilled
+for older games at startup (9,359 games took 3 minutes). A profile page is a handful of indexed
+queries (about 0.1 s), and expanding a game reads its timeline once.
 
 Pages never wait on Riot or the LLM: they read Postgres only. Downloads are background jobs
 behind one shared rate limiter, repeat Update presses within a minute reuse the same job, and
@@ -264,7 +297,7 @@ take the next one from whoever has the least work running, and retry a job whose
 | `POST /api/players/.../matches/{match_id}/coach/stream` | the same, as server-sent events: each point once it passes the grounding check, then the final answer |
 | `POST /api/players/.../recent/coach/stream` | recent-games coaching, streamed the same way (the player page uses it) |
 
-Interactive API docs are at `/docs`.
+Interactive API docs are at `/api/docs`.
 
 ## Deploying the website
 
@@ -294,8 +327,41 @@ What makes it safe to put in public:
 - Riot's required legal notice on every page, gzip for pages and JSON, and `nosniff`,
   `DENY` framing and `same-origin` referrer headers.
 
-Put it behind a reverse proxy that terminates HTTPS (Caddy, nginx, or the host's load
-balancer) and schedule `riftwatch refresh` daily.
+Put it behind a reverse proxy that terminates HTTPS (the compose file's `caddy` service, or the
+host's load balancer) and schedule `riftwatch refresh` daily.
+
+### Hosting it at a public link
+
+**A demo link from your own PC (no account or server needed).** With the site running
+(`riftwatch serve`), a Cloudflare quick tunnel gives it a public `https://...trycloudflare.com`
+address for as long as the command runs:
+
+```bash
+winget install --id Cloudflare.cloudflared
+cloudflared tunnel --url http://localhost:8000
+```
+
+Share the printed address. It changes each time you start the tunnel, and it stops when you
+close the command or turn the PC off.
+
+**A permanent site.** Any small Linux server with Docker works (for example a 2-4 GB VPS from
+Hetzner, DigitalOcean or Lightsail), with a domain whose DNS points at it. Copy the database
+across once, then start everything with HTTPS:
+
+```bash
+docker compose exec db pg_dump -U riftwatch -Fc riftwatch > riftwatch.dump    # on this PC
+git clone https://github.com/LiovanTas/RiftWatch.git && cd RiftWatch           # on the server
+# copy .env, riftwatch.dump and out/ml/models to the server, then:
+docker compose up -d db
+docker compose exec -T db pg_restore -U riftwatch -d riftwatch --no-owner < riftwatch.dump
+SITE_DOMAIN=your-domain.com docker compose --profile https up -d --build
+```
+
+Caddy gets and renews the HTTPS certificate on its own. Set `FORWARDED_ALLOW_IPS=*` in `.env`
+on the server: the website's port is bound to the server itself, so only Caddy reaches it,
+and the visitor limits then see real addresses. Managed hosts (Render, Railway, Fly.io) also
+run the Dockerfile as is, with a managed Postgres instead of the `db` service. This database is
+several GB with timelines and the video archive, so it needs a paid tier.
 
 **Production key.** A development key expires every 24 hours and is for personal use. A public
 site needs a production key: register RiftWatch as a product at https://developer.riotgames.com

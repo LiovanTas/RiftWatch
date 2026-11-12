@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% from "_macros.html" import wr %}
+{% block title %}{{ region|upper }} Ranked Leaderboard | RiftWatch{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="page-title">
+    <h1>Ranked leaderboard</h1>
+    <p>{{ source }}</p>
+  </div>
+  <div class="panel" style="margin-bottom:40px">
+    <div class="toolbar">
+      <div class="pills">{% for r in board_regions %}<a href="/leaderboard/{{ r }}" class="{{ 'on' if r == region }}">{{ r|upper }}</a>{% endfor %}</div>
+      <div class="grow"></div>
+      <input type="search" placeholder="Find a player" data-filter="#lb-body tr" aria-label="Find a player">
+    </div>
+    {% if players %}
+    <div class="scroll">
+    <table class="data">
+      <thead><tr><th class="l">#</th><th class="l">Player</th><th class="l">Tier</th><th data-sort>LP</th><th data-sort>Wins</th><th data-sort>Losses</th><th data-sort>Win rate</th></tr></thead>
+      <tbody id="lb-body">
+      {% for p in players %}
+        <tr data-name="{{ (p.name or '')|lower }}">
+          <td class="rank">{{ p.rank }}</td>
+          <td class="l">{% if p.url %}<a href="{{ p.url }}"><b>{{ p.name }}</b> <span class="muted">#{{ p.tag }}</span></a>{% else %}<span class="muted">Not on RiftWatch yet</span>{% endif %}</td>
+          <td class="l"><span style="display:inline-flex;align-items:center;gap:6px"><img src="{{ p.crest }}" alt="" width="22" height="22" loading="lazy"><b class="t-{{ p.tier|lower }}">{{ p.tier|title }}</b></span></td>
+          <td data-v="{{ p.lp or 0 }}"><b>{{ '{:,}'.format(p.lp) if p.lp is not none else '-' }}</b></td>
+          <td>{{ p.wins if p.wins is not none else '-' }}</td>
+          <td>{{ p.losses if p.losses is not none else '-' }}</td>
+          <td data-v="{{ p.win_rate or 0 }}">{% if p.win_rate is not none %}{{ wr(p.win_rate) }}{% else %}-{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}<div class="empty"><h3>No leaderboard for {{ region|upper }} yet</h3><p>{{ error or 'RiftWatch has no ranked players stored for this region.' }}</p></div>{% endif %}
+  </div>
+</div>
+{% endblock %}
