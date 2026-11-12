@@ -1,13 +1,21 @@
 {% from "_macros.html" import icon, logo, search_form %}
 <header class="site-header">
   <div class="container">
-    <a class="logo" href="/">{{ logo() }}<span>Rift<b>Watch</b></span></a>
+    <a class="logo" href="/" aria-label="RiftWatch home">{{ logo() }}<span>rift<b>watch</b></span></a>
     <nav class="site-nav">
-      <a href="/champions" class="{{ 'on' if nav == 'champions' }}">Champions</a>
-      <a href="/leaderboard/{{ region }}" class="{{ 'on' if nav == 'leaderboard' }}">Leaderboard</a>
-      <a href="/about" class="{{ 'on' if nav == 'about' }}">How it works</a>
+      <a href="/champions" class="{{ 'on' if nav == 'champions' }}">Tier board</a>
+      <a href="/leaderboard/{{ region if region != 'auto' else 'na' }}" class="{{ 'on' if nav == 'leaderboard' }}">Ladder</a>
+      <a href="/about" class="{{ 'on' if nav == 'about' }}">Method</a>
     </nav>
-    {% if nav != 'home' %}<div class="header-search">{{ search_form(regions, region) }}</div>{% else %}<div style="margin-left:auto"></div>{% endif %}
-    <button class="icon-btn" id="theme-toggle" type="button" aria-label="Switch light or dark theme">{{ icon('moon') }}</button>
+    <div class="head-tools">
+      {% if nav != 'home' %}<button class="cmd-btn" type="button" data-palette aria-label="Search a player">{{ icon('search') }}<span>Find a player by Riot ID</span><kbd>/</kbd></button>{% endif %}
+      <button class="icon-btn" id="theme-toggle" type="button" aria-label="Switch light or dark theme">{{ icon('moon') }}</button>
+    </div>
   </div>
 </header>
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Find a player">
+  <div class="box">
+    {{ search_form(regions, 'auto') }}
+    <div class="hint"><span><kbd>Enter</kbd> search</span><span><kbd>&uarr;</kbd><kbd>&darr;</kbd> pick</span><span><kbd>Esc</kbd> close</span><span>ALL looks in every region</span></div>
+  </div>
+</div>

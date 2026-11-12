@@ -46,6 +46,12 @@ class FakeApi:
             return None
         return {"puuid": self.puuid, "gameName": riot_id.game_name, "tagLine": riot_id.tag_line}
 
+    platform = "na1"                     # where this player really plays
+
+    def active_platform(self, puuid):
+        self.calls.append("region")
+        return self.platform
+
     def league_entries_by_puuid(self, platform, puuid):
         self.calls.append("league")
         return [{"queueType": "RANKED_SOLO_5x5", "tier": self.tier, "rank": "II",

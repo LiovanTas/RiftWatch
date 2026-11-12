@@ -2,22 +2,19 @@
 {% from "_macros.html" import icon %}
 {% block title %}How RiftWatch works{% endblock %}
 {% block content %}
-<div class="container" style="max-width:860px">
+<div class="container">
   <div class="page-title">
+    <div class="eyebrow">Method</div>
     <h1>How RiftWatch works</h1>
-    <p>Most stat sites show you what happened. RiftWatch also tells you how it compares with players at your rank, and why.</p>
+    <p>Most stat sites show you what happened. RiftWatch also measures how it compares with players at your rank, and explains why.</p>
   </div>
-  <div class="panel"><div class="panel-body">
-    <div class="ability"><div class="feature" style="padding:0;border:0"><div class="ico" style="background:var(--accent-soft);color:var(--accent)">{{ icon('history') }}</div></div>
-      <div><b>Match history from Riot</b><p>Search a Riot ID and RiftWatch downloads your ranked and draft games from Riot's API, with each game's minute-by-minute timeline. Games never change once played, so each is downloaded once and kept.</p></div></div>
-    <div class="ability"><div class="feature" style="padding:0;border:0"><div class="ico" style="background:rgba(46,194,126,.15);color:var(--green)">{{ icon('chart') }}</div></div>
-      <div><b>Scored against your rank, in your role</b><p>Every minute of your game (farm, gold, experience, vision, the gap to your lane opponent) is compared with players at your rank in the same role, adjusted for champion and matchup. "Better than 70%" means you beat 70% of comparable players on that stat.</p></div></div>
-    <div class="ability"><div class="feature" style="padding:0;border:0"><div class="ico" style="background:rgba(169,121,255,.15);color:var(--purple)">{{ icon('brain') }}</div></div>
-      <div><b>An AI coach that can't make things up</b><p>The coach only sees computed evidence: each point it makes must cite that evidence, and a checker removes any point whose numbers don't appear in what it cites.</p></div></div>
-    <div class="ability"><div class="feature" style="padding:0;border:0"><div class="ico" style="background:rgba(242,184,75,.15);color:var(--gold)">{{ icon('eye') }}</div></div>
-      <div><b>Models trained on high-elo play</b><p>Decision models learn from thousands of Master+ games what top players do in each situation, and a laning model learns from high-elo replays which trades they take. Each model is scored on games it never saw and only used where it beats a plain baseline.</p></div></div>
-    <div class="ability"><div class="feature" style="padding:0;border:0"><div class="ico" style="background:rgba(255,138,60,.15);color:var(--orange)">{{ icon('trophy') }}</div></div>
-      <div><b>Champion statistics</b><p>Tier lists and builds come from the {{ '{:,}'.format(ranked) }} ranked games RiftWatch has analysed. Win rates are shrunk towards 50% for small samples, so a champion that went 3-0 isn't called a 100% pick.</p></div></div>
-  </div></div>
+  <div class="steps" style="margin-bottom:12px">
+    <div class="step-item"><span class="n">01 &middot; data</span><h3>Match history from Riot</h3><p>Search a Riot ID in any region and RiftWatch downloads its ranked and draft games from Riot's API, with each game's minute-by-minute timeline. Games never change once played, so each one is downloaded once and kept.</p></div>
+    <div class="step-item"><span class="n">02 &middot; yardstick</span><h3>Scored against your rank, in your role</h3><p>Every minute of a game (farm, gold, experience, vision, the gap to your lane opponent) is compared with players at your rank in the same role, adjusted for champion and matchup. "Better than 70%" means you beat 70% of comparable players on that stat.</p></div>
+    <div class="step-item"><span class="n">03 &middot; coach</span><h3>An AI coach that can't make things up</h3><p>The coach only sees computed evidence. Each point it makes must cite that evidence, and a checker removes any point whose numbers don't appear in what it cites.</p></div>
+    <div class="step-item"><span class="n">04 &middot; models</span><h3>Trained on high-elo play</h3><p>Decision models learn from thousands of Master+ games what top players do in each situation, and a laning model learns from high-elo replays which trades they take. Each model is scored on games it never saw, and used only where it beats a plain baseline.</p></div>
+    <div class="step-item"><span class="n">05 &middot; meta</span><h3>Champion statistics</h3><p>The tier board and builds come from the {{ '{:,}'.format(ranked) }} ranked games RiftWatch has analysed. Win rates are pulled towards 50% for small samples, so a champion that went 3-0 isn't called a 100% pick.</p></div>
+    <div class="step-item"><span class="n">06 &middot; limits</span><h3>What it never does</h3><p>RiftWatch only uses Riot's public API and Data Dragon. It never reads the game client's memory, never automates play, and doesn't sell or share player data.</p></div>
+  </div>
 </div>
 {% endblock %}

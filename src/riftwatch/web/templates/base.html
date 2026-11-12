@@ -8,10 +8,13 @@
 <meta property="og:title" content="{{ self.title() }}">
 <meta property="og:description" content="{{ self.description() }}">
 <meta property="og:type" content="website">
-<meta name="theme-color" content="#0e1015">
+<meta name="theme-color" content="#0a0c0b">
 <script>try{var t=JSON.parse(localStorage.getItem('rw-theme'));if(t)document.documentElement.dataset.theme=t;else if(matchMedia('(prefers-color-scheme: light)').matches)document.documentElement.dataset.theme='light'}catch(e){}</script>
 <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://ddragon.leagueoflegends.com" crossorigin>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;700&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap">
 <link rel="stylesheet" href="/static/site.css?v={{ asset_version }}">
 {% block head %}{% endblock %}
 </head>
@@ -21,11 +24,11 @@
 <footer class="site-footer">
   <div class="container">
     <div>
-      <a class="logo" href="/" style="font-size:15px">{{ logo() }}<span>Rift<b>Watch</b></span></a>
+      <a class="logo" href="/" style="font-size:16px">{{ logo() }}<span>rift<b>watch</b></span></a>
       <p>RiftWatch isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games, and all associated properties are trademarks or registered trademarks of Riot Games, Inc.</p>
     </div>
     <div class="links">
-      <a href="/champions">Champions</a><a href="/leaderboard/{{ region }}">Leaderboard</a><a href="/about">How it works</a><a href="/api/docs">API</a>
+      <a href="/champions">Tier board</a><a href="/leaderboard/na">Ladder</a><a href="/about">Method</a><a href="/api/docs">API</a>
     </div>
   </div>
 </footer>

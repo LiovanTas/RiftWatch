@@ -1,52 +1,50 @@
 {% from "_macros.html" import icon, item_slot, spell_slot, rune_slot %}
-{% for m in rows %}
-<article class="match {{ m.result_key }}">
-  <div class="row">
-    <div class="m-info">
-      <div class="q">{{ m.queue }}</div>
-      <div title="{{ m.date }}">{{ m.when }}</div>
-      <hr>
-      <div class="res">{{ m.result }}</div>
-      <div>{{ m.duration }}</div>
-    </div>
-    <div class="m-champ">
-      <div class="loadout">
+{% for g in groups %}
+<section class="day-group" data-day="{{ g.day }}">
+  {% if not g.continued %}
+  <div class="day-head"><span class="day">{{ g.day }}</span><span class="day-sum">{{ g.rows|length }} game{{ 's' if g.rows|length != 1 }} &middot; <span class="win-text">{{ g.wins }}W</span> <span class="loss-text">{{ g.losses }}L</span></span></div>
+  {% endif %}
+  <div class="matches">
+  {% for m in g.rows %}
+  <article class="match {{ m.result_key }}">
+    <div class="row">
+      <div class="m-score" data-tip="Performance {{ m.score }} / 10&#10;{{ m.rank_in_game|ordinal }} of 10 in this game on KDA, kill share, damage, gold, farm and vision">
+        <svg viewBox="0 0 58 58" aria-hidden="true"><circle class="track" cx="29" cy="29" r="25"/><circle class="arc" cx="29" cy="29" r="25" pathLength="100" stroke-dasharray="{{ m.score_pct if m.result_key != 'remake' else 0 }} 100"/></svg>
+        <b>{{ m.score if m.result_key != 'remake' else '-' }}</b>
+        {% if m.badge %}<span class="tag"><span class="badge {{ m.badge|lower }}">{{ m.badge }}</span></span>{% endif %}
+      </div>
+      <div class="m-champ">
         <a class="portrait" href="/champions/{{ m.champion_slug }}" data-tip="{{ m.champion }}"><img src="{{ m.champion_icon }}" alt="{{ m.champion }}" loading="lazy"><span class="lvl">{{ m.level }}</span></a>
         <div class="sr">{{ spell_slot(m.spells[0]) }}{{ rune_slot(m.keystone) }}{{ spell_slot(m.spells[1]) }}{{ rune_slot(m.sub_style) }}</div>
       </div>
-      <div class="kda">
-        <div class="line">{{ m.kills }} / <span class="d">{{ m.deaths }}</span> / {{ m.assists }}</div>
-        <div class="ratio"><b>{{ m.kda }}</b>{% if m.kda != 'Perfect' %}:1{% endif %} KDA</div>
+      <div class="m-res">
+        <div class="r">{{ m.result }}</div>
+        <div class="kda">{{ m.kills }}/<span class="d">{{ m.deaths }}</span>/{{ m.assists }}</div>
+        <div class="sub"><b>{{ m.kda }}</b>{% if m.kda != 'Perfect' %}:1{% endif %} &middot; {{ m.kp }}% KP</div>
       </div>
-      <div class="tags">
-        {% if m.multikill %}<span class="badge multi">{{ m.multikill }}</span>{% endif %}
-        {% if m.badge %}<span class="badge {{ m.badge|lower }}" data-tip="{{ m.badge }}&#10;{{ 'Best performance on the winning team' if m.badge == 'MVP' else 'Best performance on the losing team' }}">{{ m.badge }}</span>
-        {% elif m.result_key != 'remake' %}<span class="badge rank" data-tip="Performance {{ m.rank_in_game|ordinal }} of 10&#10;KDA, kill share, damage, gold, farm and vision, against everyone in this game">{{ m.rank_in_game|ordinal }}</span>{% endif %}
+      <div class="m-mid">
+        <div class="m-meta"><span class="q">{{ m.champion }}</span><span>{{ m.queue }}</span><span title="{{ m.date }}">{{ m.when }}</span><span>{{ m.duration }}</span></div>
+        <div class="m-stats">
+          <span data-tip="Creep score&#10;{{ m.cs_min }} per minute"><b>{{ m.cs }}</b> CS ({{ m.cs_min }})</span>
+          <span data-tip="Damage to champions&#10;{{ '{:,}'.format(m.damage) }}"><b>{{ '%.1f'|format(m.damage / 1000) }}k</b> dmg</span>
+          <span data-tip="Vision score"><b>{{ m.vision }}</b> vis</span>
+          <span data-tip="Control wards bought"><b>{{ m.control_wards }}</b> ctrl</span>
+        </div>
+        <div class="m-items">
+          {{ item_slot(m['items'][0]) }}{{ item_slot(m['items'][1]) }}{{ item_slot(m['items'][2]) }}{{ item_slot(m['items'][3]) }}{{ item_slot(m['items'][4]) }}{{ item_slot(m['items'][5]) }}<span class="sep"></span>{{ item_slot(m.trinket) }}
+          <span class="tags">{% if m.multikill %}<span class="badge multi">{{ m.multikill }}</span>{% endif %}{% if not m.badge and m.result_key != 'remake' %}<span class="badge rank">{{ m.rank_in_game|ordinal }} of 10</span>{% endif %}</span>
+        </div>
       </div>
-    </div>
-    <div class="m-stats">
-      <div class="kp">P/Kill {{ m.kp }}%</div>
-      <div>Control ward {{ m.control_wards }}</div>
-      <div>CS {{ m.cs }} ({{ m.cs_min }})</div>
-      <div>Score {{ m.score }}</div>
-    </div>
-    <div class="m-items">
-      <div class="grid">
-        {{ item_slot(m['items'][0]) }}{{ item_slot(m['items'][1]) }}{{ item_slot(m['items'][2]) }}{{ item_slot(m.trinket) }}
-        {{ item_slot(m['items'][3]) }}{{ item_slot(m['items'][4]) }}{{ item_slot(m['items'][5]) }}
-      </div>
-    </div>
-    <div class="m-teams">
-      {% for team in (m.blue, m.red) %}
-      <div>
-        {% for p in team %}
-        <div class="p{{ ' me' if p.me }}"><img src="{{ p.icon }}" alt="" loading="lazy" data-tip="{{ p.champion }}">{% if p.url and not p.me %}<a href="{{ p.url }}">{{ p.name }}</a>{% else %}<span>{{ p.name }}</span>{% endif %}</div>
+      <div class="m-comp">
+        {% for team in (m.blue, m.red) %}
+        <div class="team">{% for p in team %}<a class="{{ 'me' if p.me }}" {% if p.url and not p.me %}href="{{ p.url }}"{% endif %} data-tip="{{ p.name }}&#10;{{ p.champion }}"><img src="{{ p.icon }}" alt="{{ p.champion }}" loading="lazy"></a>{% endfor %}</div>
         {% endfor %}
       </div>
-      {% endfor %}
+      <button class="m-expand" type="button" data-detail="{{ detail_base }}/{{ m.match_id }}" aria-label="Show the full game">{{ icon('chevron') }}</button>
     </div>
-    <button class="m-expand" type="button" data-detail="{{ detail_base }}/{{ m.match_id }}" aria-label="Show the full game">{{ icon('chevron') }}</button>
+    <div class="m-detail"></div>
+  </article>
+  {% endfor %}
   </div>
-  <div class="m-detail"></div>
-</article>
+</section>
 {% endfor %}

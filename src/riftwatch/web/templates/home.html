@@ -1,52 +1,58 @@
 {% extends "base.html" %}
-{% from "_macros.html" import icon, search_form, tier_badge, wr %}
+{% from "_macros.html" import icon, search_form, tier_badge, wr, pos_icon %}
 {% block content %}
 <section class="hero">
-  <div class="glow"></div>
   <div class="container">
-    <h1>Know your games.<br><b>Win your next one.</b></h1>
-    <p class="lead">Match history, ranked stats and builds for any player, plus coaching that compares every minute of your game with players at your rank.</p>
-    {{ search_form(regions, region, big=True) }}
-    {% if error %}<p class="loss-text" style="margin-top:12px;position:relative">{{ error }}</p>{% endif %}
-    <div class="chips" id="recent-chips"></div>
+    <div>
+      <div class="eyebrow">Post-game analysis for League of Legends</div>
+      <h1>Every minute of your game, <em>measured</em> against your rank.</h1>
+      <p class="lead">Look up any Riot ID in any region. RiftWatch lays out the match history, then shows where you gained and lost ground compared with players at your rank, in your role, on your champion.</p>
+      {{ search_form(regions, 'auto', big=True) }}
+      {% if error %}<p class="err">{{ error }}</p>{% endif %}
+      <div class="chips" id="recent-chips"></div>
+    </div>
+    <div class="hero-card" aria-hidden="true">
+      <div class="top"><b>CS at each minute</b><span class="eyebrow">sample review</span></div>
+      <svg class="spark" viewBox="0 0 420 150">
+        <path class="band" d="M10,128 C80,112 140,88 210,66 C280,46 340,30 410,18 L410,52 C340,62 280,76 210,94 C140,112 80,130 10,140 Z"/>
+        <path class="med" d="M10,134 C80,121 140,100 210,80 C280,61 340,46 410,35"/>
+        <path class="you" d="M10,136 C70,126 120,112 170,104 C220,96 250,93 290,88 C330,83 370,74 410,66"/>
+        <text class="lbl" x="10" y="12">minute 0</text><text class="lbl" x="410" y="148" text-anchor="end">minute 20</text>
+      </svg>
+      <div class="legend"><span><i style="background:var(--amber)"></i>you</span><span><i style="background:var(--accent)"></i>typical at your rank</span><span><i style="background:var(--accent-soft);height:8px"></i>middle half</span></div>
+      <div class="note"><b>Work on farming.</b> From minute 7 your CS stayed in the bottom quarter of Platinum mid laners: 132 at minute 29 against a typical 204.</div>
+    </div>
   </div>
 </section>
 <div class="container">
-  <div class="stats-strip">
-    <div><b class="num">{{ '{:,}'.format(stats.games) }}</b><span>Games analysed</span></div>
-    <div><b class="num">{{ '{:,}'.format(stats.players) }}</b><span>Players seen</span></div>
-    <div><b class="num">{{ stats.champions }}</b><span>Champions</span></div>
-    <div><b>{{ stats.patch }}</b><span>Patch</span></div>
+  <div class="ticker">
+    <div><b>{{ '{:,}'.format(stats.games) }}</b><span>games analysed</span></div>
+    <div><b>{{ '{:,}'.format(stats.players) }}</b><span>players seen</span></div>
+    <div><b>{{ stats.champions }}</b><span>champions tracked</span></div>
+    <div><b>{{ stats.patch }}</b><span>current patch</span></div>
   </div>
 
   {% if top_champions %}
-  <div class="section-title"><h2>Strongest champions right now</h2><a href="/champions">Full tier list &rarr;</a></div>
-  <div class="champ-strip">
+  <div class="section-title"><h2>Climbing the meta</h2><a href="/champions">full tier board &rarr;</a></div>
+  <div class="meta-strip">
     {% for c in top_champions %}
-    <a class="champ-tile" href="/champions/{{ c.slug }}?role={{ c.position|lower }}">
-      <img src="{{ c.icon }}" alt="" loading="lazy">
+    <a class="meta-tile" href="/champions/{{ c.slug }}?role={{ c.position|lower }}">
+      <div class="row1"><img src="{{ c.icon }}" alt="" loading="lazy">{{ tier_badge(c.tier) }}</div>
       <b>{{ c.name }}</b>
       <span>{{ c.role }} &middot; {{ wr(c.win_rate) }}</span>
-      <div style="margin-top:6px">{{ tier_badge(c.tier) }}</div>
     </a>
     {% endfor %}
   </div>
   {% endif %}
 
-  <div class="section-title"><h2>What you get</h2></div>
-  <div class="features">
-    <div class="feature"><div class="ico" style="background:var(--accent-soft);color:var(--accent)">{{ icon('history') }}</div>
-      <h3>Full match history</h3><p>Every ranked and draft game: items, runes, KDA, CS, vision, multikills, MVP and ACE, all ten players, gold graphs, build and skill order.</p></div>
-    <div class="feature"><div class="ico" style="background:rgba(169,121,255,.15);color:var(--purple)">{{ icon('brain') }}</div>
-      <h3>AI coaching that shows its work</h3><p>Every minute of your game is scored against players at your rank in your role, and an AI coach explains it, citing only numbers it can prove.</p></div>
-    <div class="feature"><div class="ico" style="background:rgba(46,194,126,.15);color:var(--green)">{{ icon('chart') }}</div>
-      <h3>Progress and habits</h3><p>Week-by-week progress against a fixed yardstick, champion pool strengths, and whether you tilt late in a session or after losses.</p></div>
-    <div class="feature"><div class="ico" style="background:rgba(255,138,60,.15);color:var(--orange)">{{ icon('trophy') }}</div>
-      <h3>Champion tier lists and builds</h3><p>Win, pick and ban rates by role and rank, core builds, runes, skill orders and matchups from {{ '{:,}'.format(stats.ranked) }} ranked games.</p></div>
-    <div class="feature"><div class="ico" style="background:rgba(255,84,112,.15);color:var(--loss)">{{ icon('live') }}</div>
-      <h3>Live game scouting</h3><p>Ranks, recent form, mains and champion experience for all ten players in a game in progress.</p></div>
-    <div class="feature"><div class="ico" style="background:rgba(242,184,75,.15);color:var(--gold)">{{ icon('eye') }}</div>
-      <h3>Learned from high-elo video</h3><p>A laning model trained on Master+ replays tells you which trades high-elo players take, and which ones you missed.</p></div>
+  <div class="section-title"><h2>How a review works</h2><a href="/about">the method &rarr;</a></div>
+  <div class="steps">
+    <div class="step-item"><span class="n">01</span><h3>Every game, laid out</h3><p>Items, runes, KDA, farm, vision and all ten players for each game, with build order, skill order and the gold lead over time.</p></div>
+    <div class="step-item"><span class="n">02</span><h3>Scored against your rank</h3><p>Each minute is compared with players at your rank, in your role, on your champion and matchup, so the numbers mean something.</p></div>
+    <div class="step-item"><span class="n">03</span><h3>Coaching that cites its sources</h3><p>An AI coach explains the biggest gaps, and every number it quotes has to appear in the measured evidence.</p></div>
+    <div class="step-item"><span class="n">04</span><h3>Habits over time</h3><p>Weekly progress against a fixed yardstick, your champion pool, and whether you slip late in a session or after losses.</p></div>
+    <div class="step-item"><span class="n">05</span><h3>Learned from high-elo play</h3><p>Models trained on Master+ games and replays show what top players do in spots like yours.</p></div>
+    <div class="step-item"><span class="n">06</span><h3>Live and meta</h3><p>Scout everyone in a game in progress, and check the tier board and builds from {{ '{:,}'.format(stats.ranked) }} ranked games.</p></div>
   </div>
 </div>
 {% endblock %}

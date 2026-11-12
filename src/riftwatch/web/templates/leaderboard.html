@@ -4,15 +4,30 @@
 {% block content %}
 <div class="container">
   <div class="page-title">
+    <div class="eyebrow">Ladder &middot; {{ region|upper }}</div>
     <h1>Ranked leaderboard</h1>
     <p>{{ source }}</p>
   </div>
+  <div class="toolbar" style="padding:0 0 14px;border:0">
+    <nav class="seg" aria-label="Region">{% for r in board_regions %}<a href="/leaderboard/{{ r }}" class="{{ 'on' if r == region }}">{{ r|upper }}</a>{% endfor %}</nav>
+    <div class="grow"></div>
+    <input type="search" placeholder="Find a player" data-filter="#lb-body tr" aria-label="Find a player">
+  </div>
+  {% if players %}
+  <div class="podium">
+    {% for p in players[:3] %}
+    <a class="pod p{{ loop.index }}"{% if p.url %} href="{{ p.url }}"{% endif %}>
+      <span class="place">{{ p.rank }}</span>
+      <div>
+        <b>{% if p.name %}{{ p.name }}{% else %}<span class="muted">Not on RiftWatch yet</span>{% endif %}</b>
+        <span><span class="t-{{ p.tier|lower }}">{{ p.tier|title }}</span>{% if p.lp is not none %} &middot; {{ '{:,}'.format(p.lp) }} LP{% endif %}{% if p.win_rate is not none %} &middot; {{ wr(p.win_rate) }}{% endif %}</span>
+      </div>
+      <img src="{{ p.crest }}" alt="" loading="lazy">
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
   <div class="panel" style="margin-bottom:40px">
-    <div class="toolbar">
-      <div class="pills">{% for r in board_regions %}<a href="/leaderboard/{{ r }}" class="{{ 'on' if r == region }}">{{ r|upper }}</a>{% endfor %}</div>
-      <div class="grow"></div>
-      <input type="search" placeholder="Find a player" data-filter="#lb-body tr" aria-label="Find a player">
-    </div>
     {% if players %}
     <div class="scroll">
     <table class="data">

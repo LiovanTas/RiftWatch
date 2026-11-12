@@ -7,7 +7,7 @@ pytestmark = pytest.mark.skipif(not TEST_DB, reason="RIFTWATCH_TEST_DATABASE_URL
 
 
 @pytest.fixture
-def web(request):
+def web(request, tmp_path):
     from fastapi.testclient import TestClient
     from psycopg_pool import ConnectionPool
 
@@ -45,7 +45,10 @@ def web(request):
     ok = CoachOutput(headline="Review.", points=[point(evidence_ids=["E1"], explanation="A game.")])
     coach, coach_calls = fake_coach(ok, ok, ok)
     # Tests can pass extra settings with @pytest.mark.parametrize("web", [{...}], indirect=True).
-    settings = Settings.from_env({"RIFTWATCH_DATABASE_URL": TEST_DB, **getattr(request, "param", {})})
+    # An empty models folder, so the tests don't load whatever models are trained locally.
+    settings = Settings.from_env({"RIFTWATCH_DATABASE_URL": TEST_DB,
+                                  "RIFTWATCH_MODELS_DIR": str(tmp_path / "models"),
+                                  **getattr(request, "param", {})})
     from riftwatch.web.gamedata import GameData
 
     gd = GameData()
@@ -351,3 +354,23 @@ def test_leaderboard_about_and_missing_pages(web):
     assert missing.status_code == 404 and "Page not found" in missing.text
     assert client.get("/api/nope").json()["detail"]
     assert client.get("/static/site.css").status_code == 200
+
+
+def test_players_are_found_in_any_region(web):
+    client, api, _, jobs = web
+    # Not stored yet: Riot says where they play.
+    r = client.get("/search?riot_id=Me%23NA1", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/players/na/Me-NA1"
+    # Opened under the wrong region: the sync job doesn't sync there, it points the way.
+    r = client.post("/api/players/euw/Me-NA1/sync")
+    job = jobs.wait(r.json()["job"]["id"])
+    assert job.status == "done" and job.result == {"redirect": "/players/na/Me-NA1"}
+    sync(client, jobs)
+    # Stored: found without asking Riot, and a wrong-region URL redirects.
+    calls = len(api.calls)
+    r = client.get("/search?region=auto&riot_id=me%23na1", follow_redirects=False)
+    assert r.headers["location"] == "/players/na/Me-NA1" and len(api.calls) == calls
+    r = client.get("/players/euw/Me-NA1?tab=champions", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/players/na/Me-NA1?tab=champions"
+    missing = client.get("/search?riot_id=Nobody%23NA1")
+    assert missing.status_code == 400 and "in any region" in missing.text

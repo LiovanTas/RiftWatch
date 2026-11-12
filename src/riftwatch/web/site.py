@@ -33,6 +33,8 @@ PLATFORM_REGION = {"na1": "na", "euw1": "euw", "eun1": "eune", "kr": "kr", "br1"
                    "la1": "lan", "la2": "las", "oc1": "oce", "tr1": "tr", "jp1": "jp",
                    "me1": "me", "sg2": "sg", "tw2": "tw", "vn2": "vn", "ru": "ru"}
 QUEUE_TABS = (("all", "All"), ("solo", "Ranked Solo"), ("flex", "Ranked Flex"), ("normal", "Normal"))
+TIER_BLURBS = (("S+", "best picks"), ("S", "strong"), ("A", "good"), ("B", "fine"),
+               ("C", "weak"), ("D", "avoid"))
 CHAMP_QUEUES = (("ranked", "Ranked"), ("solo", "Solo/Duo"), ("flex", "Flex"), ("all", "All"))
 STATIC = Path(__file__).parent / "static"
 LEADERBOARD_S = 1800
@@ -123,17 +125,64 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                  "champions": len(gd.champions) or 170, "patch": ".".join(gd.version.split(".")[:2])}
         return render("home.html", nav="home", stats=stats, top_champions=top)
 
+    def search_error(message: str) -> HTMLResponse:
+        return render("home.html", status=400, nav="home", error=message,
+                      stats={"games": 0, "ranked": 0, "players": 0, "champions": 0,
+                             "patch": ""}, top_champions=[])
+
     @app.get("/search")
-    def search(region: str, riot_id: str):
+    def search(riot_id: str, region: str = "auto"):
+        """``region=auto`` (the default) finds the player's region from their Riot ID:
+        RiftWatch's own records first, then Riot."""
         try:
-            platform_for(region)
             rid = parse_riot_id(riot_id)
+            if region.lower() != "auto":
+                platform_for(region)
         except ValueError as exc:
-            return render("home.html", status=400, nav="home", error=str(exc),
-                          stats={"games": 0, "ranked": 0, "players": 0, "champions": 0,
-                                 "patch": ""}, top_champions=[])
+            return search_error(str(exc))
+        if region.lower() != "auto":
+            return RedirectResponse(
+                f"/players/{region.lower()}/{views.path_id(rid.game_name, rid.tag_line)}", 303)
+        found = locate(rid.game_name, rid.tag_line)
+        if found is None:
+            return search_error(f"Couldn't find {rid.game_name}#{rid.tag_line} in any region. "
+                                "Check the name and #TAG, or pick the region.")
+        if isinstance(found, str):
+            return search_error(found)
+        name, tag, platform = found
         return RedirectResponse(
-            f"/players/{region.lower()}/{views.path_id(rid.game_name, rid.tag_line)}", 303)
+            f"/players/{PLATFORM_REGION.get(platform, platform)}/{views.path_id(name, tag)}", 303)
+
+    def locate(name: str, tag: str):
+        """(name, tag, platform) for a Riot ID in any region, None if it doesn't exist, or a
+        message when Riot can't be asked."""
+        with pool.connection() as conn:
+            known = repo.find_account(conn, name, tag)
+            if known is not None:
+                return known["game_name"], known["tag_line"], known["platform"]
+            seen = conn.execute(
+                """SELECT riot_name, riot_tag, lower(split_part(match_id, '_', 1))
+                     FROM participant_builds
+                    WHERE lower(riot_name) = lower(%s) AND lower(riot_tag) = lower(%s)
+                    ORDER BY game_start DESC LIMIT 1""", (name, tag)).fetchone()
+            if seen is not None:
+                return seen
+        if services.api is None:
+            return "Pick the player's region: RiftWatch can't look up new players right now."
+        from riftwatch.riot.client import RiotApiError
+        from riftwatch.riot.routing import RiotId
+
+        try:
+            account = services.api.account_by_riot_id("na1", RiotId(name, tag))
+            if account is None:
+                return None
+            platform = services.api.active_platform(account["puuid"]) or "na1"
+        except RiotApiError:
+            return ("RiftWatch can't reach Riot right now. Pick the player's region and try "
+                    "again later.")
+        return account.get("gameName", name), account.get("tagLine", tag), platform
+
+    app.state.locate = locate
 
     @app.get("/about", response_class=HTMLResponse)
     def about() -> HTMLResponse:
@@ -171,8 +220,8 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
     # -- player profile ---------------------------------------------------------------------
 
     @app.get("/players/{region}/{riot_id}", response_class=HTMLResponse)
-    def player_page(region: str, riot_id: str, tab: str = "overview", queue: str = "all",
-                    cq: str = "ranked", job: str | None = None) -> HTMLResponse:
+    def player_page(request: Request, region: str, riot_id: str, tab: str = "overview",
+                    queue: str = "all", cq: str = "ranked", job: str | None = None):
         if region_or_none(region) is None:
             return error_page("Unknown region", f"RiftWatch doesn't know the region {region!r}.")
         region = region.lower()
@@ -183,6 +232,13 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
         try:
             with pool.connection() as conn:
                 name, tag, account = find_account(conn, region, riot_id)
+                if account is None:
+                    elsewhere = repo.find_account(conn, name, tag)
+                    if elsewhere is not None:            # stored under another region
+                        right = PLATFORM_REGION.get(elsewhere["platform"], elsewhere["platform"])
+                        query = f"?{request.url.query}" if request.url.query else ""
+                        target = views.path_id(elsewhere["game_name"], elsewhere["tag_line"])
+                        return RedirectResponse(f"/players/{right}/{target}{query}", 303)
                 base = {"region": region, "name": name, "tag": tag, "shown": f"{name}#{tag}",
                         "sync_url": f"/api/players/{region}/{riot_id}/sync",
                         "scout_url": f"/api/scout/{region}/{riot_id}", "tab": tab,
@@ -209,12 +265,15 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                 }
                 if tab == "overview":
                     rows = views.match_rows(conn, gd, puuid, region, queue)
-                    ctx.update(rows=rows, summary=views.summary(rows),
+                    ctx.update(rows=rows, groups=views.day_groups(rows),
+                               summary=views.summary(rows),
                                season=views.champion_stats(conn, gd, puuid, "ranked"),
                                friends=views.played_with(conn, puuid, region),
                                detail_base=f"/fragments/players/{region}/{riot_id}/matches",
                                more_url=f"/fragments/players/{region}/{riot_id}/matches?queue={queue}")
-                elif tab == "champions":
+                else:                                   # the header's stat band and form
+                    ctx["summary"] = views.summary(views.match_rows(conn, gd, puuid, region))
+                if tab == "champions":
                     ctx["season"] = views.champion_stats(conn, gd, puuid, cq)
                 elif tab == "coach":
                     ctx.update(_coach_tab(conn, puuid, region, riot_id))
@@ -294,7 +353,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
 
     @app.get("/fragments/players/{region}/{riot_id}/matches", response_class=HTMLResponse)
     def more_matches(region: str, riot_id: str, queue: str = "all",
-                     offset: int = Query(0, ge=0)) -> HTMLResponse:
+                     offset: int = Query(0, ge=0), after_day: str = "") -> HTMLResponse:
         with pool.connection() as conn:
             _, _, account = find_account(conn, region, riot_id)
             if account is None:
@@ -302,7 +361,8 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             rows = views.match_rows(conn, game_data(), account["puuid"], region.lower(),
                                     queue if queue in views.QUEUE_FILTERS else "all", offset=offset)
         html = env.get_template("_match_rows.html").render(
-            rows=rows, detail_base=f"/fragments/players/{region}/{riot_id}/matches")
+            groups=views.day_groups(rows, after_day or None),
+            detail_base=f"/fragments/players/{region}/{riot_id}/matches")
         return HTMLResponse(html)
 
     @app.get("/fragments/players/{region}/{riot_id}/matches/{match_id}", response_class=HTMLResponse)
@@ -341,7 +401,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
 
     @app.get("/champions", response_class=HTMLResponse)
     def champions_page(request: Request, role: str | None = None, rank: str = "all",
-                       patch: str | None = None) -> HTMLResponse:
+                       patch: str | None = None, view: str = "board") -> HTMLResponse:
         gd = game_data()
         role = role.upper() if role and role.upper() in gamedata.POSITIONS else None
         rank = _rank(rank)
@@ -364,7 +424,8 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
         return render("champions.html", nav="champions", rows=rows, games=data["games"],
                       role=role, role_name=gamedata.POSITIONS.get(role or "", ""), rank=rank,
                       ranks=[(k, v[0]) for k, v in champ_stats.RANKS.items()], patch=patch,
-                      patches=list(known.items())[:12], qs=_query_string(request))
+                      patches=list(known.items())[:12], qs=_query_string(request),
+                      view="table" if view == "table" else "board", tiers=TIER_BLURBS)
 
     @app.get("/champions/{slug}", response_class=HTMLResponse)
     def champion_page(request: Request, slug: str, role: str | None = None, rank: str = "all",

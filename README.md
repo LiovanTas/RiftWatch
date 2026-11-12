@@ -238,31 +238,36 @@ Things measurement changed along the way:
 
 ## Website
 
-`riftwatch serve` starts the site on http://localhost:8000, a League stats site in the mould
-of op.gg and u.gg, with RiftWatch's coaching built in:
+`riftwatch serve` starts the site on http://localhost:8000: League match history and stats
+with RiftWatch's coaching built in.
 
-- **Search** any Riot ID by region, with autocomplete from every player RiftWatch has seen,
-  recent searches and favourites. A player RiftWatch hasn't seen yet loads on the spot: the
-  page downloads their games from Riot and shows its progress.
-- **Profiles:** ranked solo and flex, season champion stats, recently played with, and a
-  summary of the last 20 games (win rate, KDA, kill participation, top champions, positions).
-- **Match history** filtered by queue, one card per game: champion, level, summoner spells,
-  runes, KDA, kill participation, control wards, CS, items, all ten players, multikills and
-  MVP/ACE badges. Expanding a game shows:
+- **Search** any Riot ID in any region (or ALL, which finds the region itself), from the home
+  page or a command palette on every page (`/` or Ctrl+K). Autocomplete covers every player
+  RiftWatch has seen, plus recent searches and favourites. A player RiftWatch hasn't seen yet
+  loads on the spot: the page downloads their games from Riot and shows its progress.
+- **Player file:** a stat band with ranked solo and flex, the last 20 games' win rate and
+  streak, average KDA and most-played champion and role; a form strip of the last 20 results;
+  season champion stats and duo partners alongside.
+- **Match timeline,** filtered by queue and grouped by day with each day's record. Each game
+  has a 0-10 performance score ring (KDA, kill share, damage, gold, farm and vision against
+  the other nine players, with MVP/ACE), champion, spells, runes, KDA, CS, damage, vision,
+  control wards, items, multikills and both team comps. Expanding a game shows:
   - both teams' full scoreboards with damage, wards, gold, bans and objectives
   - the player's item build by minute, skill order and rune page
   - a team gold graph
   - a link to RiftWatch's minute-by-minute analysis and AI coaching.
 - **Tabs:** Champions (sortable season stats), AI Coach (coaching on recent games, weekly
-  progress, sessions, champion pool) and Live Game (scouting all ten players in a game in
+  progress, sessions, champion pool) and Live game (scouting all ten players in a game in
   progress).
-- **Champion tier list** from every stored ranked game: win, pick and ban rates, S+ to D tiers
-  by role, counters, and filters by role, rank group and patch.
+- **Tier board** from every stored ranked game: champions laid out in S+ to D rows by role,
+  or as a sortable table with win, pick and ban rates and counters; filters by role, rank
+  group and patch.
 - **Champion pages:** runes (with the full most-played page), summoner spells, skill max order
   and level-by-level order, core builds, starting items, boots, later items by slot,
   toughest and best matchups, and abilities.
-- **Leaderboard:** the top 100 of each region live from Riot, refreshed every 30 minutes.
-  Without an API key it falls back to the apex players RiftWatch has stored.
+- **Ladder:** the top 100 of each region live from Riot with a podium for the top three,
+  refreshed every 30 minutes. Without an API key it falls back to the apex players RiftWatch
+  has stored.
 
 The pages are server-rendered Jinja2 templates (`web/templates/`) with one stylesheet and one
 script (`web/static/`). There's no build step. Dark and light themes follow the visitor's choice

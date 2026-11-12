@@ -2,6 +2,18 @@
 {% from "_macros.html" import icon, rank_card, wr, pos_icon %}
 {% block title %}{{ shown }} - Match History & Stats | RiftWatch{% endblock %}
 {% block description %}{{ shown }}'s League of Legends match history, ranked stats, champion stats and coaching on RiftWatch.{% endblock %}
+{% macro rank_stat(card, label) -%}
+<div class="stat">
+  {% if card %}<img src="{{ card.crest }}" alt="" loading="lazy">{% endif %}
+  <div>
+    <div class="k">{{ label }}</div>
+    {% if card %}
+    <div class="v t-{{ card.key }}">{{ card.tier }} {{ card.division }}</div>
+    <div class="s">{{ card.lp }} LP &middot; {{ card.win_rate }}% of {{ card.games }}</div>
+    {% else %}<div class="v muted">Unranked</div><div class="s">no placement this season</div>{% endif %}
+  </div>
+</div>
+{%- endmacro %}
 {% block content %}
 <div data-profile="{{ profile_json }}" hidden></div>
 <section class="profile-top">
@@ -12,34 +24,56 @@
         {% if head and head.level %}<span class="lv">{{ head.level }}</span>{% endif %}
       </div>
       <div class="who">
+        <div class="eyebrow">Player file</div>
         <h1>{{ name }} <span class="tag">#{{ tag }}</span></h1>
         <div class="meta-line">
           <span class="reg">{{ region|upper }}</span>
           {% if head and head.updated %}<span>Updated {{ head.updated }}</span>{% endif %}
-          {% if games_cached %}<span>&middot; {{ '{:,}'.format(games_cached) }} games on RiftWatch</span>{% endif %}
-        </div>
-        <div class="actions">
-          <button class="btn primary" data-sync="{{ sync_url }}" type="button">{{ icon('refresh') }} Update</button>
-          <a class="btn" href="?tab=live">{{ icon('live') }} Live game</a>
-          <button class="btn star" id="fav" type="button" aria-label="Favourite">{{ icon('star') }}</button>
-          <button class="btn" data-copy type="button" aria-label="Copy link">{{ icon('link') }}</button>
-          <span class="status" id="sync-status"></span>
+          {% if games_cached %}<span>{{ '{:,}'.format(games_cached) }} games on RiftWatch</span>{% endif %}
         </div>
       </div>
-      {% if solo %}
-      <div class="head-rank">
-        <img src="{{ solo.crest }}" alt="" loading="lazy">
-        <div><span class="muted small">Ranked Solo/Duo</span><b class="t-{{ solo.key }}">{{ solo.tier }} {{ solo.division }}</b><span class="small muted">{{ solo.lp }} LP &middot; {{ solo.win_rate }}% WR</span></div>
+      <div class="head-actions">
+        <button class="btn primary" data-sync="{{ sync_url }}" type="button">{{ icon('refresh') }} Update</button>
+        <a class="btn" href="?tab=live">{{ icon('live') }} Live game</a>
+        <button class="btn star" id="fav" type="button" aria-label="Favourite">{{ icon('star') }}</button>
+        <button class="btn" data-copy type="button" aria-label="Copy link">{{ icon('link') }}</button>
+        <span class="status" id="sync-status"></span>
       </div>
-      {% endif %}
     </div>
     {% if synced %}
-    <nav class="tabs">
-      <a href="?tab=overview" class="{{ 'on' if tab == 'overview' }}">Overview</a>
-      <a href="?tab=champions" class="{{ 'on' if tab == 'champions' }}">Champions</a>
-      <a href="?tab=coach" class="{{ 'on' if tab == 'coach' }}">AI Coach</a>
-      <a href="?tab=live" class="{{ 'on' if tab == 'live' }}">Live Game</a>
-    </nav>
+    <div class="statband">
+      {{ rank_stat(solo, 'Ranked Solo / Duo') }}
+      {{ rank_stat(flex, 'Ranked Flex') }}
+      {% if summary %}
+      <div class="stat"><div><div class="k">Last {{ summary.games }} games</div><div class="v">{{ wr(summary.win_rate) }} won</div><div class="s">{{ summary.wins }}W {{ summary.losses }}L &middot; streak {{ summary.streak }}</div></div></div>
+      <div class="stat"><div><div class="k">Average KDA</div><div class="v">{{ summary.kda }}{% if summary.kda != 'Perfect' %}<span class="muted">:1</span>{% endif %}</div><div class="s">{{ summary.kills }} / <span class="loss-text">{{ summary.deaths }}</span> / {{ summary.assists }} &middot; {{ summary.kp }}% KP</div></div></div>
+      {% if summary.champions %}{% set c = summary.champions[0] %}
+      <div class="stat"><img class="sq" src="{{ c.icon }}" alt="" loading="lazy"><div><div class="k">Most played{% if summary.main_role %} &middot; {{ summary.main_role.name }}{% endif %}</div><div class="v">{{ c.name }}</div><div class="s">{{ c.games }} games &middot; {{ c.win_rate }}% won</div></div></div>
+      {% endif %}
+      {% else %}
+      <div class="stat"><div><div class="k">Recent games</div><div class="v muted">None yet</div><div class="s">press Update to download</div></div></div>
+      {% endif %}
+    </div>
+    {% if summary %}
+    <div class="form" aria-label="Results of the last {{ summary.form|length }} games, oldest first">
+      <span class="label">Form</span>
+      <div class="cells">{% for f in summary.form|reverse %}<span class="cell {{ f }}">{{ {'win': 'W', 'loss': 'L'}.get(f, 'R') }}</span>{% endfor %}</div>
+      <span class="streak">older &rarr; newer</span>
+    </div>
+    {% endif %}
+    <div class="profile-nav">
+      <nav class="seg" aria-label="Player sections">
+        <a href="?tab=overview" class="{{ 'on' if tab == 'overview' }}">{{ icon('history') }} Timeline</a>
+        <a href="?tab=champions" class="{{ 'on' if tab == 'champions' }}">{{ icon('sword') }} Champions</a>
+        <a href="?tab=coach" class="{{ 'on' if tab == 'coach' }}">{{ icon('brain') }} AI Coach</a>
+        <a href="?tab=live" class="{{ 'on' if tab == 'live' }}">{{ icon('live') }} Live game</a>
+      </nav>
+      {% if tab == 'overview' %}
+      <nav class="seg" aria-label="Queue">
+        {% for key, label in queues %}<a href="?tab=overview&amp;queue={{ key }}" class="{{ 'on' if queue == key }}">{{ label }}</a>{% endfor %}
+      </nav>
+      {% endif %}
+    </div>
     {% endif %}
   </div>
 </section>
@@ -56,14 +90,40 @@
   </div>
 
 {% elif tab == 'overview' %}
-  <div class="profile-grid">
-    <aside>
-      {{ rank_card(solo, 'Ranked Solo/Duo') }}
-      <div style="height:12px"></div>
-      {{ rank_card(flex, 'Ranked Flex') }}
+  <div class="profile-grid" style="padding-top:20px">
+    <div>
+      {% if summary %}
+      <div class="panel">
+        <div class="summary">
+          <div><div class="k">Win rate</div><div class="v">{{ wr(summary.win_rate) }}</div><div class="s">{{ summary.wins }}W {{ summary.losses }}L</div></div>
+          <div><div class="k">KDA</div><div class="v">{{ summary.kda }}</div><div class="s">{{ summary.kills }} / {{ summary.deaths }} / {{ summary.assists }}</div></div>
+          <div><div class="k">Farm</div><div class="v">{{ summary.cs_min }}</div><div class="s">CS per minute</div></div>
+          <div><div class="k">Roles</div>
+            <div class="roles-bar">{% for p in summary.positions if p.share %}<i style="width:{{ p.share }}%;background:{{ p.colour }}" title="{{ p.name }} {{ p.share }}%"></i>{% endfor %}</div>
+            <div class="roles-key">{% for p in summary.positions if p.share %}<span style="--c:{{ p.colour }}">{{ p.name }} {{ p.share }}%</span>{% endfor %}</div>
+          </div>
+        </div>
+        <div class="top-champs">
+          <span class="eyebrow" style="color:var(--muted)">Picks</span>
+          {% for c in summary.champions %}
+          <div class="tc"><img src="{{ c.icon }}" alt="" loading="lazy"><div><b>{{ c.name }}</b> {{ wr(c.win_rate) }} <span>{{ c.wins }}W {{ c.losses }}L &middot; {{ c.kda }} KDA</span></div></div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+      <div id="match-list">
+        {% include "_match_rows.html" %}
+      </div>
+      {% if not rows %}
+      <div class="panel empty" style="margin-top:12px"><h3>No games here yet</h3><p>Try another queue, or press Update to download the newest games.</p></div>
+      {% elif rows|length >= 20 %}
+      <button class="btn more" type="button" data-more="{{ more_url }}" data-offset="{{ rows|length }}">Load older games</button>
+      {% endif %}
+    </div>
+    <aside class="side">
       {% if season %}
-      <div class="panel" style="margin-top:12px">
-        <div class="panel-head">Season {{ year }} champions <a class="muted small" href="?tab=champions">All &rarr;</a></div>
+      <div class="panel">
+        <div class="panel-head"><span><span class="n">01</span>Season {{ year }} champions</span><a class="muted small" href="?tab=champions">All &rarr;</a></div>
         <div class="panel-body" style="padding-top:6px;padding-bottom:6px">
           <table class="mini-table">
           {% for c in season[:7] %}
@@ -78,8 +138,8 @@
       </div>
       {% endif %}
       {% if friends %}
-      <div class="panel" style="margin-top:12px">
-        <div class="panel-head">Recently played with <span class="muted small">last 60 games</span></div>
+      <div class="panel">
+        <div class="panel-head"><span><span class="n">02</span>Duo partners</span><span class="muted small">last 60 games</span></div>
         <div class="panel-body" style="padding-top:6px;padding-bottom:6px">
           <table class="mini-table">
           {% for f in friends %}
@@ -94,62 +154,16 @@
       </div>
       {% endif %}
     </aside>
-    <div>
-      <div class="panel">
-        <div class="filters">
-          <div class="pills">
-            {% for key, label in queues %}<a href="?tab=overview&amp;queue={{ key }}" class="{{ 'on' if queue == key }}">{{ label }}</a>{% endfor %}
-          </div>
-          <span class="muted small">Recent {{ summary.games if summary else 0 }} games</span>
-        </div>
-        {% if summary %}
-        <div class="summary">
-          <div class="donut-wrap">
-            <svg class="donut" viewBox="0 0 42 42" role="img" aria-label="{{ summary.win_rate }}% wins">
-              <circle class="base" cx="21" cy="21" r="15.9" fill="none" stroke-width="5"/>
-              <circle class="val" cx="21" cy="21" r="15.9" fill="none" stroke-width="5" stroke-dasharray="{{ summary.win_rate }} {{ 100 - summary.win_rate }}" stroke-dashoffset="25" stroke-linecap="butt"/>
-              <text x="21" y="24" text-anchor="middle">{{ summary.win_rate }}%</text>
-            </svg>
-            <div class="kda-big">
-              {{ summary.games }}G {{ summary.wins }}W {{ summary.losses }}L
-              <b>{{ summary.kills }} / <span class="loss-text">{{ summary.deaths }}</span> / {{ summary.assists }}</b>
-              <span class="ratio">{{ summary.kda }}{% if summary.kda != 'Perfect' %}:1{% endif %}</span> <span class="loss-text">P/Kill {{ summary.kp }}%</span>
-            </div>
-          </div>
-          <div class="sum-champs">
-            {% for c in summary.champions %}
-            <div class="c"><img src="{{ c.icon }}" alt="" loading="lazy"><b>{{ c.name }}</b> {{ wr(c.win_rate) }} <span class="muted">({{ c.wins }}W {{ c.losses }}L) {{ c.kda }} KDA</span></div>
-            {% endfor %}
-          </div>
-          <div>
-            <div class="muted small" style="text-align:center;margin-bottom:6px">Preferred position</div>
-            <div class="roles">
-              {% for p in summary.positions %}
-              <div class="r" title="{{ p.name }} {{ p.share }}%"><div class="bar"><i style="height:{{ p.share }}%"></i></div>{{ pos_icon(gd, p.key) }}</div>
-              {% endfor %}
-            </div>
-          </div>
-        </div>
-        {% endif %}
-      </div>
-      <div class="matches" id="match-list" style="margin-top:12px">
-        {% include "_match_rows.html" %}
-      </div>
-      {% if not rows %}
-      <div class="panel empty" style="margin-top:12px"><h3>No games here yet</h3><p>Try another queue, or press Update to download the newest games.</p></div>
-      {% elif rows|length >= 20 %}
-      <button class="btn more" type="button" data-more="{{ more_url }}" data-offset="{{ rows|length }}">Show more games</button>
-      {% endif %}
-    </div>
   </div>
 
 {% elif tab == 'champions' %}
-  <div class="panel" style="margin:16px 0 40px">
+  <div class="panel" style="margin:20px 0 40px">
     <div class="toolbar">
-      <b>Season {{ year }} champion stats</b>
-      <div class="pills">
+      <b style="font-family:var(--display)">Season {{ year }} champion stats</b>
+      <span class="grow"></span>
+      <nav class="seg" aria-label="Queue">
         {% for key, label in champ_queues %}<a href="?tab=champions&amp;cq={{ key }}" class="{{ 'on' if cq == key }}">{{ label }}</a>{% endfor %}
-      </div>
+      </nav>
     </div>
     {% if season %}
     <div class="scroll">
@@ -178,16 +192,16 @@
 {% elif tab == 'coach' %}
   <div class="coach-wrap" style="margin:6px 0 40px">
     {% if coaching %}<h2>AI coaching on recent games</h2><div class="card coach">{{ coaching|safe }}</div>
-    {% else %}<div class="panel empty" style="margin-top:16px"><h3>Not enough analysed games yet</h3><p>Coaching needs at least a few ranked or draft games with their timelines. Press Update to download them.</p></div>{% endif %}
+    {% else %}<div class="panel empty" style="margin-top:20px"><h3>Not enough analysed games yet</h3><p>Coaching needs at least a few ranked or draft games with their timelines. Press Update to download them.</p></div>{% endif %}
     {{ progress_html|safe }}
     {{ sessions_html|safe }}
     {{ pool_html|safe }}
   </div>
 
 {% elif tab == 'live' %}
-  <div style="margin:16px 0 40px">
+  <div style="margin:20px 0 40px">
     {% if live %}
-      <div class="panel" style="margin-bottom:12px"><div class="panel-head">{{ live.queue }} &middot; {{ live.platform|upper }} &middot; {{ live.clock }} in when scouted
+      <div class="panel" style="margin-bottom:12px"><div class="panel-head"><span><span class="n">LIVE</span>{{ live.queue }} &middot; {{ live.platform|upper }} &middot; {{ live.clock }} in when scouted</span>
         <button class="btn" data-scout="{{ scout_url }}" type="button">{{ icon('refresh') }} Refresh</button></div></div>
       {% for team in live.teams %}
       <div class="panel live-team">

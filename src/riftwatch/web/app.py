@@ -130,9 +130,23 @@ def create_app(
 
     def sync_job(params: dict[str, Any], progress) -> dict[str, Any]:
         """Runs in whichever server process claims the job, so it rebuilds what it needs
-        from its parameters."""
+        from its parameters. A player looked up under the wrong region isn't synced there:
+        the result says where they play, and the page goes there."""
         riot = services.require_api()
         rid = RiotId(params["game_name"], params["tag_line"])
+        account = riot.account_by_riot_id(params["platform"], rid)
+        if account is None:
+            raise NotFound(f"no account {rid} -- check the name, the #TAG and the region")
+        actual = riot.active_platform(account["puuid"])
+        if actual and actual != params["platform"]:
+            from riftwatch.web.site import PLATFORM_REGION
+            from riftwatch.web.views import path_id
+
+            region = PLATFORM_REGION.get(actual, actual)
+            progress(f"{rid} plays on {region.upper()}")
+            name = account.get("gameName") or rid.game_name
+            tag = account.get("tagLine") or rid.tag_line
+            return {"redirect": f"/players/{region}/{path_id(name, tag)}"}
         with pool.connection() as conn:
             result = Ingestor(conn, riot).sync(rid, params["platform"], count=params["count"],
                                                progress=progress)

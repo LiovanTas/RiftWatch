@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import quote
 
-from riftwatch.riot.client import RiotClient
+from riftwatch.riot.client import RiotApiError, RiotAuthError, RiotClient
 from riftwatch.riot.routing import (
     RiotId,
     account_region,
@@ -77,6 +77,27 @@ class RiotApi:
             "account-v1.by-puuid",
             f"/riot/account/v1/accounts/by-puuid/{_seg(puuid)}",
         )
+
+    def active_platform(self, puuid: str) -> str | None:
+        """The platform a player plays League on (``"euw1"``), whatever region they were
+        looked up from: account-v1's region endpoint, else where their newest game is stored
+        (match ids start with the platform, ``EUW1_...``). None if neither says."""
+        try:
+            found = self.client.get(
+                "americas", "account-v1.region-by-puuid",
+                f"/riot/account/v1/region/by-game/lol/by-puuid/{_seg(puuid)}")
+            if found and found.get("region"):
+                return str(found["region"]).lower()
+        except RiotAuthError:
+            raise                               # a dead key: the fallback won't work either
+        except RiotApiError:
+            pass                                # the endpoint isn't available: ask match-v5
+        for cluster in ("americas", "europe", "asia", "sea"):
+            ids = self.client.get(cluster, "match-v5.ids-by-puuid",
+                                  f"/lol/match/v5/matches/by-puuid/{_seg(puuid)}/ids", {"count": 1})
+            if ids:
+                return ids[0].split("_", 1)[0].lower()
+        return None
 
     # -- match-v5 (regional) ---------------------------------------------------------------
 

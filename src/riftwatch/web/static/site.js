@@ -16,6 +16,25 @@
     store.set('rw-theme', next);
   });
 
+  // -- command palette (find a player from any page) ---------------------------------------
+  const palette = $('#palette');
+  function openPalette() {
+    if (!palette) return;
+    palette.classList.add('open');
+    const input = $('input', palette); input.focus(); input.select();
+    input.dispatchEvent(new Event('focus'));
+  }
+  function closePalette() { palette && palette.classList.remove('open'); }
+  for (const b of $$('[data-palette]')) b.addEventListener('click', openPalette);
+  if (palette) palette.addEventListener('mousedown', (e) => { if (e.target === palette) closePalette(); });
+  document.addEventListener('keydown', (e) => {
+    const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '');
+    if ((e.key === 'k' && (e.ctrlKey || e.metaKey)) || (e.key === '/' && !typing)) {
+      if (!$('#q-big')) { e.preventDefault(); openPalette(); }
+      else if (e.key === '/' || e.ctrlKey || e.metaKey) { e.preventDefault(); $('#q-big').focus(); }
+    } else if (e.key === 'Escape') closePalette();
+  });
+
   // -- recent searches and favourites ------------------------------------------------------
   const RECENT = 'rw-recent', FAVS = 'rw-favs';
   const key = (p) => `${p.region}/${p.name}#${p.tag}`.toLowerCase();
@@ -142,7 +161,11 @@
       btn.disabled = true;
       const label = btn.innerHTML;
       btn.innerHTML = '<span class="spinner"></span> Updating';
-      try { await runJob(btn.dataset.sync, status); status.textContent = 'Done'; location.reload(); }
+      try {
+        const job = await runJob(btn.dataset.sync, status);
+        if (job.result && job.result.redirect) { location.href = job.result.redirect; return; }
+        status.textContent = 'Done'; location.reload();
+      }
       catch (e) { btn.disabled = false; btn.innerHTML = label; status.textContent = friendly(e.message); status.title = e.message; }
     });
   }
@@ -150,7 +173,10 @@
   if (auto) {
     const status = $('#auto-status');
     runJob(auto.dataset.autosync, status)
-      .then(() => { status.textContent = 'Done! Loading the profile...'; location.reload(); })
+      .then((job) => {
+        if (job.result && job.result.redirect) { status.textContent = 'Found them in another region...'; location.href = job.result.redirect; return; }
+        status.textContent = 'Done! Loading the profile...'; location.reload();
+      })
       .catch((e) => {
         $('.spinner', auto)?.remove();
         $('#auto-title').textContent = /not ?found|404|no account/i.test(e.message) ? 'Player not found' : 'Could not load this player';
@@ -195,7 +221,9 @@
       more.disabled = true;
       const offset = Number(more.dataset.offset);
       try {
-        const r = await fetch(`${more.dataset.more}&offset=${offset}`);
+        const days = $$('#match-list .day-group');
+        const lastDay = days.length ? days[days.length - 1].dataset.day : '';
+        const r = await fetch(`${more.dataset.more}&offset=${offset}&after_day=${encodeURIComponent(lastDay)}`);
         const html = await r.text();
         $('#match-list').insertAdjacentHTML('beforeend', html);
         const added = (html.match(/class="match /g) || []).length;
@@ -247,6 +275,7 @@
     input.addEventListener('input', () => {
       const q = input.value.trim().toLowerCase();
       for (const tr of $$(input.dataset.filter)) tr.hidden = q && !tr.dataset.name.includes(q);
+      for (const row of $$('.tier-row')) row.hidden = !$$('.tile', row).some((t) => !t.hidden);
     });
   }
   for (const sel of $$('select[data-nav]')) {

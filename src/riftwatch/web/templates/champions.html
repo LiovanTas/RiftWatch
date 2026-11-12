@@ -5,15 +5,16 @@
 {% block content %}
 <div class="container">
   <div class="page-title">
+    <div class="eyebrow">Tier board{{ ' · patch ' ~ patch if patch }}{{ ' · ' ~ role_name if role_name }}</div>
     <h1>Champion tier list</h1>
-    <p>From {{ '{:,}'.format(games) }} ranked solo/duo games RiftWatch has analysed{{ ' on patch ' ~ patch if patch }}. Tiers rank each role by win rate (shrunk towards 50% for small samples) and popularity.</p>
+    <p>Built from {{ '{:,}'.format(games) }} ranked solo/duo games RiftWatch has analysed. Each champion is placed by win rate in its role, pulled towards 50% when the sample is small, and by how often it's picked.</p>
   </div>
   <div class="panel" style="margin-bottom:40px">
     <div class="toolbar">
-      <div class="pills">
-        <a href="?{{ qs(role=None) }}" class="{{ 'on' if not role }}">All roles</a>
-        {% for key, name in positions %}<a href="?{{ qs(role=key|lower) }}" class="{{ 'on' if role == key }}">{{ pos_icon(gd, key) }}{{ name }}</a>{% endfor %}
-      </div>
+      <nav class="seg" aria-label="Role">
+        <a href="?{{ qs(role=None) }}" class="{{ 'on' if not role }}">All</a>
+        {% for key, name in positions %}<a href="?{{ qs(role=key|lower) }}" class="{{ 'on' if role == key }}" title="{{ name }}">{{ pos_icon(gd, key) }}<span>{{ name }}</span></a>{% endfor %}
+      </nav>
       <div class="grow"></div>
       <select name="rank" data-nav aria-label="Rank">
         {% for key, label in ranks %}<option value="{{ key }}"{{ ' selected' if rank == key }}>{{ label }}</option>{% endfor %}
@@ -22,9 +23,15 @@
         <option value="">All patches</option>
         {% for p, n in patches %}<option value="{{ p }}"{{ ' selected' if patch == p }}>Patch {{ p }} ({{ '{:,}'.format(n) }})</option>{% endfor %}
       </select>
-      <input type="search" placeholder="Find a champion" data-filter="#tier-body tr" aria-label="Find a champion">
+      <input type="search" placeholder="Find a champion" data-filter="{{ '#tier-body tr' if view == 'table' else '#tier-board .tile' }}" aria-label="Find a champion">
+      <nav class="seg" aria-label="View">
+        <a href="?{{ qs(view=None) }}" class="{{ 'on' if view != 'table' }}">Board</a>
+        <a href="?{{ qs(view='table') }}" class="{{ 'on' if view == 'table' }}">Table</a>
+      </nav>
     </div>
-    {% if rows %}
+    {% if not rows %}
+    <div class="empty"><h3>Not enough games for this filter</h3><p>Try all ranks or all patches.</p></div>
+    {% elif view == 'table' %}
     <div class="scroll">
     <table class="data" data-renumber>
       <thead><tr><th class="l">#</th><th class="l" data-sort>Champion</th><th data-sort>Tier</th><th class="l">Role</th><th data-sort>Win rate</th><th data-sort>Pick rate</th><th data-sort>Ban rate</th><th data-sort>Games</th><th data-sort>KDA</th><th>Counters</th></tr></thead>
@@ -46,7 +53,25 @@
       </tbody>
     </table>
     </div>
-    {% else %}<div class="empty"><h3>Not enough games for this filter</h3><p>Try all ranks or all patches.</p></div>{% endif %}
+    {% else %}
+    <div id="tier-board">
+      {% for t, blurb in tiers %}{% set picks = rows|selectattr('tier', 'equalto', t)|list %}{% if picks %}
+      <div class="tier-row t-{{ t|replace('+', 'p') }}">
+        <div class="lab"><b>{{ t }}</b><span>{{ blurb }}</span></div>
+        <div class="champs">
+          {% for r in picks %}
+          <a class="tile" data-name="{{ r.name|lower }}" href="/champions/{{ r.slug }}?role={{ r.position|lower }}"
+             data-tip="{{ r.name }} &middot; {{ r.role }}&#10;{{ '%.1f'|format(r.win_rate) }}% win rate, {{ '%.1f'|format(r.pick_rate) }}% pick rate, {{ '%.1f'|format(r.ban_rate) }}% ban rate over {{ '{:,}'.format(r.games) }} games">
+            <div class="pic"><img class="c" src="{{ r.icon }}" alt="" loading="lazy">{% if not role %}<img class="p" src="{{ gd.position_icon(r.position) }}" alt="" loading="lazy">{% endif %}</div>
+            <b>{{ r.name }}</b>
+            <span>{{ wr(r.win_rate) }}</span>
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}{% endfor %}
+    </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

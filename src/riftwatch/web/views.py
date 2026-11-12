@@ -184,9 +184,35 @@ def match_rows(conn: psycopg.Connection, gd: GameData, puuid: str, region: str,
             "result_key": "remake" if m["remake"] else ("win" if m["win"] else "loss"),
             "score": scores[m["participant_id"]], "badge": badge, "rank_in_game": rank_in_game,
             "blue": teams.get(100, []), "red": teams.get(200, []),
-            "patch": m["patch"],
+            "patch": m["patch"], "day": day_label(m["game_start"]),
+            "score_pct": round(10 * scores[m["participant_id"]]),
         })
     return out
+
+
+def day_label(when: datetime) -> str:
+    today = datetime.now(UTC).date()
+    d = when.date()
+    if d == today:
+        return "Today"
+    if (today - d).days == 1:
+        return "Yesterday"
+    return when.strftime("%a %b %d") if d.year == today.year else when.strftime("%b %d, %Y")
+
+
+def day_groups(rows: list[dict], after_day: str | None = None) -> list[dict]:
+    """Match rows grouped by the day they were played, with each day's record. A page that
+    continues the previous page's last day doesn't repeat its heading."""
+    groups: list[dict] = []
+    for r in rows:
+        if not groups or groups[-1]["day"] != r["day"]:
+            groups.append({"day": r["day"], "rows": [], "wins": 0, "losses": 0,
+                           "continued": not groups and r["day"] == after_day})
+        g = groups[-1]
+        g["rows"].append(r)
+        g["wins"] += r["result_key"] == "win"
+        g["losses"] += r["result_key"] == "loss"
+    return groups
 
 
 def summary(rows: list[dict]) -> dict | None:
@@ -209,9 +235,23 @@ def summary(rows: list[dict]) -> dict | None:
                        "kda": kda_ratio(sum(r["kills"] for r in rs), sum(r["deaths"] for r in rs),
                                         sum(r["assists"] for r in rs))})
     roles = Counter(r["position"] for r in games if r["position"])
-    positions = [{"key": p, "name": POSITIONS[p], "share": round(100 * roles[p] / len(games))}
-                 for p in POSITIONS]
+    colours = {"TOP": "var(--accent)", "JUNGLE": "var(--sky)", "MIDDLE": "var(--amber)",
+               "BOTTOM": "var(--violet)", "UTILITY": "var(--loss)"}
+    positions = [{"key": p, "name": POSITIONS[p], "share": round(100 * roles[p] / len(games)),
+                  "colour": colours[p]} for p in POSITIONS]
+    main = max(positions, key=lambda p: p["share"])
+    streak_kind = games[0]["result_key"]
+    streak = 0
+    for r in games:
+        if r["result_key"] != streak_kind:
+            break
+        streak += 1
     return {"games": len(games), "wins": wins, "losses": len(games) - wins,
+            "main_role": main if main["share"] else None,
+            "streak": f"{streak}{'W' if streak_kind == 'win' else 'L'}",
+            "streak_kind": streak_kind,
+            "form": [r["result_key"] for r in rows],
+            "cs_min": round(fmean(r["cs_min"] for r in games), 1),
             "win_rate": round(100 * wins / len(games)), "kills": round(k, 1),
             "deaths": round(d, 1), "assists": round(a, 1), "kda": kda_ratio(k, d, a),
             "kp": round(fmean(r["kp"] for r in games)), "champions": champs,
