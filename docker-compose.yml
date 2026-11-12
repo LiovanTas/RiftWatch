@@ -13,6 +13,9 @@ services:
       test: ["CMD-SHELL", "pg_isready -U riftwatch"]
       interval: 2s
       retries: 15
+    # Back up on its own after a crash, and whenever Docker starts (a reboot, or Docker
+    # Desktop restarting its engine). Only `docker compose stop` keeps it down.
+    restart: unless-stopped
 
   # The website. `docker compose up -d db` (local development) starts only the database.
   web:
