@@ -249,9 +249,10 @@ with RiftWatch's coaching built in.
   streak, average KDA and most-played champion and role; a form strip of the last 20 results;
   a score-per-game chart; **rank progression** over 7, 30 or 90 days or the season, for
   solo and flex (see *Rank progression* below); **Patterns**, the strengths and problems that
-  keep recurring (say, "bottom-20% farm for the rank in 13 of 19 games"); season champion stats
-  and duo partners. The side panel sits on the left.
-- **Match timeline,** filtered by queue and grouped by day with each day's record. Each game
+  keep recurring (say, "bottom-20% farm for the rank in 13 of 19 games"); a **Focus** card for
+  the most frequent problem, game by game against the rank's typical value with whether it's
+  getting better; season champion stats and duo partners. The side panel sits on the left.
+- **Match timeline,** filtered by queue and champion, and grouped by day with each day's record. Each game
   has a 0-10 performance score ring (KDA, kill share, damage, gold, farm and vision against
   the other nine players, with MVP/ACE), champion, spells, runes, KDA, CS, damage, vision,
   control wards, items, multikills, both team comps, and up to two notes on what went well
@@ -273,7 +274,8 @@ with RiftWatch's coaching built in.
     facts of that moment that fit the high-elo choice, what happened that minute and over
     the next two, and how the team's gold lead moved. **Ask the coach** writes a short,
     grounded explanation of a key moment (`web/moments.py`, stored in `moment_notes`)
-  - a link to RiftWatch's minute-by-minute analysis and AI coaching.
+  - a link to RiftWatch's minute-by-minute analysis and AI coaching, and to the game's own
+    shareable page (`/games/<match id>`, from that player's side with `?as=<region>/<id>`).
 - **Tabs:** Champions (sortable season stats), AI Coach (coaching on recent games, weekly
   progress, sessions, champion pool) and Live game (scouting all ten players in a game in
   progress).
@@ -286,6 +288,10 @@ with RiftWatch's coaching built in.
 - **Compare** (`/compare`): two players side by side over their last 50 ranked games (win
   rate, KDA, kill participation, farm, damage, gold, vision, deaths), the better side marked,
   and every stored game they played together or against each other.
+- **Stats** (`/stats`): what wins games in stored ranked play -- the win rate after taking
+  each objective first, by dragons taken, by gold lead at 15 minutes (and how often 3k-behind
+  teams come back), game lengths and side; and every finished item's pick and win rate, the
+  champions that build it most, and its recent patch changes. Filter by rank.
 - **Counter picks** (`/counters`): pick the enemy champion and see who has done best against
   it in its lane (win rate adjusted for sample size, gold and CS at 15 minutes), each with a
   Why?. With a Riot ID it adds the player's own record on each pick and their pool in that

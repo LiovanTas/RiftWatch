@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon %}
+{% block title %}{{ d.queue }} game{% if me %} - {{ me.name }} on {{ me.champion }}{% endif %} | RiftWatch{% endblock %}
+{% block description %}{{ d.queue }}, {{ d.duration }}, patch {{ d.patch|patchname }}: both teams' scoreboards, builds, gold graph{% if me %} and {{ me.name }}'s game against high-elo play{% endif %}.{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="game-head">
+    {% if me %}<img src="{{ me.champion_icon }}" alt="">{% endif %}
+    <div>
+      <div class="eyebrow">{{ d.queue }} &middot; patch {{ d.patch|patchname }}</div>
+      <h1>{% if me %}{{ me.name }} on {{ me.champion }}{% else %}Game {{ d.match_id }}{% endif %}</h1>
+      <div class="meta-line">
+        {% if me %}<span class="res {{ 'win' if me.win else 'loss' }}">{{ 'Victory' if me.win else 'Defeat' }}</span><span>{{ me.kills }}/{{ me.deaths }}/{{ me.assists }}</span>{% endif %}
+        <span>{{ d.duration }}</span><span title="{{ d.date }}">{{ d.when }}</span>
+        {% if player_url %}<a href="{{ player_url }}">&larr; {{ me.name }}'s profile</a>{% endif %}
+      </div>
+    </div>
+    <button class="btn" data-copy type="button">{{ icon('link') }} Copy link</button>
+  </div>
+  <div class="panel game-body">
+    {% include "_match_detail.html" %}
+  </div>
+</div>
+{% endblock %}

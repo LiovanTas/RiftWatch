@@ -71,9 +71,15 @@
         <a href="?tab=live" class="{{ 'on' if tab == 'live' }}">{{ icon('live') }} Live game</a>
       </nav>
       {% if tab == 'overview' %}
-      <nav class="seg" aria-label="Queue">
-        {% for key, label in queues %}<a href="?tab=overview&amp;queue={{ key }}" class="{{ 'on' if queue == key }}">{{ label }}</a>{% endfor %}
-      </nav>
+      <div class="nav-right">
+        {% if season %}<select name="champ" data-nav aria-label="Filter by champion" class="champ-filter">
+          <option value="">All champions</option>
+          {% for c in season %}<option value="{{ c.slug }}"{{ ' selected' if champ == c.slug }}>{{ c.name }} ({{ c.games }})</option>{% endfor %}
+        </select>{% endif %}
+        <nav class="seg" aria-label="Queue">
+          {% for key, label in queues %}<a href="?tab=overview&amp;queue={{ key }}{% if champ %}&amp;champ={{ champ }}{% endif %}" class="{{ 'on' if queue == key }}">{{ label }}</a>{% endfor %}
+        </nav>
+      </div>
       {% endif %}
     </div>
     {% endif %}
@@ -145,6 +151,17 @@
       {% endif %}
     </div>
     <aside class="side">
+      {% if focus %}
+      <div class="panel focus">
+        <div class="panel-head"><span><span class="n">00</span>Focus: {{ focus.title|lower }}</span><span class="muted small">{{ focus.games }} of {{ focus.of }} games</span></div>
+        <div class="panel-body">
+          <p>{{ focus.phrase[:1]|upper }}{{ focus.phrase[1:] }} came up in <b>{{ focus.games }}</b> of your last {{ focus.of }} games. You average <b>{{ focus.average }}</b>{% if focus.typical %}; typical for {{ focus.who }} is <b>{{ focus.typical }}</b>{% endif %}.</p>
+          {{ focus.spark|safe }}
+          <div class="focus-trend {{ focus.trend }}">{% if focus.trend == 'better' %}&#9650; Getting better: {{ focus.recent }} in the newer half of these games, from {{ focus.earlier }}.{% elif focus.trend == 'worse' %}&#9660; Getting worse: {{ focus.recent }} in the newer half, from {{ focus.earlier }}.{% else %}Steady at {{ focus.recent }}.{% endif %}</div>
+          <span class="muted small">Dots below the dashed line are games under the typical value. Oldest on the left.</span>
+        </div>
+      </div>
+      {% endif %}
       {% if summary and (summary.patterns.good or summary.patterns.bad) %}
       <div class="panel patterns">
         <div class="panel-head"><span><span class="n">01</span>Patterns</span><span class="muted small">in {{ summary.games }} games</span></div>

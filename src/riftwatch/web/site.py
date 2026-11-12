@@ -27,8 +27,9 @@ from riftwatch.coach.pipeline import ReportError, champion_pool, progress_report
 from riftwatch.db import repo
 from riftwatch.riot.routing import UnknownRegion, parse_riot_id, platform_for
 from riftwatch.stats import champions as champ_stats
+from riftwatch.stats import games as game_stats
 from riftwatch.stats import matchups, patches
-from riftwatch.web import gamedata, mapview, moments, pages, recap, views
+from riftwatch.web import gamedata, insights, mapview, moments, pages, recap, views
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +64,9 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
     env = Environment(loader=PackageLoader("riftwatch.web", "templates"),
                       autoescape=select_autoescape(["html"]), trim_blocks=True, lstrip_blocks=True)
     env.filters["ordinal"] = _ordinal
+    # Riot's game version (16.22) as players know the patch (26.22).
+    env.filters["patchname"] = lambda v: (f"{int(v.split('.')[0]) + 10}.{v.split('.')[1]}"
+                                          if v and v.split(".")[0].isdigit() and int(v.split(".")[0]) < 20 else v)
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
     state: dict[str, Any] = {"gd": gd}
     boards: dict[str, tuple[float, dict]] = {}
@@ -245,6 +249,38 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                       profile_url=f"/players/{region.lower()}/{riot_id}",
                       played_json=json.dumps(data["played"]) if data else "[]")
 
+    @app.get("/stats", response_class=HTMLResponse)
+    def stats_page(tab: str = "objectives", rank: str = "all") -> HTMLResponse:
+        """Game-wide numbers: what objectives and gold leads are worth, and item win rates."""
+        gd_ = game_data()
+        rank = _rank(rank)
+        tab = "items" if tab == "items" else "objectives"
+        ctx: dict[str, Any] = {"tab": tab, "rank": rank,
+                               "ranks": [(k, v[0]) for k, v in champ_stats.RANKS.items()]}
+        with pool.connection() as conn:
+            if tab == "objectives":
+                ctx["o"] = game_stats.objectives(conn, rank)
+            else:
+                data = game_stats.items(conn, rank)
+                changes = {}
+                for c in item_changes():
+                    for i in c["ids"]:
+                        changes.setdefault(i, []).append(c)
+                rows = []
+                for r in data["rows"]:
+                    it = gd_.item(r["item_id"])
+                    if it is None or not (it.is_legendary or it.is_boots) or it.is_starter:
+                        continue
+                    rows.append({**r, "name": it.name, "icon": gd_.item_icon(r["item_id"]),
+                                 "text": it.text, "gold": it.gold, "kind": "Boots" if it.is_boots else "Legendary",
+                                 "changes": changes.get(r["item_id"], []),
+                                 "champions": [{**c, "name": gd_.champion(c["champion_id"]).name,
+                                                "slug": gd_.champion(c["champion_id"]).slug,
+                                                "icon": gd_.champion_icon(c["champion_id"])}
+                                               for c in r["champions"]]})
+                ctx.update(items=rows, players=data["players"])
+        return render("stats.html", nav="stats", **ctx)
+
     @app.get("/compare", response_class=HTMLResponse)
     def compare_page(a: str = "", b: str = "") -> HTMLResponse:
         """Two players side by side, and their games together or against each other."""
@@ -295,7 +331,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
 
     @app.get("/players/{region}/{riot_id}", response_class=HTMLResponse)
     def player_page(request: Request, region: str, riot_id: str, tab: str = "overview",
-                    queue: str = "all", cq: str = "ranked", job: str | None = None):
+                    queue: str = "all", cq: str = "ranked", job: str | None = None, champ: str = ""):
         if region_or_none(region) is None:
             return error_page("Unknown region", f"RiftWatch doesn't know the region {region!r}.")
         region = region.lower()
@@ -340,7 +376,9 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                                                 "icon": head["icon"], "synced": True}),
                 }
                 if tab == "overview":
-                    rows = views.match_rows(conn, gd, puuid, region, queue)
+                    picked = gd.champion_by_slug(champ) if champ else None
+                    rows = views.match_rows(conn, gd, puuid, region, queue,
+                                            champion_id=picked.id if picked else None)
                     solo_history = views.rank_history(conn, puuid)
                     if solo_history["points"]:
                         ctx["rank_json"] = json.dumps({
@@ -351,7 +389,12 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                                season=views.champion_stats(conn, gd, puuid, "ranked"),
                                friends=views.played_with(conn, puuid, region),
                                detail_base=f"/fragments/players/{region}/{riot_id}/matches",
-                               more_url=f"/fragments/players/{region}/{riot_id}/matches?queue={queue}")
+                               more_url=(f"/fragments/players/{region}/{riot_id}/matches?queue={queue}"
+                                         + (f"&champ={picked.slug}" if picked else "")),
+                               champ=picked.slug if picked else "")
+                    if ctx["summary"]:
+                        ctx["focus"] = views.focus(rows, ctx["summary"]["patterns"], insights.baselines(conn),
+                                                   views.player_tier(conn, puuid))
                 else:                                   # the header's stat band and form
                     ctx["summary"] = views.summary(views.match_rows(conn, gd, puuid, region))
                 if tab == "champions":
@@ -435,13 +478,15 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
 
     @app.get("/fragments/players/{region}/{riot_id}/matches", response_class=HTMLResponse)
     def more_matches(region: str, riot_id: str, queue: str = "all",
-                     offset: int = Query(0, ge=0), after_day: str = "") -> HTMLResponse:
+                     offset: int = Query(0, ge=0), after_day: str = "", champ: str = "") -> HTMLResponse:
         with pool.connection() as conn:
             _, _, account = find_account(conn, region, riot_id)
             if account is None:
                 raise HTTPException(404, "player not synced")
+            picked = game_data().champion_by_slug(champ) if champ else None
             rows = views.match_rows(conn, game_data(), account["puuid"], region.lower(),
-                                    queue if queue in views.QUEUE_FILTERS else "all", offset=offset)
+                                    queue if queue in views.QUEUE_FILTERS else "all", offset=offset,
+                                    champion_id=picked.id if picked else None)
         html = env.get_template("_match_rows.html").render(
             groups=views.day_groups(rows, after_day or None),
             detail_base=f"/fragments/players/{region}/{riot_id}/matches")
@@ -449,20 +494,42 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
 
     @app.get("/fragments/players/{region}/{riot_id}/matches/{match_id}", response_class=HTMLResponse)
     def match_fragment(region: str, riot_id: str, match_id: str) -> HTMLResponse:
-        with pool.connection() as conn:
-            _, _, account = find_account(conn, region, riot_id)
-            detail = views.match_detail(conn, game_data(), match_id,
-                                        account["puuid"] if account else None, region.lower())
-        if detail is None:
+        ctx = detail_context(region, riot_id, match_id)
+        if ctx is None:
             raise HTTPException(404, "game not stored")
+        return HTMLResponse(env.get_template("_match_detail.html").render(**ctx))
+
+    def detail_context(region: str | None, riot_id: str | None, match_id: str) -> dict | None:
+        """What _match_detail.html needs for one game, seen from a player if one is given."""
+        with pool.connection() as conn:
+            account = find_account(conn, region, riot_id)[2] if region and riot_id else None
+            detail = views.match_detail(conn, game_data(), match_id,
+                                        account["puuid"] if account else None,
+                                        (region or PLATFORM_REGION.get(match_id.split("_")[0].lower(), "na")).lower())
+        if detail is None:
+            return None
         analysis = (f"/players/{region}/{riot_id}/matches/{match_id}"
                     if account is not None and detail["me"] else None)
         map_url = (f"/api/players/{region}/{riot_id}/matches/{match_id}/map"
                    if analysis and detail.get("has_timeline") else None)
-        return HTMLResponse(env.get_template("_match_detail.html").render(
-            d=detail, analysis_url=analysis, map_url=map_url,
-            map_compared=bool(advisor is not None and detail.get("role")
-                              and advisor.available(detail["role"]))))
+        game_url = f"/games/{match_id}" + (f"?as={region}/{riot_id}" if account is not None else "")
+        return {"d": detail, "analysis_url": analysis, "map_url": map_url, "game_url": game_url,
+                "map_compared": bool(advisor is not None and detail.get("role")
+                                     and advisor.available(detail["role"]))}
+
+    @app.get("/games/{match_id}", response_class=HTMLResponse)
+    def game_page(match_id: str, as_: str = Query("", alias="as")) -> HTMLResponse:
+        """One game on its own page, to share: scoreboards, insights, build, gold graph and the
+        High Elo Comparison when seen from a player (``?as=<region>/<Name-TAG>``)."""
+        region, _, riot_id = as_.partition("/")
+        if region and region_or_none(region) is None:
+            region, riot_id = "", ""
+        ctx = detail_context(region.lower() or None, riot_id or None, match_id)
+        if ctx is None:
+            return error_page("Game not found", "RiftWatch hasn't stored this game.", 404)
+        me = next((p for t in ctx["d"]["teams"] for p in t["players"] if p.get("me")), None)
+        return render("game.html", nav="game", me=me, player_url=(f"/players/{region}/{riot_id}" if me else None),
+                      on_game_page=True, **ctx)
 
     @app.post("/api/players/{region}/{riot_id}/matches/{match_id}/map/{minute}/explain")
     def explain_moment(request: Request, region: str, riot_id: str, match_id: str, minute: int) -> dict:

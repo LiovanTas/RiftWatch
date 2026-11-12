@@ -152,16 +152,22 @@ def player_tier(conn: psycopg.Connection, puuid: str) -> str:
 
 def match_rows(conn: psycopg.Connection, gd: GameData, puuid: str, region: str,
                queue: str = "all", limit: int = 20, offset: int = 0,
-               tier: str | None = None) -> list[dict]:
+               tier: str | None = None, champion_id: int | None = None) -> list[dict]:
     """The player's games, newest first, as match-history rows, each with a few notes on
     what went well and what didn't (see insights)."""
     queue_id = QUEUE_FILTERS.get(queue)
     tier = tier or player_tier(conn, puuid)
     table = insights.baselines(conn)
+    where, params = ["puuid = %s"], [puuid]
+    if queue_id:
+        where.append("queue_id = %s")
+        params.append(queue_id)
+    if champion_id:
+        where.append("champion_id = %s")
+        params.append(champion_id)
     mine = _rows(conn, f"""
-        SELECT * FROM participant_builds WHERE puuid = %s {'AND queue_id = %s' if queue_id else ''}
-         ORDER BY game_start DESC LIMIT %s OFFSET %s""",
-        (puuid, queue_id, limit, offset) if queue_id else (puuid, limit, offset))
+        SELECT * FROM participant_builds WHERE {' AND '.join(where)}
+         ORDER BY game_start DESC LIMIT %s OFFSET %s""", (*params, limit, offset))
     if not mine:
         return []
     everyone: dict[str, list[dict]] = defaultdict(list)
@@ -209,6 +215,8 @@ def match_rows(conn: psycopg.Connection, gd: GameData, puuid: str, region: str,
             "score": scores[m["participant_id"]], "badge": badge, "rank_in_game": rank_in_game,
             "blue": teams.get(100, []), "red": teams.get(200, []),
             "patch": m["patch"], "day": day_label(m["game_start"]),
+            "minutes": m["duration_s"] / 60,
+            "lead15": (leads.get(m["match_id"]) or {}).get(15, {}).get("gold"),
             "all_notes": (found := insights.game_notes(
                 m, players, table, tier, lambda cid: gd.champion(cid).name,
                 leads.get(m["match_id"]))),
@@ -512,6 +520,7 @@ def match_detail(conn: psycopg.Connection, gd: GameData, match_id: str, puuid: s
         "insights": notes, "has_timeline": timeline is not None,
         "role": me["position"] if me else None,
         "match_id": match_id, "duration": clock(players[0]["duration_s"]),
+        "date": players[0]["game_start"].strftime("%b %d, %Y %H:%M UTC"), "when": ago(players[0]["game_start"]),
         "queue": QUEUE_NAMES.get(players[0]["queue_id"], "Custom"), "patch": players[0]["patch"],
         "teams": teams, "gold_chart": gold_chart(gold),
         "gold_data": json.dumps({"series": gold, "team": me["team_id"] if me else None,
@@ -753,3 +762,73 @@ def rank_history(conn: psycopg.Connection, puuid: str, queue: str = "RANKED_SOLO
             "since": points[0]["t"], "tiers": [{"name": t.title(), "score": 400 * i}
                                                 for i, t in enumerate(LADDER)] +
                                                [{"name": "Master+", "score": APEX_START}]}
+
+
+# -- focus: the one thing to work on -------------------------------------------------------
+
+FOCUS = {  # pattern -> (title, baseline metric, format, value of a row, higher is better)
+    "farm_low": ("Farm", "cs_min", "{:.1f} CS/min", lambda r: r["cs_min"], True),
+    "damage_low": ("Damage", "dmg_min", "{:,.0f} damage/min", lambda r: r["damage"] / r["minutes"], True),
+    "vision_low": ("Vision", "vision_min", "{:.2f} vision/min", lambda r: r["vision"] / r["minutes"], True),
+    "deaths_high": ("Staying alive", "deaths_10", "{:.1f} deaths per 10 min",
+                    lambda r: r["deaths"] / (r["minutes"] / 10), False),
+    "kp_low": ("Joining fights", "kp", "{:.0f}% kill participation", lambda r: r["kp"], True),
+    "no_wards": ("Control wards", "control_wards", "{:.0f} control wards", lambda r: r["control_wards"], True),
+    "cs_down": ("Laning", None, "{:+,.0f} gold at 15", lambda r: r.get("lead15"), True),
+    "gold_down": ("Laning", None, "{:+,.0f} gold at 15", lambda r: r.get("lead15"), True),
+}
+
+
+def _spark(values: list[float], typical: float | None, higher: bool, w: int = 260, h: int = 54) -> str:
+    """A small SVG line of the values (oldest first) with the typical value dashed."""
+    lo = min(values + ([typical] if typical is not None else []))
+    hi = max(values + ([typical] if typical is not None else []))
+    span = (hi - lo) or 1
+    x = lambda i: 4 + (w - 8) * i / max(1, len(values) - 1)  # noqa: E731
+    y = lambda v: 4 + (h - 8) * (1 - (v - lo) / span)  # noqa: E731
+    pts = " ".join(f"{x(i):.1f},{y(v):.1f}" for i, v in enumerate(values))
+    dots = "".join(
+        f'<circle cx="{x(i):.1f}" cy="{y(v):.1f}" r="2.6" class="{"ok" if typical is None or (v >= typical) == higher else "bad"}"/>'
+        for i, v in enumerate(values))
+    line = (f'<line x1="4" x2="{w - 4}" y1="{y(typical):.1f}" y2="{y(typical):.1f}" class="typical"/>'
+            if typical is not None else "")
+    return (f'<svg viewBox="0 0 {w} {h}" class="spark" role="img" aria-label="Game by game">{line}'
+            f'<polyline points="{pts}" class="line"/>{dots}</svg>')
+
+
+def focus(rows: list[dict], patterns: dict, table: dict, tier: str) -> dict | None:
+    """The most frequent problem in the recent games, game by game against the rank's typical
+    value, and whether it's getting better."""
+    from riftwatch.web import insights
+
+    for p in patterns.get("bad", []):
+        spec = FOCUS.get(p["key"])
+        if spec is None:
+            continue
+        title, metric, fmt, value, higher = spec
+        games = [r for r in reversed(rows) if r["result_key"] != "remake"]
+        values = [value(r) for r in games if value(r) is not None]
+        if len(values) < 4:
+            continue
+        roles = Counter(r["position"] for r in games if r["position"])
+        role = roles.most_common(1)[0][0] if roles else ""
+        typical = None
+        who = ""
+        if metric:
+            used, base = insights._baseline(table, tier, role)
+            if base:
+                typical = base[metric][1] * (100 if metric == "kp" else 1)
+                who = f"{insights.TIER_NAME.get(used, used.title())} {insights.ROLE_NAME.get(role, 'players')}"
+        else:
+            typical, who = 0.0, "an even lane"
+        half = len(values) // 2
+        early, late = fmean(values[:half]), fmean(values[half:])
+        better = (late > early) == higher
+        return {
+            "title": title, "games": p["games"], "of": p["of"], "phrase": p["phrase"],
+            "average": fmt.format(fmean(values)), "typical": fmt.format(typical) if typical is not None else None,
+            "who": who, "recent": fmt.format(late), "earlier": fmt.format(early),
+            "trend": "better" if better and abs(late - early) > 1e-9 else "worse" if abs(late - early) > 1e-9 else "flat",
+            "spark": _spark(values, typical, higher),
+        }
+    return None

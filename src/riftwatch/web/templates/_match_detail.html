@@ -6,7 +6,7 @@
     {% if d.me %}<button type="button" data-pane="build">Build</button>{% endif %}
     {% if d.gold_chart %}<button type="button" data-pane="gold">Gold graph</button>{% endif %}
     {% if map_url %}<button type="button" data-pane="map" class="map-tab">{{ 'High Elo Comparison' if map_compared else 'Map replay' }}</button>{% endif %}
-    {% if analysis_url %}<a class="btn" style="margin:0 0 6px auto" href="{{ analysis_url }}">RiftWatch analysis &rarr;</a>{% endif %}
+    <span class="d-links">{% if game_url and not on_game_page %}<a class="btn" href="{{ game_url }}" title="This game on its own page, to share">Game page &#8599;</a>{% endif %}{% if analysis_url %}<a class="btn" href="{{ analysis_url }}">RiftWatch analysis &rarr;</a>{% endif %}</span>
   </div>
   <div class="d-pane on" data-pane="overview">
     {% for t in d.teams %}

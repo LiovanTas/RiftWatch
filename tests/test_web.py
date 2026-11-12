@@ -53,8 +53,11 @@ def web(request, tmp_path):
 
     from riftwatch.web import insights, mapview
 
+    from riftwatch.stats import games as game_stats
+
     mapview.clear_cache()         # module-level caches would carry one test's games into the next
     insights.clear_cache()
+    game_stats.clear_cache()
     gd = GameData()
     gd.loaded = True              # no Data Dragon in tests: names fall back, icons are empty
     app = create_app(settings, api=api, coach=coach, pool=pool, jobs=jobs, gamedata=gd)
@@ -446,3 +449,21 @@ def test_recap_compare_and_counter_pages(web):
     counters = client.get("/counters")
     assert counters.status_code == 200 and "Who are you up against?" in counters.text
     assert client.get("/players/na/Nobody-NA1/recap", follow_redirects=False).status_code == 303
+
+
+def test_game_page_stats_page_and_history_filter(web):
+    client, api, _, jobs = web
+    sync(client, jobs)
+    game = client.get(f"/games/{api.ids[0]}?as=na/Me-NA1")
+    assert game.status_code == 200 and 'class="res ' in game.text and 'data-pane="insights"' in game.text
+    assert 'href="/players/na/Me-NA1"' in game.text          # back to the player it is seen from
+    assert "Game page" not in game.text                        # no link to the page it's already on
+    assert client.get(f"/games/{api.ids[0]}").status_code == 200   # no player: scoreboards only
+    assert client.get("/games/NA1_404").status_code == 404
+    detail = client.get(f"/fragments/players/na/Me-NA1/matches/{api.ids[0]}").text
+    assert f'href="/games/{api.ids[0]}?as=na/Me-NA1"' in detail
+    filtered = client.get("/players/na/Me-NA1?champ=nobody")         # unknown champion: no filter
+    assert filtered.status_code == 200 and 'class="match ' in filtered.text
+    stats = client.get("/stats")
+    assert stats.status_code == 200 and "What wins games" in stats.text and "Gold lead at 15 minutes" in stats.text
+    assert client.get("/stats?tab=items").status_code == 200

@@ -33,7 +33,7 @@
     </select>
     <select name="patch" data-nav aria-label="Patch">
       <option value="">All patches</option>
-      {% for p, n in patches %}<option value="{{ p }}"{{ ' selected' if patch == p }}>Patch {{ p }}</option>{% endfor %}
+      {% for p, n in patches %}<option value="{{ p }}"{{ ' selected' if patch == p }}>Patch {{ p|patchname }}</option>{% endfor %}
     </select>
   </div>
   <div class="kpis">

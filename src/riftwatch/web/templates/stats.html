@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% from "_macros.html" import wr %}
+{% block title %}{{ 'Item Stats' if tab == 'items' else 'What Wins Games' }} | RiftWatch{% endblock %}
+{% block description %}League of Legends game statistics from stored ranked games: the win rate after each objective, how much a gold lead at 15 minutes decides, and item win rates.{% endblock %}
+{% macro bar(rate, label='') -%}
+<div class="wbar"><i class="{{ 'up' if rate >= 50 else 'down' }}" style="width:{{ rate|round|int }}%"></i><b>{{ '%.1f'|format(rate) }}%</b>{% if label %}<span>{{ label }}</span>{% endif %}</div>
+{%- endmacro %}
+{% block content %}
+<div class="container">
+  <div class="page-title">
+    <div class="eyebrow">Stats</div>
+    <h1>{{ 'Items' if tab == 'items' else 'What wins games' }}</h1>
+    <p>{% if tab == 'items' %}Every finished item from stored ranked games: how many players ended the game with it, their win rate, and the champions that build it most.{% else %}From {{ '{:,}'.format(o.games) if o and o.games else 'stored' }} ranked solo games. These are associations, not causes: the team that takes an objective is often the stronger team already.{% endif %}</p>
+  </div>
+  <div class="toolbar" style="padding:0 0 14px;border:0">
+    <nav class="seg" aria-label="Section"><a href="?tab=objectives&amp;rank={{ rank }}" class="{{ 'on' if tab == 'objectives' }}">Objectives</a><a href="?tab=items&amp;rank={{ rank }}" class="{{ 'on' if tab == 'items' }}">Items</a></nav>
+    <div class="grow"></div>
+    <select name="rank" data-nav aria-label="Rank">{% for key, label in ranks %}<option value="{{ key }}"{{ ' selected' if rank == key }}>{{ label }}</option>{% endfor %}</select>
+    {% if tab == 'items' %}<input type="search" placeholder="Find an item" data-filter="#item-body tr" aria-label="Find an item">{% endif %}
+  </div>
+
+  {% if tab == 'objectives' %}
+  {% if not o or not o.games %}<div class="panel empty"><h3>No games for this rank yet</h3></div>{% else %}
+  <div class="recap-grid">
+    <div class="panel">
+      <div class="panel-head"><span><span class="n">01</span>Win rate after taking it first</span></div>
+      <div class="panel-body">{% for f in o.firsts %}<div class="srow"><span class="lab">{{ f.label }}</span>{{ bar(f.win_rate) }}<small>{{ f.happened }}% of games</small></div>{% endfor %}</div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><span><span class="n">02</span>Gold lead at 15 minutes</span><span class="muted small">win rate of the team with that lead</span></div>
+      <div class="panel-body">{% for b in o.leads if b.win_rate is not none %}<div class="srow"><span class="lab">{{ b.label }}</span>{{ bar(b.win_rate) }}<small>{{ '{:,}'.format(b.teams) }}</small></div>{% endfor %}
+        {% if o.comeback.rate is not none %}<p class="muted small" style="margin:10px 0 0">Comebacks: teams 3k+ behind at 15 won <b>{{ o.comeback.rate }}%</b> of {{ '{:,}'.format(o.comeback.behind) }} games.</p>{% endif %}</div>
+    </div>
+  </div>
+  <div class="recap-grid">
+    <div class="panel">
+      <div class="panel-head"><span><span class="n">03</span>Dragons taken</span><span class="muted small">win rate by a team's dragon count</span></div>
+      <div class="panel-body">{% for d in o.dragons %}<div class="srow"><span class="lab">{{ d.label }} dragon{{ 's' if d.label != '1' }}</span>{{ bar(d.win_rate) }}<small>{{ '{:,}'.format(d.teams) }}</small></div>{% endfor %}</div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><span><span class="n">04</span>Game length and side</span></div>
+      <div class="panel-body">
+        {% for l in o.lengths if l.games %}<div class="srow"><span class="lab">{{ l.label }} min</span><div class="wbar"><i style="width:{{ l.share * 3 }}%"></i><b>{{ l.share }}%</b><span>of games</span></div><small>blue {{ l.blue_win_rate|round|int }}%</small></div>{% endfor %}
+        <div class="sides">{% for name, s in o.side.items() %}<div class="{{ name|lower }}"><span>{{ name }} side</span><b>{{ '%.1f'|format(s.win_rate) }}%</b></div>{% endfor %}</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% else %}
+  <div class="panel" style="margin-bottom:40px">
+    {% if items %}
+    <div class="scroll"><table class="data" data-renumber>
+      <thead><tr><th class="l">#</th><th class="l" data-sort>Item</th><th class="l">Type</th><th data-sort>Games</th><th data-sort>Pick rate</th><th data-sort>Win rate</th><th class="l">Built most by</th><th class="l">Patch</th></tr></thead>
+      <tbody id="item-body">{% for r in items %}<tr data-name="{{ r.name|lower }}">
+        <td class="rank">{{ loop.index }}</td>
+        <td class="l" data-v="{{ r.name }}"><span class="champ-cell"><img src="{{ r.icon }}" alt="" loading="lazy" style="border-radius:6px" data-tip="{{ r.name }}&#10;{{ r.text }}"><b>{{ r.name }}</b></span></td>
+        <td class="l"><span class="muted">{{ r.kind }}</span></td>
+        <td data-v="{{ r.games }}">{{ '{:,}'.format(r.games) }}</td>
+        <td data-v="{{ r.pick_rate }}">{{ '%.1f'|format(r.pick_rate) }}%</td>
+        <td data-v="{{ r.shrunk }}"><div class="bar-cell">{{ wr(r.win_rate) }}<div class="bar"><i style="width:{{ r.win_rate }}%"></i></div></div></td>
+        <td class="l"><div class="counters" style="justify-content:flex-start">{% for c in r.champions %}<a href="/champions/{{ c.slug }}"><img src="{{ c.icon }}" alt="{{ c.name }}" data-tip="{{ c.name }}&#10;{{ c.games }} games with {{ r.name }}, {{ c.win_rate|round|int }}% won" loading="lazy"></a>{% endfor %}</div></td>
+        <td class="l">{% for c in r.changes %}<span class="pm-text {{ c.kind }}" data-tip="{{ r.name }} &middot; {{ c.patch }}{{ ' preview' if c.status == 'preview' }}&#10;{{ c.text }}">{{ {'buff': '▲', 'nerf': '▼', 'adjust': '◆'}[c.kind] }} {{ c.patch }}</span> {% else %}<span class="muted">-</span>{% endfor %}</td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+    {% else %}<div class="empty"><h3>No items for this rank yet</h3></div>{% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

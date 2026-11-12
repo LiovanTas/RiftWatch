@@ -321,3 +321,15 @@ def test_recap_streaks():
     from riftwatch.web.recap import _streaks
     assert _streaks([True, True, False, True, True, True, False, False]) == (3, 2)
     assert _streaks([]) == (0, 0)
+
+
+def test_focus_picks_the_most_frequent_problem_and_its_trend():
+    from riftwatch.web.views import focus
+    rows = [{"result_key": "win", "position": "MIDDLE", "cs_min": v, "minutes": 30, "damage": 0, "vision": 0,
+             "deaths": 0, "kp": 50, "control_wards": 1} for v in (7.0, 6.8, 6.4, 6.0, 5.6, 5.2)]   # newest first
+    patterns = {"bad": [{"key": "farm_low", "phrase": "bottom-20% farm for the rank", "games": 5, "of": 6}]}
+    f = focus(rows, patterns, TABLE, "GOLD")
+    assert f["title"] == "Farm" and f["typical"] == "6.5 CS/min" and f["who"] == "Gold mid laners"
+    assert f["trend"] == "better" and f["recent"] == "6.7 CS/min"         # newer half: 7.0, 6.8, 6.4
+    assert f["spark"].startswith("<svg") and f["spark"].count("<circle") == 6
+    assert focus(rows, {"bad": []}, TABLE, "GOLD") is None

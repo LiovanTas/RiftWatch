@@ -5,7 +5,7 @@
 {% block content %}
 <div class="container">
   <div class="page-title">
-    <div class="eyebrow">Tier board{{ ' · patch ' ~ patch if patch }}{{ ' · ' ~ role_name if role_name }}</div>
+    <div class="eyebrow">Tier board{{ ' · patch ' ~ patch|patchname if patch }}{{ ' · ' ~ role_name if role_name }}</div>
     <h1>Champion tier list</h1>
     <p>Built from {{ '{:,}'.format(games) }} ranked solo/duo games RiftWatch has analysed. Each champion is placed by win rate in its role, pulled towards 50% when the sample is small, and by how often it's picked.
     {% if adjusted %}Most of these games are from patch {% if data_patch %}{% set dp = data_patch.split('.') %}{{ dp[0]|int + 10 }}.{{ dp[1] }}{% endif %}, so champions changed since then are nudged: a buff adds {{ shift|round|int }} win-rate point and a nerf takes one away, for the games played before the change, and a previewed change counts {{ (preview_weight * 100)|round|int }}%. Item changes move every champion that buys the item, in proportion to how often they buy it. <a href="?{{ qs(notes='raw') }}">See the raw data</a>.{% else %}Showing the raw data, without patch notes. <a href="?{{ qs(notes=None) }}">Include patch notes</a>.{% endif %}</p>
@@ -32,7 +32,7 @@
       </select>
       <select name="patch" data-nav aria-label="Patch">
         <option value="">All patches</option>
-        {% for p, n in patches %}<option value="{{ p }}"{{ ' selected' if patch == p }}>Patch {{ p }} ({{ '{:,}'.format(n) }})</option>{% endfor %}
+        {% for p, n in patches %}<option value="{{ p }}"{{ ' selected' if patch == p }}>Patch {{ p|patchname }} ({{ '{:,}'.format(n) }})</option>{% endfor %}
       </select>
       <input type="search" placeholder="Find a champion" data-filter="{{ '#tier-body tr' if view == 'table' else '#tier-board .tile' }}" aria-label="Find a champion">
       <nav class="seg" aria-label="Patch notes">

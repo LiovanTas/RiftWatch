@@ -200,6 +200,14 @@ def create_app(
                 insights.baselines(conn)
         except Exception:
             pass
+        try:
+            # Objective win rates read every stored game's JSON (seconds): build them now.
+            from riftwatch.stats import games as game_stats
+
+            with pool.connection() as conn:
+                game_stats.objectives(conn)
+        except Exception:
+            pass
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
