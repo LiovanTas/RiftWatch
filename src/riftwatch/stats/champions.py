@@ -402,3 +402,27 @@ def win_rate_curves(conn: psycopg.Connection, champion_id: int, position: str | 
     return {"length": [{"label": labels[b], "games": n, "win_rate": 100 * w / n} for b, n, w in length],
             "patch": [{"label": f"{int(p.split('.')[0]) + 10}.{p.split('.')[1]}", "games": n, "win_rate": 100 * w / n}
                       for p, n, w in by_patch if n >= 10][-8:]}
+
+
+def mains(conn: psycopg.Connection, puuids: list[str], top: int = 3) -> dict[str, dict]:
+    """Each player's most-played champions and role in stored ranked games."""
+    if not puuids:
+        return {}
+    champs: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    roles: dict[str, Counter] = defaultdict(Counter)
+    for puuid, champ, position, n in conn.execute(
+            """SELECT puuid, champion_id, position, count(*) FROM participant_builds
+                WHERE puuid = ANY(%s) AND queue_id IN (420, 440) AND NOT remake GROUP BY 1, 2, 3""",
+            (puuids,)):
+        champs[puuid].append((n, champ))
+        if position:
+            roles[puuid][position] += n
+    out = {}
+    for puuid, rows in champs.items():
+        merged: Counter = Counter()
+        for n, champ in rows:
+            merged[champ] += n
+        out[puuid] = {"champions": [{"champion_id": c, "games": n} for c, n in merged.most_common(top)],
+                      "role": roles[puuid].most_common(1)[0][0] if roles[puuid] else None,
+                      "games": sum(merged.values())}
+    return out

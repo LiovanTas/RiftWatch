@@ -12,7 +12,7 @@
   </div>
   {% if watch %}
   <details class="watch panel" open>
-    <summary><span class="eyebrow">Patch watch</span> <span class="muted small">recent and upcoming champion changes &middot; ▲ buff &middot; ▼ nerf &middot; ◆ mixed or rework</span></summary>
+    <summary><span class="eyebrow">Patch watch</span> <a class="small" href="/patches">full notes and tier moves &rarr;</a> <span class="muted small">recent and upcoming champion changes &middot; ▲ buff &middot; ▼ nerf &middot; ◆ mixed or rework</span></summary>
     <div class="watch-rows">
       {% for w in watch %}
       {{ patch_row(w) }}

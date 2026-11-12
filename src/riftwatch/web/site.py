@@ -209,7 +209,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
         gd = game_data()
         name, _, tag = q.strip().partition("#")
         if not name:
-            return {"players": []}
+            return {"players": [], "champions": []}
         like = name.lower().replace("\\", "").replace("%", "").replace("_", "\\_") + "%"
         tag_like = tag.lower().replace("%", "").replace("_", "\\_") + "%"
         with pool.connection() as conn:
@@ -228,7 +228,17 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
         players = [{"name": n, "tag": t, "region": PLATFORM_REGION.get(p, p),
                     "icon": gd.profile_icon(i)} for n, t, p, i, _ in rows if n and t]
         players.sort(key=lambda p: p["region"] != wanted)
-        return {"players": players}
+        # Champions too, when the text has no tag: "ahr" finds Ahri's page.
+        champions = []
+        if not tag:
+            q_low = name.lower().replace(" ", "").replace("'", "")
+            for c in sorted(gd.champions.values(), key=lambda c: c.name):
+                key = c.name.lower().replace(" ", "").replace("'", "").replace(".", "")
+                if key.startswith(q_low) or (len(q_low) >= 3 and q_low in key):
+                    champions.append({"name": c.name, "slug": c.slug, "icon": gd.champion_icon(c.id),
+                                      "title": c.title})
+            champions.sort(key=lambda c: not c["name"].lower().replace(" ", "").startswith(q_low))
+        return {"players": players, "champions": champions[:4]}
 
     # -- player profile ---------------------------------------------------------------------
 
@@ -272,6 +282,43 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                       tag=account["tag_line"], r=data, head=head, years=years,
                       profile_url=f"/players/{region.lower()}/{riot_id}",
                       played_json=json.dumps(data["played"]) if data else "[]")
+
+    @app.get("/patches", response_class=HTMLResponse)
+    def patches_page() -> HTMLResponse:
+        """Recent patch notes, and how each change moved champions on the tier board."""
+        gd_ = game_data()
+        with pool.connection() as conn:
+            data = champ_stats.tier_list(conn, None, "all", patch_changes(), item_changes())
+        by_champ: dict[int, list[dict]] = {}
+        by_item: dict[str, list[tuple[int, dict]]] = {}
+        for r in data["rows"]:
+            by_champ.setdefault(r["champion_id"], []).append(r)
+            for c in r.get("item_changes", []):
+                by_item.setdefault(f"{c['patch']}|{c['name']}", []).append((c["usage"], r))
+        name_to = {c.name.lower(): c for c in gd_.champions.values()}
+        out = []
+        for w in patch_watch():
+            champs = []
+            for c in w["changes"]:
+                champ = name_to.get(c["champion"].lower())
+                roles = [{"role": gamedata.POSITIONS.get(r["position"], ""), "tier": r["tier"],
+                          "tier_raw": r["tier_raw"], "win_rate": r["win_rate"], "games": r["games"],
+                          "position": r["position"]}
+                         for r in by_champ.get(champ.id if champ else -1, [])]
+                champs.append({**c, "roles": roles})
+            systems = []
+            for c in w.get("systems", []):
+                hit = sorted(by_item.get(f"{w['patch']}|{c['name']}", []), key=lambda x: -x[0])[:6]
+                systems.append({**c, "users": [{"name": gd_.champion(r["champion_id"]).name,
+                                                "slug": gd_.champion(r["champion_id"]).slug,
+                                                "icon": gd_.champion_icon(r["champion_id"]),
+                                                "role": gamedata.POSITIONS.get(r["position"], ""),
+                                                "position": r["position"], "usage": usage,
+                                                "tier": r["tier"], "tier_raw": r["tier_raw"]} for usage, r in hit]})
+            out.append({**w, "champs": champs, "systems": systems})
+        return render("patches.html", nav="patches", patches=out, shift=patches.SHIFT,
+                      preview_weight=patches.PREVIEW_WEIGHT, item_shift=patches.ITEM_SHIFT,
+                      updated=patches.notes().get("updated"))
 
     @app.get("/stats", response_class=HTMLResponse)
     def stats_page(tab: str = "objectives", rank: str = "all") -> HTMLResponse:
@@ -418,6 +465,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                                          + (f"&champ={picked.slug}" if picked else "")),
                                champ=picked.slug if picked else "")
                     ctx["badges"] = recap.achievements(conn, gd, puuid)
+                    ctx["tilt"] = views.tilt(conn, puuid)
                     if ctx["summary"]:
                         ctx["focus"] = views.focus(rows, ctx["summary"]["patterns"], insights.baselines(conn),
                                                    views.player_tier(conn, puuid))
@@ -876,6 +924,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                                     "crest": gd.tier_crest(e["tier"]), "lp": e.get("leaguePoints"),
                                     "wins": e.get("wins"), "losses": e.get("losses"),
                                     "win_rate": round(100 * e.get("wins", 0) / games) if games else None,
+                                    "puuid": e.get("puuid"),
                                     "url": f"/players/{region}/{views.path_id(n, t)}" if n and t else None})
                 source = (f"Top {len(players)} ranked solo/duo players on {region.upper()}, live "
                           "from Riot (refreshed every 30 minutes).")
@@ -894,10 +943,21 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                 n, t = names.get(puuid, (None, None))
                 players.append({"rank": i, "name": n, "tag": t, "tier": tier,
                                 "crest": gd.tier_crest(tier), "lp": None, "wins": None,
-                                "losses": None, "win_rate": None,
+                                "losses": None, "win_rate": None, "puuid": puuid,
                                 "url": f"/players/{region}/{views.path_id(n, t)}" if n and t else None})
             source = ("Apex-tier players RiftWatch has analysed games from (live LP needs the Riot "
                       "API).") if players else ""
+        # Their mains, from games RiftWatch has stored (crawled high-elo games cover most of them).
+        with pool.connection() as conn:
+            found = champ_stats.mains(conn, [p["puuid"] for p in players if p.get("puuid")])
+        for p in players:
+            m = found.get(p.pop("puuid", None) or "")
+            p["mains"] = [{"name": gd.champion(c["champion_id"]).name, "slug": gd.champion(c["champion_id"]).slug,
+                           "icon": gd.champion_icon(c["champion_id"]), "games": c["games"]}
+                          for c in (m or {}).get("champions", [])]
+            p["role"] = gamedata.POSITIONS.get((m or {}).get("role") or "", "")
+            p["role_key"] = (m or {}).get("role") or ""
+            p["stored"] = (m or {}).get("games", 0)
         return {"players": players, "source": source, "error": error}
 
     # -- the match analysis page, inside the site's header -----------------------------------

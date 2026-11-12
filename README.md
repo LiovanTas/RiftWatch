@@ -241,8 +241,8 @@ Things measurement changed along the way:
 `riftwatch serve` starts the site on http://localhost:8000: League match history and stats
 with RiftWatch's coaching built in.
 
-- **Search** any Riot ID in any region (or ALL, which finds the region itself), from the home
-  page or a command palette on every page (`/` or Ctrl+K). Autocomplete covers every player
+- **Search** any Riot ID in any region (or ALL, which finds the region itself), or a
+  champion by name, from the home page or a command palette on every page (`/` or Ctrl+K). Autocomplete covers every player
   RiftWatch has seen, plus recent searches and favourites. A player RiftWatch hasn't seen yet
   loads on the spot: the page downloads their games from Riot and shows its progress.
 - **Player file:** a stat band with ranked solo and flex, the last 20 games' win rate and
@@ -251,7 +251,8 @@ with RiftWatch's coaching built in.
   solo and flex (see *Rank progression* below); **Patterns**, the strengths and problems that
   keep recurring (say, "bottom-20% farm for the rank in 13 of 19 games"); a **Focus** card for
   the most frequent problem, game by game against the rank's typical value with whether it's
-  getting better; **season badges** (pentakill, comeback kid, hot streak, untouchable and more,
+  getting better; a **tilt check** (win rate by game number in a session and after two losses
+  in a row, with a nudge to stop when the numbers say so); **season badges** (pentakill, comeback kid, hot streak, untouchable and more,
   each saying what earned it); season champion stats and duo partners. The side panel sits on
   the left. Each champion in the player's lists opens **their page on that champion**
   (`/players/<region>/<id>/champions/<champion>`): their season numbers beside other players'
@@ -264,7 +265,8 @@ with RiftWatch's coaching built in.
   the other nine players, with MVP/ACE), champion, spells, runes, KDA, CS, damage, vision,
   control wards, items, multikills, both team comps, and up to two notes on what went well
   and two on what didn't (see *Match insights* below). Expanding a game shows:
-  - both teams' full scoreboards with damage, wards, gold, bans and objectives
+  - both teams' full scoreboards with damage, wards, gold, bans and objectives, and each
+    team's damage profile (physical, magic and true damage shares, seconds of crowd control)
   - **Insights:** every strength and weakness with its evidence, and the gold, CS and XP lead
     over the lane opponent at 10 and 15 minutes
   - the player's item build by minute, skill order and rune page
@@ -299,6 +301,9 @@ with RiftWatch's coaching built in.
 - **Compare** (`/compare`): two players side by side over their last 50 ranked games (win
   rate, KDA, kill participation, farm, damage, gold, vision, deaths), the better side marked,
   and every stored game they played together or against each other.
+- **Patches** (`/patches`): every champion and item change in `stats/patch_notes.json`, with
+  each champion's tier before and after the change is accounted for, and the champions an
+  item change hits hardest (by how often they buy it).
 - **Stats** (`/stats`): what wins games in stored ranked play -- the win rate after taking
   each objective first, by dragons taken, by gold lead at 15 minutes (and how often 3k-behind
   teams come back), game lengths and side; and every finished item's pick and win rate, the
@@ -319,7 +324,7 @@ with RiftWatch's coaching built in.
   champions in the paired role (support for an ADC, jungler for a mid or top laner), the
   players RiftWatch has seen play the champion most, and abilities.
 - **Ladder:** the top 100 of each region live from Riot with a podium for the top three,
-  refreshed every 30 minutes. Without an API key it falls back to the apex players RiftWatch
+  each player's role and most-played champions from stored games, refreshed every 30 minutes. Without an API key it falls back to the apex players RiftWatch
   has stored.
 
 ### Match insights

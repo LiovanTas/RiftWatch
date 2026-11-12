@@ -86,13 +86,17 @@
     if (saved && region && !form.dataset.fixed) region.value = saved;
     region && region.addEventListener('change', () => store.set('rw-region', region.value));
     let items = [], active = -1, timer = null;
-    function render(list, title) {
-      items = list; active = -1;
-      if (!list.length) { box.classList.remove('open'); return; }
-      box.innerHTML = `<div class="head">${title}</div>` + list.map((p, i) =>
-        `<a href="${profileUrl(p)}" data-i="${i}"><img src="${esc(p.icon || '')}" alt="" loading="lazy">` +
-        `<span class="who"><b>${esc(p.name)}</b> <span>#${esc(p.tag)}</span></span>` +
-        `<span class="reg">${esc(p.region.toUpperCase())}</span></a>`).join('');
+    // Each entry is a player ({name, tag, region}) or a champion ({slug, title}).
+    const urlOf = (p) => (p.slug ? `/champions/${p.slug}` : profileUrl(p));
+    const rowOf = (p, i) => `<a href="${urlOf(p)}" data-i="${i}"${p.slug ? ' class="champ"' : ''}><img src="${esc(p.icon || '')}" alt="" loading="lazy">`
+      + (p.slug ? `<span class="who"><b>${esc(p.name)}</b> <span>${esc(p.title || 'Champion')}</span></span><span class="reg">CHAMPION</span>`
+                : `<span class="who"><b>${esc(p.name)}</b> <span>#${esc(p.tag)}</span></span><span class="reg">${esc(p.region.toUpperCase())}</span>`)
+      + '</a>';
+    function render(list, title, champs = []) {
+      items = [...list, ...champs]; active = -1;
+      if (!items.length) { box.classList.remove('open'); return; }
+      box.innerHTML = (list.length ? `<div class="head">${title}</div>` + list.map((p, i) => rowOf(p, i)).join('') : '')
+        + (champs.length ? '<div class="head">Champions</div>' + champs.map((c, i) => rowOf(c, list.length + i)).join('') : '');
       box.classList.add('open');
     }
     function recentList() {
@@ -107,7 +111,7 @@
       timer = setTimeout(async () => {
         try {
           const r = await fetch(`/api/autocomplete?q=${encodeURIComponent(q)}&region=${region ? region.value : ''}`);
-          if (r.ok) render((await r.json()).players, 'Players');
+          if (r.ok) { const data = await r.json(); render(data.players, 'Players', data.champions || []); }
         } catch {}
       }, 140);
     });
@@ -118,14 +122,16 @@
         active = (active + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
         $$('a', box).forEach((a, i) => a.classList.toggle('on', i === active));
       } else if (e.key === 'Enter' && active >= 0) {
-        e.preventDefault(); location.href = profileUrl(items[active]);
+        e.preventDefault(); location.href = urlOf(items[active]);
       } else if (e.key === 'Escape') { box.classList.remove('open'); }
     });
     document.addEventListener('click', (e) => { if (!form.contains(e.target)) box.classList.remove('open'); });
     form.addEventListener('submit', (e) => {
       if (!input.value.includes('#')) {
         e.preventDefault();
-        input.setCustomValidity('Use your Riot ID: Name#TAG (the tag is shown under your name in the client)');
+        const champ = items.find((x) => x.slug);
+        if (champ) { location.href = urlOf(champ); return; }
+        input.setCustomValidity('Use a Riot ID (Name#TAG, the tag is under your name in the client) or a champion name');
         input.reportValidity();
         setTimeout(() => input.setCustomValidity(''), 2500);
       }

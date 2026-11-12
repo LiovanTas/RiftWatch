@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import wr %}
+{% from "_macros.html" import wr, pos_icon %}
 {% block title %}{{ region|upper }} Ranked Leaderboard | RiftWatch{% endblock %}
 {% block content %}
 <div class="container">
@@ -22,6 +22,7 @@
         <b>{% if p.name %}{{ p.name }}{% else %}<span class="muted">Not on RiftWatch yet</span>{% endif %}</b>
         <span><span class="t-{{ p.tier|lower }}">{{ p.tier|title }}</span>{% if p.lp is not none %} &middot; {{ '{:,}'.format(p.lp) }} LP{% endif %}{% if p.win_rate is not none %} &middot; {{ wr(p.win_rate) }}{% endif %}</span>
       </div>
+      {% if p.mains %}<img class="pod-main" src="{{ p.mains[0].icon }}" alt="{{ p.mains[0].name }}" data-tip="Plays {{ p.mains[0].name }}&#10;{{ p.mains[0].games }} stored games" loading="lazy">{% endif %}
       <img src="{{ p.crest }}" alt="" loading="lazy">
     </a>
     {% endfor %}
@@ -31,7 +32,7 @@
     {% if players %}
     <div class="scroll">
     <table class="data">
-      <thead><tr><th class="l">#</th><th class="l">Player</th><th class="l">Tier</th><th data-sort>LP</th><th data-sort>Wins</th><th data-sort>Losses</th><th data-sort>Win rate</th></tr></thead>
+      <thead><tr><th class="l">#</th><th class="l">Player</th><th class="l">Tier</th><th data-sort>LP</th><th data-sort>Wins</th><th data-sort>Losses</th><th data-sort>Win rate</th><th class="l">Plays</th></tr></thead>
       <tbody id="lb-body">
       {% for p in players %}
         <tr data-name="{{ (p.name or '')|lower }}">
@@ -42,6 +43,7 @@
           <td>{{ p.wins if p.wins is not none else '-' }}</td>
           <td>{{ p.losses if p.losses is not none else '-' }}</td>
           <td data-v="{{ p.win_rate or 0 }}">{% if p.win_rate is not none %}{{ wr(p.win_rate) }}{% else %}-{% endif %}</td>
+          <td class="l"><span class="lb-mains">{% if p.role_key %}{{ pos_icon(gd, p.role_key) }}{% endif %}{% for c in p.mains %}<a href="/champions/{{ c.slug }}"><img src="{{ c.icon }}" alt="{{ c.name }}" data-tip="{{ c.name }}&#10;{{ c.games }} of {{ p.stored }} stored games" loading="lazy"></a>{% else %}<span class="muted">-</span>{% endfor %}</span></td>
         </tr>
       {% endfor %}
       </tbody>

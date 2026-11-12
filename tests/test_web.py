@@ -479,3 +479,11 @@ def test_player_champion_page_and_manifest(web):
     manifest = client.get("/static/manifest.webmanifest")
     assert manifest.status_code == 200 and manifest.json()["name"] == "RiftWatch"
     assert 'rel="manifest"' in page.text
+
+
+def test_patches_page_and_champion_search(web):
+    client, *_ = web
+    page = client.get("/patches")
+    assert page.status_code == 200 and "Patch notes, and what they moved" in page.text and "Patch 26.22" in page.text
+    found = client.get("/api/autocomplete?q=ah").json()
+    assert "players" in found and "champions" in found

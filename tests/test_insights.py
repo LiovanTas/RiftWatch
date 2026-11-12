@@ -347,3 +347,26 @@ def test_comebacks_and_thrown_leads():
     me, players = game(win=True)
     assert not [n for n in insights.game_notes(me, players, {}, "GOLD", names, team15=-1000)
                 if n.label.startswith("Came back")]
+
+
+def test_tilt_splits_sessions_and_finds_losing_streak_effects():
+    from datetime import UTC, datetime, timedelta
+
+    from riftwatch.web.views import tilt
+    start = datetime(datetime.now(UTC).year, 1, 5, 18, tzinfo=UTC)
+    rows = []
+    # 12 sessions of 4 games, an hour apart within a session and a day apart between them:
+    # lose, lose, then lose again, then win -- so after two losses in a row you win 1 of 2.
+    for day in range(12):
+        t = start + timedelta(days=day)
+        for i, win in enumerate((False, False, False, True)):
+            rows.append((t + timedelta(minutes=40 * i), 30 * 60, win))
+
+    class Conn:
+        def execute(self, sql, params):
+            return SimpleNamespace(fetchall=lambda: rows)
+    t = tilt(Conn(), "p")
+    assert t["sessions"] == 12 and t["per_session"] == 4.0 and t["overall"] == 25
+    assert [b["win_rate"] for b in t["by_index"]] == [0, 0, 0, 100]
+    assert t["after_two"] == {"games": 24, "win_rate": 50}
+    assert tilt(Conn(), "p", min_games=100) is None

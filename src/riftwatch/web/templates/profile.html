@@ -163,6 +163,23 @@
         </div>
       </div>
       {% endif %}
+      {% if tilt %}
+      <div class="panel tilt">
+        <div class="panel-head"><span>Tilt check</span><span class="muted small">{{ tilt.sessions }} sessions this season</span></div>
+        <div class="panel-body">
+          {% if tilt.current %}<p class="now">This session: <b>{{ tilt.current.games }} game{{ 's' if tilt.current.games != 1 }}</b>, {{ tilt.current.wins }}W {{ tilt.current.games - tilt.current.wins }}L</p>{% endif %}
+          <div class="tilt-bars">
+            {% for b in tilt.by_index %}<div data-tip="Game {{ b.label }} of a session&#10;{{ b.games }} games, {{ b.win_rate }}% won"><i class="{{ 'up' if b.win_rate >= tilt.overall else 'down' }}" style="height:{{ [b.win_rate, 8]|max }}%"></i><b>{{ b.win_rate }}%</b><span>game {{ b.label }}</span></div>{% endfor %}
+          </div>
+          <div class="tilt-facts">
+            {% if tilt.after_two.win_rate is not none %}<span>After 2 losses in a row: <b class="{{ 'down' if tilt.after_two.win_rate < tilt.overall else 'up' }}">{{ tilt.after_two.win_rate }}%</b> <small>({{ tilt.after_two.games }} games)</small></span>{% endif %}
+            {% if tilt.after_win.win_rate is not none %}<span>After a win: <b class="{{ 'down' if tilt.after_win.win_rate < tilt.overall else 'up' }}">{{ tilt.after_win.win_rate }}%</b> <small>({{ tilt.after_win.games }} games)</small></span>{% endif %}
+            <span>Overall: <b>{{ tilt.overall }}%</b> &middot; {{ tilt.per_session }} games a session</span>
+          </div>
+          {% for a in tilt.advice %}<p class="advice">{{ a }}</p>{% endfor %}
+        </div>
+      </div>
+      {% endif %}
       {% if badges %}
       <div class="panel badges">
         <div class="panel-head"><span>Season badges</span><a class="muted small" href="{{ recap_url }}">Recap &rarr;</a></div>

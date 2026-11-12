@@ -9,6 +9,17 @@
     <span class="d-links">{% if game_url and not on_game_page %}<a class="btn" href="{{ game_url }}" title="This game on its own page, to share">Game page &#8599;</a>{% endif %}{% if analysis_url %}<a class="btn" href="{{ analysis_url }}">RiftWatch analysis &rarr;</a>{% endif %}</span>
   </div>
   <div class="d-pane on" data-pane="overview">
+    {% if d.damage_profile %}
+    <div class="dmg-profile">
+      {% for t in d.damage_profile %}
+      <div class="dp-row">
+        <span class="dp-team {{ t.label|lower }}">{{ t.label }}</span>
+        <div class="dp-bar" data-tip="{{ t.label }} team damage to champions&#10;{{ '{:,}'.format(t.total) }} total: {{ t.physical }}% physical, {{ t.magic }}% magic, {{ t.true }}% true"><i class="phys" style="width:{{ t.physical }}%">{% if t.physical >= 12 %}{{ t.physical }}% AD{% endif %}</i><i class="mag" style="width:{{ t.magic }}%">{% if t.magic >= 12 %}{{ t.magic }}% AP{% endif %}</i><i class="tru" style="width:{{ t.true }}%"></i></div>
+        <span class="dp-cc" data-tip="Crowd control&#10;seconds of enemies stunned, slowed or rooted by this team">{{ t.cc }}s CC</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
     {% for t in d.teams %}
     <div class="team-head {{ 'win' if t.win else 'loss' }}">
       <span class="res">{{ 'Victory' if t.win else 'Defeat' }}</span>

@@ -12,7 +12,7 @@
       <a href="/about" class="{{ 'on' if nav == 'about' }}">Method</a>
     </nav>
     <div class="head-tools">
-      {% if nav != 'home' %}<button class="cmd-btn" type="button" data-palette aria-label="Search a player">{{ icon('search') }}<span>Find a player by Riot ID</span><kbd>/</kbd></button>{% endif %}
+      {% if nav != 'home' %}<button class="cmd-btn" type="button" data-palette aria-label="Search a player">{{ icon('search') }}<span>Find a player or champion</span><kbd>/</kbd></button>{% endif %}
       <button class="icon-btn" id="theme-toggle" type="button" aria-label="Switch light or dark theme">{{ icon('moon') }}</button>
     </div>
   </div>
@@ -20,6 +20,6 @@
 <div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="Find a player">
   <div class="box">
     {{ search_form(regions, 'auto') }}
-    <div class="hint"><span><kbd>Enter</kbd> search</span><span><kbd>&uarr;</kbd><kbd>&darr;</kbd> pick</span><span><kbd>Esc</kbd> close</span><span>ALL looks in every region</span></div>
+    <div class="hint"><span><kbd>Enter</kbd> search</span><span><kbd>&uarr;</kbd><kbd>&darr;</kbd> pick</span><span><kbd>Esc</kbd> close</span><span>ALL looks in every region</span><span>type a champion's name to open its page</span></div>
   </div>
 </div>

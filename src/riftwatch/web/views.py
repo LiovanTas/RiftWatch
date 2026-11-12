@@ -485,6 +485,20 @@ def match_detail(conn: psycopg.Connection, gd: GameData, match_id: str, puuid: s
     losers = [p for p in players if not p["win"]]
     mvp = max(winners, key=lambda p: scores[p["participant_id"]], default=None)
     ace = max(losers, key=lambda p: scores[p["participant_id"]], default=None)
+    # Each team's damage by type and crowd control, for the damage profile.
+    profile = []
+    for team_id, physical, magic, true_dmg, cc in conn.execute(
+            """SELECT (p->>'teamId')::int, sum((p->>'physicalDamageDealtToChampions')::int),
+                      sum((p->>'magicDamageDealtToChampions')::int), sum((p->>'trueDamageDealtToChampions')::int),
+                      sum((p->>'timeCCingOthers')::int)
+                 FROM matches m, jsonb_array_elements(m.raw->'info'->'participants') p
+                WHERE m.match_id = %s GROUP BY 1 ORDER BY 1""", (match_id,)):
+        total = (physical or 0) + (magic or 0) + (true_dmg or 0)
+        if total:
+            profile.append({"team": team_id, "label": "Blue" if team_id == 100 else "Red", "total": total,
+                            "physical": round(100 * physical / total), "magic": round(100 * magic / total),
+                            "true": max(0, 100 - round(100 * physical / total) - round(100 * magic / total)),
+                            "cc": cc or 0})
     top_damage = max((p["damage"] for p in players), default=1) or 1
     top_taken = max((p["damage_taken"] for p in players), default=1) or 1
     teams = []
@@ -532,7 +546,7 @@ def match_detail(conn: psycopg.Connection, gd: GameData, match_id: str, puuid: s
                  "opponent": gd.champion(opp["champion_id"]).name if opp else None,
                  "opponent_icon": gd.champion_icon(opp["champion_id"]) if opp else None}
     return {
-        "insights": notes, "has_timeline": timeline is not None,
+        "insights": notes, "has_timeline": timeline is not None, "damage_profile": profile,
         "role": me["position"] if me else None,
         "match_id": match_id, "duration": clock(players[0]["duration_s"]),
         "date": players[0]["game_start"].strftime("%b %d, %Y %H:%M UTC"), "when": ago(players[0]["game_start"]),
@@ -847,3 +861,63 @@ def focus(rows: list[dict], patterns: dict, table: dict, tier: str) -> dict | No
             "spark": _spark(values, typical, higher),
         }
     return None
+
+
+# -- tilt check ------------------------------------------------------------------------------
+
+SESSION_GAP_MIN = 60          # more than an hour between games starts a new session
+
+
+def tilt(conn: psycopg.Connection, puuid: str, min_games: int = 30) -> dict | None:
+    """How the player does deeper into a session and after losing streaks, this season."""
+    season = datetime(datetime.now(UTC).year, 1, 1, tzinfo=UTC)
+    games = conn.execute(
+        """SELECT game_start, duration_s, win FROM participant_builds
+            WHERE puuid = %s AND queue_id IN (420, 440) AND NOT remake AND game_start >= %s
+            ORDER BY game_start""", (puuid, season)).fetchall()
+    if len(games) < min_games:
+        return None
+    sessions: list[list[bool]] = []
+    last_end = None
+    for start, secs, win in games:
+        if last_end is None or (start - last_end).total_seconds() > SESSION_GAP_MIN * 60:
+            sessions.append([])
+        sessions[-1].append(win)
+        last_end = start + timedelta(seconds=secs)
+    overall = sum(w for _, _, w in games) / len(games)
+    by_index = defaultdict(lambda: [0, 0])
+    after_two, after_win = [0, 0], [0, 0]
+    for s in sessions:
+        for i, win in enumerate(s):
+            slot = by_index[min(i + 1, 4)]
+            slot[0] += 1
+            slot[1] += win
+            if i >= 2 and not s[i - 1] and not s[i - 2]:
+                after_two[0] += 1
+                after_two[1] += win
+            if i >= 1 and s[i - 1]:
+                after_win[0] += 1
+                after_win[1] += win
+
+    def rate(pair):
+        return round(100 * pair[1] / pair[0]) if pair[0] else None
+
+    current = sessions[-1] if last_end and (datetime.now(UTC) - last_end).total_seconds() < 12 * 3600 else None
+    out = {
+        "games": len(games), "sessions": len(sessions),
+        "per_session": round(len(games) / len(sessions), 1), "overall": round(100 * overall),
+        "by_index": [{"label": f"{i}{'+' if i == 4 else ''}", "games": by_index[i][0], "win_rate": rate(by_index[i])}
+                     for i in (1, 2, 3, 4) if by_index[i][0]],
+        "after_two": {"games": after_two[0], "win_rate": rate(after_two)},
+        "after_win": {"games": after_win[0], "win_rate": rate(after_win)},
+        "current": {"games": len(current), "wins": sum(current)} if current else None,
+    }
+    late = by_index[4]
+    advice = []
+    if after_two[0] >= 10 and rate(after_two) <= out["overall"] - 5:
+        advice.append(f"After two losses in a row you win {rate(after_two)}% (overall {out['overall']}%). "
+                      "That's the moment to take a break.")
+    if late[0] >= 10 and rate(late) <= out["overall"] - 5:
+        advice.append(f"From the 4th game of a session you win {rate(late)}%. Shorter sessions may pay off.")
+    out["advice"] = advice
+    return out

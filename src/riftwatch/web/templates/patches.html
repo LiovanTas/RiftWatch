@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% from "_macros.html" import tier_badge, wr %}
+{% block title %}Patch Notes and Tier Impact | RiftWatch{% endblock %}
+{% block description %}Recent League of Legends patch changes, champion and item, and how each one moved champions on RiftWatch's tier board.{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="page-title">
+    <div class="eyebrow">Patches</div>
+    <h1>Patch notes, and what they moved</h1>
+    <p>Champion and item changes from Riot's notes{{ ' (updated ' ~ updated ~ ')' if updated }}, with each champion's tier on the board before and after RiftWatch accounts for them. A buff is worth {{ shift|round|int }} win-rate point and a nerf takes one away, for games played before the change; previews count {{ (preview_weight * 100)|round|int }}%; an item change counts in proportion to how often a champion buys the item.</p>
+  </div>
+  {% for p in patches %}
+  <section class="patch-block panel">
+    <div class="patch-head">
+      <div><b>Patch {{ p.patch }}</b><span class="{{ 'preview' if p.status == 'preview' }}">{{ 'preview, may change' if p.status == 'preview' else 'live' }} &middot; {{ p.date }}</span></div>
+      <a class="btn" href="{{ p.source }}" target="_blank" rel="noopener">Patch notes &#8599;</a>
+    </div>
+    <div class="patch-grid">
+      {% for c in p.champs %}
+      <a class="pc-card {{ c.kind }}" href="/champions/{{ c.slug }}">
+        <img src="{{ c.icon }}" alt="">
+        <div>
+          <b>{{ c.champion }} <i>{{ {'buff': '▲ buff', 'nerf': '▼ nerf', 'adjust': '◆ changed'}[c.kind] }}</i></b>
+          <p>{{ c.text }}</p>
+          {% if c.roles %}<div class="pc-roles">{% for r in c.roles %}<span>{{ r.role }}: {% if r.tier_raw != r.tier %}{{ tier_badge(r.tier_raw) }} &rarr; {% endif %}{{ tier_badge(r.tier) }}</span>{% endfor %}</div>{% else %}<div class="pc-roles muted small">Not enough games to rank yet</div>{% endif %}
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+    {% if p.systems %}
+    <h4>Items</h4>
+    <div class="patch-items">
+      {% for c in p.systems %}
+      <div class="pi-card {{ c.kind }}">
+        <div class="pi-top">{% if c.icon %}<img src="{{ c.icon }}" alt="">{% endif %}<div><b>{{ c.name }} <i>{{ {'buff': '▲ buff', 'nerf': '▼ nerf', 'adjust': '◆ changed'}[c.kind] }}</i></b><p>{{ c.text }}</p></div></div>
+        {% if c.users %}<div class="pi-users"><span class="muted small">Most affected:</span>{% for u in c.users %}<a href="/champions/{{ u.slug }}?role={{ u.position|lower }}" data-tip="{{ u.name }} &middot; {{ u.role }}&#10;buys it in {{ u.usage }}% of games{% if u.tier_raw != u.tier %}; tier {{ u.tier_raw }} to {{ u.tier }}{% endif %}"><img src="{{ u.icon }}" alt="{{ u.name }}"><small>{{ u.usage }}%</small></a>{% endfor %}</div>
+        {% elif not c.ids %}<p class="muted small">Not in this version's item data yet.</p>{% else %}<p class="muted small">No champion buys it in 15%+ of games.</p>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}
