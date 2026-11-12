@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 import time
 from datetime import UTC, datetime
@@ -26,7 +27,10 @@ from riftwatch.coach.pipeline import ReportError, champion_pool, progress_report
 from riftwatch.db import repo
 from riftwatch.riot.routing import UnknownRegion, parse_riot_id, platform_for
 from riftwatch.stats import champions as champ_stats
-from riftwatch.web import gamedata, pages, views
+from riftwatch.stats import matchups, patches
+from riftwatch.web import gamedata, mapview, pages, views
+
+log = logging.getLogger(__name__)
 
 REGIONS = pages.REGIONS
 PLATFORM_REGION = {"na1": "na", "euw1": "euw", "eun1": "eune", "kr": "kr", "br1": "br",
@@ -53,7 +57,7 @@ def _asset_version() -> str:
 
 
 def register(app: FastAPI, services, *, coach, advisor, brain,
-             gd: gamedata.GameData | None = None) -> None:
+             gd: gamedata.GameData | None = None, guard=None) -> None:
     """Mount the website on ``app`` (the JSON API stays in app.py)."""
     pool = services.pool
     env = Environment(loader=PackageLoader("riftwatch.web", "templates"),
@@ -114,7 +118,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                 "SELECT count(DISTINCT puuid) FROM participant_builds").fetchone()[0]
             top = []
             if ranked:
-                rows = champ_stats.tier_list(conn)["rows"]
+                rows = champ_stats.tier_list(conn, changes=patch_changes())["rows"]
                 for r in [r for r in rows if r["tier"] in ("S+", "S")][:12]:
                     c = gd.champion(r["champion_id"])
                     top.append({"name": c.name, "slug": c.slug, "icon": gd.champion_icon(c.id),
@@ -123,7 +127,8 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                                 "win_rate": r["win_rate"]})
         stats = {"games": games, "ranked": ranked, "players": players,
                  "champions": len(gd.champions) or 170, "patch": ".".join(gd.version.split(".")[:2])}
-        return render("home.html", nav="home", stats=stats, top_champions=top)
+        return render("home.html", nav="home", stats=stats, top_champions=top,
+                      watch=patch_watch()[:2])
 
     def search_error(message: str) -> HTMLResponse:
         return render("home.html", status=400, nav="home", error=message,
@@ -275,6 +280,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                     ctx["summary"] = views.summary(views.match_rows(conn, gd, puuid, region))
                 if tab == "champions":
                     ctx["season"] = views.champion_stats(conn, gd, puuid, cq)
+                    ctx["matchups"] = views.personal_matchups(conn, gd, puuid)
                 elif tab == "coach":
                     ctx.update(_coach_tab(conn, puuid, region, riot_id))
                 elif tab == "live":
@@ -375,8 +381,25 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             raise HTTPException(404, "game not stored")
         analysis = (f"/players/{region}/{riot_id}/matches/{match_id}"
                     if account is not None and detail["me"] else None)
+        map_url = (f"/api/players/{region}/{riot_id}/matches/{match_id}/map"
+                   if analysis and detail.get("has_timeline") else None)
         return HTMLResponse(env.get_template("_match_detail.html").render(
-            d=detail, analysis_url=analysis))
+            d=detail, analysis_url=analysis, map_url=map_url,
+            map_compared=bool(advisor is not None and detail.get("role")
+                              and advisor.available(detail["role"]))))
+
+    @app.get("/api/players/{region}/{riot_id}/matches/{match_id}/map")
+    def match_map(region: str, riot_id: str, match_id: str) -> dict:
+        """The High-elo map tab's data: positions, kills and objectives each minute, and for
+        the laning minutes what the player did beside what high-elo players chose."""
+        with pool.connection() as conn:
+            _, _, account = find_account(conn, region, riot_id)
+            if account is None:
+                raise HTTPException(404, "player not synced")
+            state = mapview.map_state(conn, game_data(), advisor, match_id, account["puuid"])
+        if state is None:
+            raise HTTPException(404, "this game or its timeline isn't stored")
+        return state
 
     @app.get("/scout/{region}/{riot_id}")
     def scout_page(region: str, riot_id: str, job: str | None = None):
@@ -399,16 +422,37 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
     def _rank(rank: str) -> str:
         return rank if rank in champ_stats.RANKS else "all"
 
+    def patch_changes() -> dict[int, list[dict]]:
+        """Champion id -> recent patch-note changes (stats.patches)."""
+        gd = game_data()
+        return patches.by_champion({c.name.lower(): c.id for c in gd.champions.values()})
+
+    def patch_watch() -> list[dict]:
+        """The patches in patch_notes.json, newest first, with champion icons for the board."""
+        gd = game_data()
+        by_name = {c.name.lower(): c for c in gd.champions.values()}
+        out = []
+        for p in patches.notes()["patches"]:
+            items = []
+            for c in p["changes"]:
+                champ = by_name.get(c["champion"].lower())
+                if champ:
+                    items.append({**c, "slug": champ.slug, "icon": gd.champion_icon(champ.id)})
+            out.append({**p, "changes": sorted(items, key=lambda c: ("buff", "nerf", "adjust").index(c["kind"]))})
+        return out
+
     @app.get("/champions", response_class=HTMLResponse)
     def champions_page(request: Request, role: str | None = None, rank: str = "all",
-                       patch: str | None = None, view: str = "board") -> HTMLResponse:
+                       patch: str | None = None, view: str = "board",
+                       notes: str = "on") -> HTMLResponse:
         gd = game_data()
         role = role.upper() if role and role.upper() in gamedata.POSITIONS else None
         rank = _rank(rank)
+        adjusted = notes != "raw"
         with pool.connection() as conn:
             known = dict(champ_stats.patches(conn))
             patch = patch if patch in known else None
-            data = champ_stats.tier_list(conn, patch, rank)
+            data = champ_stats.tier_list(conn, patch, rank, patch_changes() if adjusted else None)
         rows = []
         for r in data["rows"]:
             if role and r["position"] != role:
@@ -425,7 +469,10 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                       role=role, role_name=gamedata.POSITIONS.get(role or "", ""), rank=rank,
                       ranks=[(k, v[0]) for k, v in champ_stats.RANKS.items()], patch=patch,
                       patches=list(known.items())[:12], qs=_query_string(request),
-                      view="table" if view == "table" else "board", tiers=TIER_BLURBS)
+                      view="table" if view == "table" else "board", tiers=TIER_BLURBS,
+                      adjusted=adjusted, watch=patch_watch(), shift=patches.SHIFT,
+                      preview_weight=patches.PREVIEW_WEIGHT,
+                      data_patch=max(known.items(), key=lambda kv: kv[1])[0] if known else None)
 
     @app.get("/champions/{slug}", response_class=HTMLResponse)
     def champion_page(request: Request, slug: str, role: str | None = None, rank: str = "all",
@@ -449,6 +496,9 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             s = champ_stats.champion(conn, champ.id, role.upper() if role else None, patch, rank,
                                      is_legendary=item_check("is_legendary"),
                                      is_boots=item_check("is_boots"), is_starter=is_starter)
+            mains = views.champion_players(conn, champ.id, s.get("position"), PLATFORM_REGION)
+            duo = champ_stats.partners(conn, champ.id, s.get("position"))
+            table = champ_stats.matchup_table(conn, champ.id, s.get("position"))
 
         def item_view(i):
             it = gd.item(i)
@@ -464,7 +514,19 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                                "patch": patch, "patches": list(known.items())[:12],
                                "positions": gamedata.POSITIONS,
                                "role_name": gamedata.POSITIONS.get(s.get("position", ""), ""),
-                               "qs": _query_string(request)}
+                               "qs": _query_string(request),
+                               "patch_changes": patch_changes().get(champ.id, []),
+                               "mains": mains,
+                               "matchup_rows": [{**m, "name": gd.champion(m["champion_id"]).name,
+                                                 "slug": gd.champion(m["champion_id"]).slug,
+                                                 "icon": gd.champion_icon(m["champion_id"])}
+                                                for m in table],
+                               "duo_role": gamedata.POSITIONS.get(duo["role"] or "", ""),
+                               "duo": [{"name": gd.champion(d["champion_id"]).name,
+                                        "slug": gd.champion(d["champion_id"]).slug,
+                                        "icon": gd.champion_icon(d["champion_id"]),
+                                        "games": d["games"], "win_rate": d["win_rate"]}
+                                       for d in duo["rows"]]}
         if s.get("games"):
             ctx["runes"] = [stat(e, keystone=gd.rune_name(e["key"][0]), keystone_icon=gd.rune_icon(e["key"][0]),
                                  primary=gd.rune_name(e["key"][1]), primary_icon=gd.rune_icon(e["key"][1]),
@@ -503,6 +565,50 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                              "cooldown": sp.get("cooldownBurn")})
             ctx["abilities"] = abil
         return render("champion.html", nav="champions", **ctx)
+
+    @app.post("/api/champions/{slug}/matchups/{opponent}")
+    def matchup_note(request: Request, slug: str, opponent: str, role: str) -> dict:
+        """Why ``slug`` does well or badly against ``opponent`` in ``role``: stored, or written
+        now by the LLM from measured lane numbers and both kits (see stats.matchups)."""
+        gd_ = game_data()
+        a, b = gd_.champion_by_slug(slug), gd_.champion_by_slug(opponent)
+        role = role.upper()
+        if a is None or b is None or role not in gamedata.POSITIONS:
+            raise HTTPException(404, "unknown champion or role")
+        with pool.connection() as conn:
+            hit = matchups.cached(conn, a.id, b.id, role, gd_.version)
+            if hit:
+                return {**hit, "champion": a.name, "opponent": b.name}
+            if coach is None:
+                return {"output": None, "evidence": matchups.evidence(conn, gd_, a.id, b.id, role),
+                        "champion": a.name, "opponent": b.name,
+                        "note": "AI explanations are switched off on this server; here is the evidence."}
+        if guard is not None:
+            guard(request, "matchup")
+        with pool.connection() as conn:
+            try:
+                note = matchups.explain(conn, gd_, coach, a.id, b.id, role)
+            except Exception as exc:                          # noqa: BLE001 -- the evidence still helps
+                log.warning("matchup note %s vs %s failed: %s", slug, opponent, exc)
+                reason = ("the server's Anthropic API key was rejected"
+                          if "401" in str(exc) or "api-key" in str(exc) else "the AI call failed")
+                return {"output": None, "evidence": matchups.evidence(conn, gd_, a.id, b.id, role),
+                        "champion": a.name, "opponent": b.name,
+                        "note": f"The written explanation isn't available right now ({reason}). "
+                                "Here is the evidence it would be written from."}
+        return {**note, "champion": a.name, "opponent": b.name}
+
+    # -- multi-search -----------------------------------------------------------------------
+
+    @app.get("/multi", response_class=HTMLResponse)
+    def multi_search(q: str = "") -> HTMLResponse:
+        """Everyone in a lobby at once: paste champ-select chat or a list of Riot IDs."""
+        gd_ = game_data()
+        ids = views.parse_lobby(q)
+        with pool.connection() as conn:
+            cards = [views.multi_card(conn, gd_, n, t, PLATFORM_REGION) for n, t in ids]
+        return render("multi.html", nav="multi", q=q, cards=cards,
+                      unparsed=bool(q.strip()) and not ids)
 
     # -- leaderboard ------------------------------------------------------------------------
 

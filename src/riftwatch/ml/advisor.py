@@ -141,6 +141,38 @@ class Advisor:
         good.sort(key=lambda m: -m.did.share)
         return Review(role, len(mine), agree / len(mine), moments[:max_moments], good[:1])
 
+    def minutes(self, match: dict[str, Any], timeline: dict[str, Any],
+                puuid: str) -> tuple[str, list[tuple[Example, list[Option], str]]] | None:
+        """Every labelled minute of the player's game with the options high-elo players chose
+        in similar spots, and how the player's choice compares:
+          "moment" -- a rare choice against a strong consensus (as in review);
+          "good"   -- the player matched a strong consensus;
+          "agree"  -- the player made the most common choice;
+          "differ" -- another choice was more common, but not overwhelmingly;
+          "neutral" -- moving between areas, nothing specific to compare."""
+        me = next((p for p in match["info"]["participants"] if p["puuid"] == puuid), None)
+        role = (me or {}).get("teamPosition") or ""
+        if me is None or role not in DECISIONS or not self.available(role):
+            return None
+        mine = [e for e in examples(match, timeline, role)
+                if e.participant_id == me["participantId"]]
+        if not mine:
+            return None
+        out = []
+        for e, options in zip(mine, self._options(self.model(role), mine), strict=True):
+            did = next((o for o in options if o.decision == e.decision), None)
+            top = max(options, key=lambda o: o.share)
+            if did is None or e.decision == "other":
+                kind = "neutral"
+            elif top.decision != e.decision and did.share < RARE and top.share >= CONSENSUS:
+                kind = "moment"
+            elif top.decision == e.decision:
+                kind = "good" if did.share >= MATCHED else "agree"
+            else:
+                kind = "differ"
+            out.append((e, options, kind))
+        return role, out
+
     @staticmethod
     def _options(trained, minutes: list[Example]) -> list[list[Option]]:
         """Options for every minute, in one call per model: the decision model over all

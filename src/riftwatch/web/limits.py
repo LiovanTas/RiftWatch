@@ -11,7 +11,7 @@ import psycopg
 
 WINDOW_S = 3600
 # Requests per visitor per hour. Update and scouting cost Riot requests; coaching costs money.
-DEFAULT_LIMITS = {"sync": 30, "scout": 60, "coach": 10}
+DEFAULT_LIMITS = {"sync": 30, "scout": 60, "coach": 10, "matchup": 20}
 DEFAULT_COACH_BUDGET_USD = 5.0
 
 
@@ -48,10 +48,12 @@ def hit(conn: psycopg.Connection, key: str, limit: int, window_s: int = WINDOW_S
 
 
 def coach_spend_today(conn: psycopg.Connection) -> float:
-    """US dollars the LLM coach has spent since midnight UTC (from stored coaching)."""
+    """US dollars the LLM has spent since midnight UTC (stored coaching and matchup notes)."""
     row = conn.execute(
         """
-        SELECT coalesce(sum((usage->>'cost_usd')::float8), 0) FROM coach_reports
+        SELECT coalesce(sum((usage->>'cost_usd')::float8), 0) FROM (
+          SELECT usage, created_at FROM coach_reports
+          UNION ALL SELECT usage, created_at FROM matchup_notes) spent
          WHERE created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
         """
     ).fetchone()

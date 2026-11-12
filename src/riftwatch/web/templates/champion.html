@@ -12,6 +12,7 @@
       <div class="eyebrow">{{ role_name or "Champion" }}{% if s.games %} &middot; {{ '{:,}'.format(s.games) }} ranked games{% endif %}</div>
       <h1>{{ champ.name }}</h1>
       <div class="title">{{ champ.title }}{% if champ.tags %} &middot; {{ champ.tags|join(', ') }}{% endif %}</div>
+      {% if patch_changes %}<div class="hero-patch">{% for c in patch_changes %}<a class="pm-line {{ c.kind }}" href="{{ c.source }}" target="_blank" rel="noopener"><i>{{ {'buff': '▲', 'nerf': '▼', 'adjust': '◆'}[c.kind] }}</i><b>{{ c.patch }}{{ ' preview' if c.status == 'preview' }}</b> {{ c.text }}</a>{% endfor %}</div>{% endif %}
       {% if abilities %}
       <div class="abil">{% for a in abilities %}<div class="slot" data-tip="{{ a.key }} &middot; {{ a.name }}&#10;{{ a.text }}"><img src="{{ a.icon }}" alt="{{ a.name }}" loading="lazy"><span>{{ a.key }}</span></div>{% endfor %}</div>
       {% endif %}
@@ -75,7 +76,7 @@
           <div class="rt"><b>{{ wr(sp.win_rate) }}</b><span class="muted">{{ sp.games }} games &middot; {{ sp.pick_rate|round|int }}%</span></div></div>
         {% endfor %}
         {% for m in skill_max %}
-        <div class="build-row"><div class="its">{% for k in m.order %}<span class="tier-b" style="background:var(--accent)">{{ k }}</span>{% if not loop.last %}<span class="arrow">&rsaquo;</span>{% endif %}{% endfor %}<span class="small muted" style="margin-left:6px">skill max order</span></div>
+        <div class="build-row"><div class="its">{% for k in m.order %}<span class="skey{{ ' r' if k == 'R' }}">{{ k }}</span>{% if not loop.last %}<span class="arrow">&rsaquo;</span>{% endif %}{% endfor %}<span class="small muted" style="margin-left:6px">skill max order</span></div>
           <div class="rt"><b>{{ wr(m.win_rate) }}</b><span class="muted">{{ m.games }} games &middot; {{ m.pick_rate|round|int }}%</span></div></div>
         {% endfor %}
         {% if skill_grid %}
@@ -127,24 +128,60 @@
 
   <div class="cols-2" style="margin-top:12px">
     <div class="panel">
-      <div class="panel-head"><span><span class="n">06</span>Toughest matchups</span><span class="muted small">lane opponents</span></div>
+      <div class="panel-head"><span><span class="n">06</span>Toughest matchups</span><span class="muted small">lane opponents &middot; press Why? for the reasons</span></div>
       <div class="panel-body vs-list">
-        {% for v in counters %}<a class="vs" href="/champions/{{ v.slug }}"><img src="{{ v.icon }}" alt="" loading="lazy"><div><b>{{ v.name }}</b><span class="loss-text">{{ v.win_rate|round|int }}% WR</span> <span>&middot; {{ v.games }}</span></div></a>
+        {% for v in counters %}<div class="vs"><a href="/champions/{{ v.slug }}"><img src="{{ v.icon }}" alt="" loading="lazy"><div><b>{{ v.name }}</b><span class="loss-text">{{ v.win_rate|round|int }}% WR</span> <span>&middot; {{ v.games }}</span></div></a><button class="why" type="button" data-why="/api/champions/{{ champ.slug }}/matchups/{{ v.slug }}?role={{ s.position|lower }}" data-icons="{{ champ_icon }} {{ v.icon }}" data-title="{{ champ.name }} vs {{ v.name }} &middot; {{ role_name }}">Why?</button></div>
         {% else %}<p class="muted">Not enough games against any one champion yet.</p>{% endfor %}
       </div>
     </div>
     <div class="panel">
       <div class="panel-head"><span><span class="n">07</span>Best matchups</span></div>
       <div class="panel-body vs-list">
-        {% for v in best %}<a class="vs" href="/champions/{{ v.slug }}"><img src="{{ v.icon }}" alt="" loading="lazy"><div><b>{{ v.name }}</b><span class="wr-hi">{{ v.win_rate|round|int }}% WR</span> <span>&middot; {{ v.games }}</span></div></a>
+        {% for v in best %}<div class="vs"><a href="/champions/{{ v.slug }}"><img src="{{ v.icon }}" alt="" loading="lazy"><div><b>{{ v.name }}</b><span class="wr-hi">{{ v.win_rate|round|int }}% WR</span> <span>&middot; {{ v.games }}</span></div></a><button class="why" type="button" data-why="/api/champions/{{ champ.slug }}/matchups/{{ v.slug }}?role={{ s.position|lower }}" data-icons="{{ champ_icon }} {{ v.icon }}" data-title="{{ champ.name }} vs {{ v.name }} &middot; {{ role_name }}">Why?</button></div>
         {% else %}<p class="muted">Not enough games against any one champion yet.</p>{% endfor %}
       </div>
     </div>
   </div>
 
+  {% if matchup_rows %}
+  <div class="panel" style="margin-top:12px">
+    <div class="panel-head"><span><span class="n">08</span>Every matchup</span><span class="muted small">{{ matchup_rows|length }} lane opponents &middot; click a column to sort</span></div>
+    <div class="toolbar"><input type="search" placeholder="Find an opponent" data-filter="#mu-body tr" aria-label="Find an opponent"></div>
+    <div class="scroll" style="max-height:420px;overflow-y:auto"><table class="data">
+      <thead><tr><th class="l" data-sort>Opponent</th><th data-sort>Games</th><th data-sort>Win rate</th><th data-sort>Gold at 15</th><th data-sort>CS at 15</th><th></th></tr></thead>
+      <tbody id="mu-body">{% for m in matchup_rows %}<tr data-name="{{ m.name|lower }}">
+        <td class="l" data-v="{{ m.name }}"><a class="champ-cell" href="/champions/{{ m.slug }}"><img src="{{ m.icon }}" alt="" loading="lazy"><b>{{ m.name }}</b></a></td>
+        <td data-v="{{ m.games }}">{{ m.games }}</td>
+        <td data-v="{{ m.shrunk }}">{{ wr(m.win_rate) }}</td>
+        <td data-v="{{ m.gold15 if m.gold15 is not none else 0 }}" class="{{ 'win-text' if (m.gold15 or 0) > 150 else ('loss-text' if (m.gold15 or 0) < -150 else '') }}">{{ '%+d'|format(m.gold15) if m.gold15 is not none else '-' }}</td>
+        <td data-v="{{ m.cs15 if m.cs15 is not none else 0 }}">{{ '%+.1f'|format(m.cs15) if m.cs15 is not none else '-' }}</td>
+        <td><button class="why-btn" type="button" data-why="/api/champions/{{ champ.slug }}/matchups/{{ m.slug }}?role={{ s.position|lower }}" data-icons="{{ champ_icon }} {{ m.icon }}" data-title="{{ champ.name }} vs {{ m.name }} &middot; {{ role_name }}">Why?</button></td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+  </div>
+  {% endif %}
+  {% if duo %}
+  <div class="panel" style="margin-top:12px">
+    <div class="panel-head"><span><span class="n">09</span>Best {{ duo_role|lower }} partners</span><span class="muted small">same team, ranked by win rate</span></div>
+    <div class="panel-body vs-list">
+      {% for v in duo %}<div class="vs"><a href="/champions/{{ v.slug }}"><img src="{{ v.icon }}" alt="" loading="lazy"><div><b>{{ v.name }}</b><span class="{{ 'wr-hi' if v.win_rate >= 55 else ('loss-text' if v.win_rate < 47 else '') }}">{{ v.win_rate|round|int }}% WR</span> <span>&middot; {{ v.games }}</span></div></a></div>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  {% if mains %}
+  <div class="panel" style="margin-top:12px">
+    <div class="panel-head"><span><span class="n">10</span>Players to learn from</span><span class="muted small">most {{ champ.name }} {{ role_name|lower }} games RiftWatch has seen</span></div>
+    <div class="scroll"><table class="data">
+      <thead><tr><th class="l">Player</th><th>Games</th><th>Win rate</th><th>KDA</th><th>CS/min</th></tr></thead>
+      <tbody>{% for m in mains %}<tr>
+        <td class="l">{% if m.url %}<a href="{{ m.url }}"><b>{{ m.name }}</b> <span class="muted">#{{ m.tag }}</span></a>{% else %}<b>{{ m.name }}</b>{% endif %} <span class="muted small">{{ m.region|upper }}</span></td>
+        <td>{{ m.games }}</td><td>{{ wr(m.win_rate) }} <span class="muted small">{{ m.wins }}W</span></td><td>{{ m.kda }}</td><td>{{ m.cs_min }}</td></tr>{% endfor %}</tbody>
+    </table></div>
+  </div>
+  {% endif %}
   {% if abilities %}
   <div class="panel" style="margin-top:12px">
-    <div class="panel-head"><span><span class="n">08</span>Abilities</span></div>
+    <div class="panel-head"><span><span class="n">11</span>Abilities</span></div>
     <div class="panel-body">
       {% for a in abilities %}
       <div class="ability"><div class="slot"><img src="{{ a.icon }}" alt="" loading="lazy"><span>{{ a.key }}</span></div><div><b>{{ a.name }}</b>{% if a.cooldown %}<span class="muted small"> &middot; cooldown {{ a.cooldown }}s</span>{% endif %}<p>{{ a.text }}</p></div></div>

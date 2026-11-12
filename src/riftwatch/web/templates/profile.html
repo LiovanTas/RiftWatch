@@ -103,6 +103,15 @@
             <div class="roles-key">{% for p in summary.positions if p.share %}<span style="--c:{{ p.colour }}">{{ p.name }} {{ p.share }}%</span>{% endfor %}</div>
           </div>
         </div>
+        {% if summary.trend|length > 2 %}
+        <div class="trend">
+          <span class="eyebrow" style="color:var(--muted)">Score per game</span>
+          <div class="bars" role="img" aria-label="Performance score of each recent game, oldest first">
+            {% for t in summary.trend %}<i class="{{ t.result }}" style="height:{{ (t.score * 10)|round|int if t.result != 'remake' else 6 }}%" data-tip="{{ t.champion }} &middot; {{ t.result|replace('win', 'Victory')|replace('loss', 'Defeat')|replace('remake', 'Remake') }}&#10;Score {{ t.score }} &middot; {{ t.kda }} &middot; {{ t.when }}"></i>{% endfor %}
+          </div>
+          <span class="muted small">older &rarr; newer</span>
+        </div>
+        {% endif %}
         <div class="top-champs">
           <span class="eyebrow" style="color:var(--muted)">Picks</span>
           {% for c in summary.champions %}
@@ -121,9 +130,20 @@
       {% endif %}
     </div>
     <aside class="side">
+      {% if summary and (summary.patterns.good or summary.patterns.bad) %}
+      <div class="panel patterns">
+        <div class="panel-head"><span><span class="n">01</span>Patterns</span><span class="muted small">in {{ summary.games }} games</span></div>
+        <div class="panel-body">
+          {% for kind, title in (('good', 'Keeps doing well'), ('bad', 'Keeps coming up')) %}{% if summary.patterns[kind] %}
+          <h4>{{ title }}</h4>
+          {% for p in summary.patterns[kind][:4] %}<div class="pat {{ kind }}"><span class="what">{{ p.phrase[:1]|upper }}{{ p.phrase[1:] }}</span><b>{{ p.games }}<span>/{{ p.of }}</span></b><div class="bar"><i style="width:{{ (100 * p.games / p.of)|round|int }}%"></i></div></div>{% endfor %}
+          {% endif %}{% endfor %}
+        </div>
+      </div>
+      {% endif %}
       {% if season %}
       <div class="panel">
-        <div class="panel-head"><span><span class="n">01</span>Season {{ year }} champions</span><a class="muted small" href="?tab=champions">All &rarr;</a></div>
+        <div class="panel-head"><span><span class="n">02</span>Season {{ year }} champions</span><a class="muted small" href="?tab=champions">All &rarr;</a></div>
         <div class="panel-body" style="padding-top:6px;padding-bottom:6px">
           <table class="mini-table">
           {% for c in season[:7] %}
@@ -139,7 +159,7 @@
       {% endif %}
       {% if friends %}
       <div class="panel">
-        <div class="panel-head"><span><span class="n">02</span>Duo partners</span><span class="muted small">last 60 games</span></div>
+        <div class="panel-head"><span><span class="n">03</span>Duo partners</span><span class="muted small">last 60 games</span></div>
         <div class="panel-body" style="padding-top:6px;padding-bottom:6px">
           <table class="mini-table">
           {% for f in friends %}
@@ -157,7 +177,26 @@
   </div>
 
 {% elif tab == 'champions' %}
-  <div class="panel" style="margin:20px 0 40px">
+  {% if matchups and (matchups.hard or matchups.easy) %}
+  <div class="cols-2" style="margin:20px 0 12px">
+    {% for kind, title, note in (('hard', 'Your hardest lane opponents', 'most losses beyond an even record'), ('easy', 'Your easiest lane opponents', 'most wins beyond an even record')) %}
+    <div class="panel">
+      <div class="panel-head"><span><span class="n">{{ '01' if kind == 'hard' else '02' }}</span>{{ title }}</span><span class="muted small">{{ note }}</span></div>
+      <div class="panel-body">
+        {% for m in matchups[kind] %}
+        <div class="pm-row">
+          <img src="{{ m.icon }}" alt="{{ m.champion }}" loading="lazy"><span class="vs-word">vs</span><img src="{{ m.opponent_icon }}" alt="{{ m.opponent }}" loading="lazy">
+          <div class="who2"><b>{{ m.champion }} vs {{ m.opponent }}</b><span>{{ m.role }} &middot; {{ m.wins }}W {{ m.losses }}L</span></div>
+          <b class="{{ 'loss-text' if kind == 'hard' else 'wr-hi' }}">{{ m.win_rate }}%</b>
+          <button class="why-btn" type="button" data-why="/api/champions/{{ m.slug }}/matchups/{{ m.opponent_slug }}?role={{ m.position|lower }}" data-icons="{{ m.icon }} {{ m.opponent_icon }}" data-title="{{ m.champion }} vs {{ m.opponent }} &middot; {{ m.role }}">Why?</button>
+        </div>
+        {% else %}<p class="muted small">Not enough repeat matchups yet.</p>{% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <div class="panel" style="margin:{{ '0' if matchups and (matchups.hard or matchups.easy) else '20px' }} 0 40px">
     <div class="toolbar">
       <b style="font-family:var(--display)">Season {{ year }} champion stats</b>
       <span class="grow"></span>

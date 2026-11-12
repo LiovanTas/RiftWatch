@@ -19,6 +19,8 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
+from riftwatch.stats import patches as patch_notes
+
 RANKED_SOLO = 420
 PRIOR_GAMES = 40
 MIN_GAMES = 20            # a champion needs this many games in a role to be listed
@@ -82,13 +84,25 @@ def shrunk(wins: float, games: float) -> float:
     return (wins + PRIOR_GAMES * 0.5) / (games + PRIOR_GAMES)
 
 
-def tier_list(conn: psycopg.Connection, patch: str | None = None, rank: str = "all") -> dict:
+def tier_list(conn: psycopg.Connection, patch: str | None = None, rank: str = "all",
+              changes: dict[int, list[dict]] | None = None) -> dict:
     """Every champion in every role it's really played in, with win, pick and ban rates and a
-    tier, plus its hardest lane matchups."""
-    return _cached(("tiers", patch, rank), lambda: _tier_list(conn, patch, rank))
+    tier, plus its hardest lane matchups. With ``changes`` (champion id -> patch-note changes,
+    see stats.patches) each changed champion's score is nudged for buffs and nerfs the data
+    predates, and ``tier_raw`` keeps the tier the data alone gives."""
+    return _cached(("tiers", patch, rank, bool(changes)),
+                   lambda: _tier_list(conn, patch, rank, changes or {}))
 
 
-def _tier_list(conn: psycopg.Connection, patch: str | None, rank: str) -> dict:
+def _assign_tiers(group: list[dict], key: str, field: str) -> None:
+    group.sort(key=lambda r: -r[key])
+    for i, r in enumerate(group):
+        share = (i + 0.5) / len(group)
+        r[field] = next(t for cut, t in TIER_CUTS if share < cut)
+
+
+def _tier_list(conn: psycopg.Connection, patch: str | None, rank: str,
+               changes: dict[int, list[dict]]) -> dict:
     scope, params = _scope(patch, rank)
     total = conn.execute(f"SELECT count(*) FROM ({scope}) s", params).fetchone()[0]
     if not total:
@@ -124,15 +138,21 @@ def _tier_list(conn: psycopg.Connection, patch: str | None, rank: str) -> dict:
                      "kda": (k + a) / max(d, 0.01),
                      "counters": [{"champion_id": opp, "games": cn,
                                    "win_rate": 100 * cw / cn} for _, opp, cn, cw in counters]})
+    counts = ([(patch, total)] if patch else
+              [(v, n) for v, n in patches(conn)])
     for pos in {r["position"] for r in rows}:
         group = [r for r in rows if r["position"] == pos]
         mid_pick = median(r["pick_rate"] for r in group)
         for r in group:
-            r["score"] = (r["win_rate_shrunk"] - 50) + 1.5 * math.log(r["pick_rate"] / mid_pick)
-        group.sort(key=lambda r: -r["score"])
+            r["score_raw"] = (r["win_rate_shrunk"] - 50) + 1.5 * math.log(r["pick_rate"] / mid_pick)
+            mine = changes.get(r["champion_id"], [])
+            r["patch_changes"] = mine
+            r["patch_mark"] = patch_notes.mark(mine)
+            r["patch_shift"] = patch_notes.shift(mine, counts)
+            r["score"] = r["score_raw"] + r["patch_shift"]
+        _assign_tiers(group, "score_raw", "tier_raw")
+        _assign_tiers(group, "score", "tier")
         for i, r in enumerate(group):
-            share = (i + 0.5) / len(group)
-            r["tier"] = next(t for cut, t in TIER_CUTS if share < cut)
             r["role_rank"] = i + 1
     rows.sort(key=lambda r: -r["score"])
     return {"games": total, "rows": rows}
@@ -254,3 +274,47 @@ def leaderboard_names(conn: psycopg.Connection, puuids: list[str]) -> dict[str, 
             WHERE puuid = ANY(%s) AND riot_name IS NOT NULL ORDER BY puuid, game_start DESC""",
         (puuids,)).fetchall()
     return {p: (n, t) for p, n, t in rows}
+
+
+PARTNER_ROLE = {"BOTTOM": "UTILITY", "UTILITY": "BOTTOM", "JUNGLE": "MIDDLE", "MIDDLE": "JUNGLE",
+                "TOP": "JUNGLE"}
+
+
+def partners(conn: psycopg.Connection, champion_id: int, position: str | None,
+             min_games: int = MIN_MATCHUP, limit: int = 6) -> dict:
+    """The teammates in the partner role (support for an ADC, jungler for a mid laner...) this
+    champion wins most with, ranked by win rate pulled towards 50% for small samples."""
+    partner = PARTNER_ROLE.get(position or "")
+    if partner is None:
+        return {"role": None, "rows": []}
+    rows = conn.execute(
+        """SELECT p.champion_id, count(*), sum(x.win::int)
+             FROM participant_builds x
+             JOIN participant_builds p ON p.match_id = x.match_id AND p.team_id = x.team_id
+                                      AND p.position = %s
+            WHERE x.champion_id = %s AND x.position = %s AND x.queue_id IN (420, 440) AND NOT x.remake
+            GROUP BY 1 HAVING count(*) >= %s""",
+        (partner, champion_id, position, min_games)).fetchall()
+    ranked = sorted(rows, key=lambda r: -shrunk(r[2], r[1]))[:limit]
+    return {"role": partner, "rows": [{"champion_id": c, "games": n, "wins": w, "win_rate": 100 * w / n}
+                                      for c, n, w in ranked]}
+
+
+def matchup_table(conn: psycopg.Connection, champion_id: int, position: str | None,
+                  min_games: int = MIN_MATCHUP) -> list[dict]:
+    """Every lane opponent with enough ranked games: record, and the average gold and CS lead
+    at 15 minutes (from the stored per-minute features)."""
+    if not position:
+        return []
+    rows = conn.execute(
+        """SELECT x.opponent_champion_id, count(*), sum(x.win::int),
+                  avg(f.gold_diff)::float8, avg(f.cs_diff)::float8, count(f.gold_diff)
+             FROM participant_builds x
+             LEFT JOIN participant_minute_features f
+                    ON f.match_id = x.match_id AND f.participant_id = x.participant_id AND f.minute = 15
+            WHERE x.champion_id = %s AND x.position = %s AND x.queue_id IN (420, 440) AND NOT x.remake
+              AND x.opponent_champion_id IS NOT NULL
+            GROUP BY 1 HAVING count(*) >= %s""", (champion_id, position, min_games)).fetchall()
+    return sorted(({"champion_id": opp, "games": n, "wins": w, "win_rate": 100 * w / n,
+                    "shrunk": 100 * shrunk(w, n), "gold15": g, "cs15": cs, "lane_games": lg}
+                   for opp, n, w, g, cs, lg in rows), key=lambda r: -r["games"])

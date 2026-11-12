@@ -34,6 +34,7 @@
           {{ item_slot(m['items'][0]) }}{{ item_slot(m['items'][1]) }}{{ item_slot(m['items'][2]) }}{{ item_slot(m['items'][3]) }}{{ item_slot(m['items'][4]) }}{{ item_slot(m['items'][5]) }}<span class="sep"></span>{{ item_slot(m.trinket) }}
           <span class="tags">{% if m.multikill %}<span class="badge multi">{{ m.multikill }}</span>{% endif %}{% if not m.badge and m.result_key != 'remake' %}<span class="badge rank">{{ m.rank_in_game|ordinal }} of 10</span>{% endif %}</span>
         </div>
+        {% if m.notes %}<div class="m-notes">{% for n in m.notes %}<span class="note {{ n.kind }}" data-tip="{{ 'Did well' if n.kind == 'good' else 'Could improve' }}: {{ n.label }}&#10;{{ n.why }}">{{ n.label }}</span>{% endfor %}</div>{% endif %}
       </div>
       <div class="m-comp">
         {% for team in (m.blue, m.red) %}

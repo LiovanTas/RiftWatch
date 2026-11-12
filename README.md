@@ -247,27 +247,76 @@ with RiftWatch's coaching built in.
   loads on the spot: the page downloads their games from Riot and shows its progress.
 - **Player file:** a stat band with ranked solo and flex, the last 20 games' win rate and
   streak, average KDA and most-played champion and role; a form strip of the last 20 results;
-  season champion stats and duo partners alongside.
+  a score-per-game chart; **Patterns**, the strengths and problems that keep recurring (say,
+  "bottom-20% farm for the rank in 13 of 19 games"); season champion stats and duo partners.
 - **Match timeline,** filtered by queue and grouped by day with each day's record. Each game
   has a 0-10 performance score ring (KDA, kill share, damage, gold, farm and vision against
   the other nine players, with MVP/ACE), champion, spells, runes, KDA, CS, damage, vision,
-  control wards, items, multikills and both team comps. Expanding a game shows:
+  control wards, items, multikills, both team comps, and up to two notes on what went well
+  and two on what didn't (see *Match insights* below). Expanding a game shows:
   - both teams' full scoreboards with damage, wards, gold, bans and objectives
+  - **Insights:** every strength and weakness with its evidence, and the gold, CS and XP lead
+    over the lane opponent at 10 and 15 minutes
   - the player's item build by minute, skill order and rune page
   - a team gold graph
+  - **Map vs high elo:** the game replayed minute by minute on the minimap (every champion,
+    kills, objectives), with a slider, play button and a jump to each key moment. For minutes
+    2-15 it shows what the player did beside what Grandmaster and Challenger players chose in
+    similar spots, from the decision models in `ml/` (see *High-elo ML*): your move as a solid
+    arrow, the most common high-elo choice as a dashed one, and each option's share
   - a link to RiftWatch's minute-by-minute analysis and AI coaching.
 - **Tabs:** Champions (sortable season stats), AI Coach (coaching on recent games, weekly
   progress, sessions, champion pool) and Live game (scouting all ten players in a game in
   progress).
+- **Lobby lookup** (`/multi`): paste champ-select chat or a list of Riot IDs and see everyone
+  at once: rank, last 20 games, KDA, main role, form and top champions.
 - **Tier board** from every stored ranked game: champions laid out in S+ to D rows by role,
   or as a sortable table with win, pick and ban rates and counters; filters by role, rank
-  group and patch.
+  group and patch. It reads recent patch notes (see *Patch notes* below): a **Patch watch**
+  strip lists the latest patches' buffs and nerfs and the next patch's preview, changed
+  champions carry a badge, and their tier accounts for the change. **Raw** shows the games alone.
 - **Champion pages:** runes (with the full most-played page), summoner spells, skill max order
   and level-by-level order, core builds, starting items, boots, later items by slot,
-  toughest and best matchups, and abilities.
+  toughest and best matchups (each with a **Why?**, see *Matchup explanations*), recent patch
+  changes, the best partner champions in the paired role (support for an ADC, jungler for a
+  mid or top laner), the players RiftWatch has seen play the champion most, and abilities.
 - **Ladder:** the top 100 of each region live from Riot with a podium for the top three,
   refreshed every 30 minutes. Without an API key it falls back to the apex players RiftWatch
   has stored.
+
+### Match insights
+
+`web/insights.py` writes the notes. Each one compares the player with something concrete:
+the other nine players (most damage, a third of the team's damage, kill participation, most
+vision, first blood, multikills), the lane opponent (30+ CS ahead or behind; 800+ gold ahead
+or behind at 15 minutes, from the stored per-minute features), and players at their solo rank in their role
+over every stored ranked game (farm, vision and damage per minute, deaths per 10 minutes,
+control wards). A rank comparison counts only in the top or bottom fifth, and a tier with
+fewer than 150 games in the role falls back to all ranks. Notes are ranked by how far they
+stand out; the card shows the top two of each kind.
+
+### Matchup explanations
+
+**Why?** on a matchup opens an explanation written by the coach model from evidence it must
+stick to (`stats/matchups.py`): the measured record, the gold, CS and XP lead at 3, 6, 10 and
+15 minutes, early deaths and results by game length, for that pair against the champion's
+usual numbers; and both kits from Data Dragon (base stats, range, each ability's cooldown,
+range and description). It gives a verdict, three or four reasons that tie the kits to how
+trades go, and tips, and the coach's grounding check applies (every number must be in the
+cited evidence; one retry, then failing points are dropped). Each answer is stored per pair,
+role and game version (`matchup_notes`), so it's written once. Requests count against a
+`matchup` visitor limit and the daily AI budget. Without a working Anthropic key the dialog
+shows the evidence on its own.
+
+### Patch notes
+
+`stats/patch_notes.json` lists Summoner's Rift champion changes from Riot's notes for recent
+patches and the next patch's preview, each with its source. Most stored games come from one
+patch, so a champion changed since then is placed on numbers from before the change.
+`stats/patches.py` nudges its tier score: a buff adds 1 win-rate point and a nerf takes one
+away, times the share of games played before that patch, and a previewed change counts 60%.
+Reworks and mixed changes don't move a champion but are flagged. Update the file when a
+patch ships (it's read at startup).
 
 The pages are server-rendered Jinja2 templates (`web/templates/`) with one stylesheet and one
 script (`web/static/`). There's no build step. Dark and light themes follow the visitor's choice
@@ -319,7 +368,7 @@ high-elo models are mounted read-only from `out/ml/models`.
 What makes it safe to put in public:
 
 - **Visitor limits.** Update, live-game scouting and AI coaching are limited per visitor per hour
-  (`RIFTWATCH_RATE_LIMITS`, default `sync=30,scout=60,coach=10`), counted in Postgres and
+  (`RIFTWATCH_RATE_LIMITS`, default `sync=30,scout=60,coach=10,matchup=20`), counted in Postgres and
   answered with `429` and `Retry-After`. Behind a reverse proxy, set `FORWARDED_ALLOW_IPS` to
   the proxy's address so the limits see visitors' real addresses.
 - **Coaching budget.** AI coaching stops for the day once that day's coaching has cost

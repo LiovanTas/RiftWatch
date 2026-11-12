@@ -374,3 +374,41 @@ def test_players_are_found_in_any_region(web):
     assert r.status_code == 303 and r.headers["location"] == "/players/na/Me-NA1?tab=champions"
     missing = client.get("/search?riot_id=Nobody%23NA1")
     assert missing.status_code == 400 and "in any region" in missing.text
+
+
+def test_game_insights_and_map_tabs(web):
+    client, api, _, jobs = web
+    sync(client, jobs)
+    page = client.get("/players/na/Me-NA1").text
+    assert 'class="m-notes"' in page or 'class="note ' not in page   # notes only when something stood out
+    detail = client.get(f"/fragments/players/na/Me-NA1/matches/{api.ids[0]}").text
+    assert 'data-pane="insights"' in detail and "What went well" in detail and "What to work on" in detail
+    assert f'data-map-url="/api/players/na/Me-NA1/matches/{api.ids[0]}/map"' in detail
+    assert "Map replay" in detail                                      # no high-elo model in tests
+    state = client.get(f"/api/players/na/Me-NA1/matches/{api.ids[0]}/map").json()
+    assert state["compared"] is False and state["me"] and len(state["minutes"]) > 10
+    first = state["minutes"][5]
+    assert str(state["me"]) in first["pos"] and 0 <= first["pos"][str(state["me"])]["x"] <= 100
+    assert client.get("/api/players/na/Me-NA1/matches/NA1_999/map").status_code == 404
+
+
+def test_matchup_notes_need_known_champions(web):
+    client, *_ = web
+    r = client.post("/api/champions/nobody/matchups/noone?role=top")
+    assert r.status_code == 404
+
+
+def test_lobby_lookup_page(web):
+    client, api, _, jobs = web
+    sync(client, jobs)
+    page = client.get("/multi", params={"q": "Me #NA1 joined the lobby\nStranger#EUW"}).text
+    assert "Open profile" in page and 'href="/players/na/Me-NA1"' in page
+    assert "Load this player" in page and "Stranger" in page
+    assert "No Riot IDs found" in client.get("/multi", params={"q": "hello"}).text
+
+
+def test_tier_board_can_show_raw_data(web):
+    client, *_ = web
+    assert "Patch watch" in client.get("/champions").text
+    raw = client.get("/champions?notes=raw").text
+    assert "Showing the raw data" in raw

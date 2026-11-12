@@ -108,6 +108,10 @@ for this: a 20-game report is 47 ms from Postgres, and repeat coaching is a cach
 - [x] **Public website in the mould of op.gg/u.gg**: search with autocomplete, profiles, match history with
       expandable scoreboards, builds, skill order, runes and gold graphs, champion tier list and
       champion pages, leaderboard, live game, AI coach tab, dark/light themes, mobile layout
+- [x] Website insights: did-well / could-improve notes per game (vs the game, the lane opponent and
+      the rank), recurring patterns, a minute-by-minute map against high-elo choices, lobby lookup,
+      grounded AI matchup explanations, and a tier board that reads recent patch notes
+- [ ] Fetch patch notes automatically (today `stats/patch_notes.json` is updated by hand)
 - [ ] A sequence model (transformer over the raw readings) once the library has a few hundred games
 - [ ] Fill the library: high-elo videos per role (and your own games, linked to their matches);
       then tie bars to champions and read the player-view HUD clock

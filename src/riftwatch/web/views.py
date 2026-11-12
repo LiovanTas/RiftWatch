@@ -17,6 +17,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from riftwatch.riot.api import QUEUE_NAMES
+from riftwatch.web import insights
 from riftwatch.web.gamedata import POSITIONS, GameData
 
 QUEUE_FILTERS = {"all": None, "solo": 420, "flex": 440, "normal": 400}
@@ -140,10 +141,22 @@ def _player_view(p: dict, gd: GameData, region: str) -> dict:
     }
 
 
+def player_tier(conn: psycopg.Connection, puuid: str) -> str:
+    """The insights tier bucket for a player, from their latest solo/duo rank."""
+    from riftwatch.db import repo
+
+    snapshot = repo.latest_rank(conn, puuid)
+    return insights.bucket(snapshot["tier"] if snapshot else None)
+
+
 def match_rows(conn: psycopg.Connection, gd: GameData, puuid: str, region: str,
-               queue: str = "all", limit: int = 20, offset: int = 0) -> list[dict]:
-    """The player's games, newest first, as match-history rows."""
+               queue: str = "all", limit: int = 20, offset: int = 0,
+               tier: str | None = None) -> list[dict]:
+    """The player's games, newest first, as match-history rows, each with a few notes on
+    what went well and what didn't (see insights)."""
     queue_id = QUEUE_FILTERS.get(queue)
+    tier = tier or player_tier(conn, puuid)
+    table = insights.baselines(conn)
     mine = _rows(conn, f"""
         SELECT * FROM participant_builds WHERE puuid = %s {'AND queue_id = %s' if queue_id else ''}
          ORDER BY game_start DESC LIMIT %s OFFSET %s""",
@@ -154,6 +167,16 @@ def match_rows(conn: psycopg.Connection, gd: GameData, puuid: str, region: str,
     for p in _rows(conn, "SELECT * FROM participant_builds WHERE match_id = ANY(%s) "
                          "ORDER BY participant_id", ([m["match_id"] for m in mine],)):
         everyone[p["match_id"]].append(p)
+    # Lane leads at 10 and 15 minutes from the stored per-minute features (no timeline read).
+    leads: dict[str, dict[int, dict]] = defaultdict(dict)
+    for match_id, minute, gold, gold_diff, cs_diff, xp_diff in conn.execute(
+            """SELECT f.match_id, f.minute, f.gold, f.gold_diff, f.cs_diff, f.xp_diff
+                 FROM participant_minute_features f
+                 JOIN participant_builds b ON b.match_id = f.match_id AND b.participant_id = f.participant_id
+                WHERE b.puuid = %s AND f.match_id = ANY(%s) AND f.minute IN (10, 15)
+                  AND f.gold_diff IS NOT NULL""", (puuid, [m["match_id"] for m in mine])):
+        leads[match_id][minute] = {"gold": gold_diff, "me_gold": gold, "opp_gold": gold - gold_diff,
+                                   "cs": cs_diff or 0, "xp": xp_diff or 0}
     out = []
     for m in mine:
         players = everyone[m["match_id"]]
@@ -185,6 +208,10 @@ def match_rows(conn: psycopg.Connection, gd: GameData, puuid: str, region: str,
             "score": scores[m["participant_id"]], "badge": badge, "rank_in_game": rank_in_game,
             "blue": teams.get(100, []), "red": teams.get(200, []),
             "patch": m["patch"], "day": day_label(m["game_start"]),
+            "all_notes": (found := insights.game_notes(
+                m, players, table, tier, lambda cid: gd.champion(cid).name,
+                leads.get(m["match_id"]))),
+            "notes": insights.card(found),
             "score_pct": round(10 * scores[m["participant_id"]]),
         })
     return out
@@ -235,8 +262,8 @@ def summary(rows: list[dict]) -> dict | None:
                        "kda": kda_ratio(sum(r["kills"] for r in rs), sum(r["deaths"] for r in rs),
                                         sum(r["assists"] for r in rs))})
     roles = Counter(r["position"] for r in games if r["position"])
-    colours = {"TOP": "var(--accent)", "JUNGLE": "var(--sky)", "MIDDLE": "var(--amber)",
-               "BOTTOM": "var(--violet)", "UTILITY": "var(--loss)"}
+    colours = {"TOP": "var(--violet)", "JUNGLE": "var(--green)", "MIDDLE": "var(--accent)",
+               "BOTTOM": "var(--orange)", "UTILITY": "var(--sky)"}
     positions = [{"key": p, "name": POSITIONS[p], "share": round(100 * roles[p] / len(games)),
                   "colour": colours[p]} for p in POSITIONS]
     main = max(positions, key=lambda p: p["share"])
@@ -255,7 +282,11 @@ def summary(rows: list[dict]) -> dict | None:
             "win_rate": round(100 * wins / len(games)), "kills": round(k, 1),
             "deaths": round(d, 1), "assists": round(a, 1), "kda": kda_ratio(k, d, a),
             "kp": round(fmean(r["kp"] for r in games)), "champions": champs,
-            "positions": positions}
+            "positions": positions,
+            "patterns": insights.patterns([r.get("all_notes", []) for r in games]),
+            "trend": [{"score": r["score"], "result": r["result_key"], "champion": r["champion"],
+                       "kda": f"{r['kills']}/{r['deaths']}/{r['assists']}", "when": r["when"]}
+                      for r in reversed(rows)]}
 
 
 # -- champion statistics, played with -----------------------------------------------------
@@ -453,7 +484,23 @@ def match_detail(conn: psycopg.Connection, gd: GameData, match_id: str, puuid: s
     timeline = conn.execute("SELECT raw FROM match_timelines WHERE match_id = %s",
                             (match_id,)).fetchone()
     gold = _gold_series(timeline[0] if timeline else None)
+    notes = None
+    if me is not None:
+        opp = next((p for p in players if me["position"] and p["team_id"] != me["team_id"]
+                    and p["position"] == me["position"]), None)
+        tier = player_tier(conn, me["puuid"])
+        lane = insights.lane_leads(timeline[0] if timeline else None, me["participant_id"],
+                                   opp["participant_id"] if opp else None)
+        found = insights.game_notes(me, players, insights.baselines(conn), tier,
+                                    lambda cid: gd.champion(cid).name, lane)
+        notes = {"good": [n.view() for n in found if n.kind == "good"],
+                 "bad": [n.view() for n in found if n.kind == "bad"],
+                 "lane": [{"minute": k, **v} for k, v in sorted(lane.items())],
+                 "opponent": gd.champion(opp["champion_id"]).name if opp else None,
+                 "opponent_icon": gd.champion_icon(opp["champion_id"]) if opp else None}
     return {
+        "insights": notes, "has_timeline": timeline is not None,
+        "role": me["position"] if me else None,
         "match_id": match_id, "duration": clock(players[0]["duration_s"]),
         "queue": QUEUE_NAMES.get(players[0]["queue_id"], "Custom"), "patch": players[0]["patch"],
         "teams": teams, "gold_chart": gold_chart(gold),
@@ -463,3 +510,134 @@ def match_detail(conn: psycopg.Connection, gd: GameData, match_id: str, puuid: s
                 "champion": gd.champion(me["champion_id"]).name}
                if me else None),
     }
+
+
+# -- multi-search ---------------------------------------------------------------------------
+
+LOBBY_NOISE = (" joined the lobby", " left the lobby", " joined the room", " left the room",
+               " has joined", " has left")
+
+
+def parse_lobby(text: str, limit: int = 10) -> list[tuple[str, str]]:
+    """Riot IDs from pasted champ-select chat or a list ("Name #TAG joined the lobby",
+    "a#NA1, b#EUW"), in order, without repeats."""
+    import re
+
+    out: list[tuple[str, str]] = []
+    for line in re.split(r"[\n,;]+", text or ""):
+        line = line.strip()
+        for noise in LOBBY_NOISE:
+            if line.lower().endswith(noise):
+                line = line[: -len(noise)]
+        m = re.match(r"^(.{2,16}?)\s*#\s*([^\s#]{2,5})$", line.strip())
+        if m:
+            pair = (m.group(1).strip(), m.group(2).strip())
+            if pair[0] and pair[0].lower() + "#" + pair[1].lower() not in {
+                    f"{a.lower()}#{b.lower()}" for a, b in out}:
+                out.append(pair)
+    return out[:limit]
+
+
+def multi_card(conn: psycopg.Connection, gd: GameData, name: str, tag: str,
+               platform_region: dict[str, str]) -> dict:
+    """One player's lobby card: rank, last 20 games, main role and champions."""
+    from riftwatch.db import repo
+
+    card: dict[str, Any] = {"name": name, "tag": tag, "found": False,
+                            "search": f"/search?region=auto&riot_id={quote(name + '#' + tag)}"}
+    account = repo.find_account(conn, name, tag)
+    if account is not None:
+        puuid, platform = account["puuid"], account["platform"]
+        name, tag = account["game_name"], account["tag_line"]
+    else:
+        seen = conn.execute(
+            """SELECT puuid, lower(split_part(match_id, '_', 1)), riot_name, riot_tag
+                 FROM participant_builds WHERE lower(riot_name) = lower(%s) AND lower(riot_tag) = lower(%s)
+                ORDER BY game_start DESC LIMIT 1""", (name, tag)).fetchone()
+        if seen is None:
+            return card
+        puuid, platform, name, tag = seen
+    region = platform_region.get(platform, platform)
+    games = _rows(conn, """SELECT champion_id, position, win, kills, deaths, assists, cs, duration_s,
+                                  profile_icon, summoner_level
+                             FROM participant_builds WHERE puuid = %s AND NOT remake
+                            ORDER BY game_start DESC LIMIT 20""", (puuid,))
+    card.update(found=True, name=name, tag=tag, region=region,
+                url=f"/players/{region}/{path_id(name, tag)}",
+                rank=rank_card(repo.latest_rank(conn, puuid), gd))
+    if not games:
+        card["icon"] = gd.profile_icon(None)
+        return card
+    wins = sum(g["win"] for g in games)
+    k, d, a = (sum(g[x] for g in games) for x in ("kills", "deaths", "assists"))
+    roles = Counter(g["position"] for g in games if g["position"])
+    by_champ: dict[int, list[dict]] = defaultdict(list)
+    for g in games:
+        by_champ[g["champion_id"]].append(g)
+    champs = []
+    for cid, gs in sorted(by_champ.items(), key=lambda kv: -len(kv[1]))[:3]:
+        w = sum(x["win"] for x in gs)
+        champs.append({"name": gd.champion(cid).name, "icon": gd.champion_icon(cid), "games": len(gs),
+                       "win_rate": round(100 * w / len(gs))})
+    streak_kind, streak = games[0]["win"], 0
+    for g in games:
+        if g["win"] != streak_kind:
+            break
+        streak += 1
+    main = roles.most_common(1)[0] if roles else None
+    card.update(icon=gd.profile_icon(games[0]["profile_icon"]), level=games[0]["summoner_level"],
+                games=len(games), wins=wins, losses=len(games) - wins,
+                win_rate=round(100 * wins / len(games)), kda=kda_ratio(k, d, a),
+                avg=f"{k / len(games):.1f} / {d / len(games):.1f} / {a / len(games):.1f}",
+                role=POSITIONS.get(main[0], "") if main else "", role_key=main[0] if main else "",
+                role_share=round(100 * main[1] / len(games)) if main else 0,
+                champions=champs, streak=f"{streak}{'W' if streak_kind else 'L'}",
+                form=["win" if g["win"] else "loss" for g in reversed(games[:10])])
+    return card
+
+
+def champion_players(conn: psycopg.Connection, champion_id: int, position: str | None,
+                     platform_region: dict[str, str], min_games: int = 5, limit: int = 8) -> list[dict]:
+    """The players RiftWatch has seen play this champion most in ranked, with their record."""
+    rows = conn.execute(
+        """SELECT max(riot_name), max(riot_tag), max(lower(split_part(match_id, '_', 1))), count(*),
+                  sum(win::int), sum(kills), sum(deaths), sum(assists),
+                  (sum(cs) / (sum(duration_s) / 60.0))::float8
+             FROM participant_builds
+            WHERE champion_id = %s AND (%s::text IS NULL OR position = %s) AND queue_id IN (420, 440)
+              AND NOT remake AND riot_name IS NOT NULL
+            GROUP BY puuid HAVING count(*) >= %s
+            ORDER BY count(*) DESC, sum(win::int) DESC LIMIT %s""",
+        (champion_id, position, position, min_games, limit)).fetchall()
+    out = []
+    for name, tag, platform, n, w, k, d, a, cs in rows:
+        region = platform_region.get(platform, platform)
+        out.append({"name": name, "tag": tag, "region": region, "games": n, "wins": w,
+                    "win_rate": round(100 * w / n), "kda": kda_ratio(k, d, a), "cs_min": round(cs, 1),
+                    "url": f"/players/{region}/{path_id(name, tag)}" if name and tag else None})
+    return out
+
+
+def personal_matchups(conn: psycopg.Connection, gd: GameData, puuid: str, min_games: int = 2,
+                      limit: int = 6) -> dict[str, list[dict]]:
+    """The player's own record against lane opponents this season: the champion they played,
+    the opponent, and how it went, hardest and easiest first."""
+    season = datetime(datetime.now(UTC).year, 1, 1, tzinfo=UTC)
+    rows = conn.execute(
+        """SELECT champion_id, position, opponent_champion_id, count(*), sum(win::int)
+             FROM participant_builds
+            WHERE puuid = %s AND queue_id IN (420, 440, 400) AND NOT remake AND game_start >= %s
+              AND opponent_champion_id IS NOT NULL AND position <> ''
+            GROUP BY 1, 2, 3 HAVING count(*) >= %s""", (puuid, season, min_games)).fetchall()
+
+    def view(c, pos, opp, n, w):
+        me, them = gd.champion(c), gd.champion(opp)
+        return {"champion": me.name, "icon": gd.champion_icon(c), "slug": me.slug,
+                "opponent": them.name, "opponent_icon": gd.champion_icon(opp), "opponent_slug": them.slug,
+                "role": POSITIONS.get(pos, ""), "position": pos, "games": n, "wins": w, "losses": n - w,
+                "win_rate": round(100 * w / n)}
+
+    hard = sorted(rows, key=lambda r: (r[4] - r[3] / 2) / r[3] ** 0.5)        # most losses beyond even
+    easy = sorted(rows, key=lambda r: -(r[4] - r[3] / 2) / r[3] ** 0.5)
+    return {"hard": [view(*r) for r in hard if r[4] < r[3] / 2][:limit],
+            "easy": [view(*r) for r in easy if r[4] > r[3] / 2][:limit]}

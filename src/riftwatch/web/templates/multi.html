@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, wr, pos_icon %}
+{% block title %}Lobby lookup | RiftWatch{% endblock %}
+{% block description %}Look up everyone in your League of Legends lobby at once: ranks, recent form, main roles and champions.{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="page-title">
+    <div class="eyebrow">Lobby</div>
+    <h1>Everyone in your lobby</h1>
+    <p>Paste the champ-select chat ("Name #TAG joined the lobby") or a list of Riot IDs, one per line or separated by commas. Up to ten players.</p>
+  </div>
+  <form class="lobby-form panel" action="/multi" method="get">
+    <label class="sr-only" for="lobby-q">Riot IDs</label>
+    <textarea id="lobby-q" name="q" rows="5" spellcheck="false" placeholder="Faker #KR1 joined the lobby&#10;Caps #EUW joined the lobby&#10;...">{{ q }}</textarea>
+    <div class="row"><span class="muted small">Players RiftWatch hasn't seen yet get a link that loads them.</span><button class="btn primary" type="submit">{{ icon('search') }} Look up</button></div>
+  </form>
+  {% if unparsed %}<p class="err" style="color:var(--loss)">No Riot IDs found. Each needs a name, a # and a tag, like Faker#KR1.</p>{% endif %}
+  {% if cards %}
+  <div class="lobby">
+    {% for c in cards %}
+    <div class="lcard panel{{ '' if c.found else ' missing' }}">
+      <div class="top">
+        {% if c.found %}<img class="av" src="{{ c.icon }}" alt="">{% endif %}
+        <div class="nm">
+          <b>{{ c.name }}</b><span class="tag">#{{ c.tag }}</span>
+          {% if c.found %}<span class="reg">{{ c.region|upper }}</span>{% endif %}
+        </div>
+      </div>
+      {% if not c.found %}
+        <p class="muted small">Not on RiftWatch yet.</p>
+        <a class="btn" href="{{ c.search }}">Load this player &rarr;</a>
+      {% else %}
+        <div class="rk">
+          {% if c.rank %}<img src="{{ c.rank.crest }}" alt=""><div><b class="t-{{ c.rank.key }}">{{ c.rank.tier }} {{ c.rank.division }}</b><span>{{ c.rank.lp }} LP &middot; {{ c.rank.win_rate }}% of {{ c.rank.games }}</span></div>
+          {% else %}<div><b class="muted">Unranked</b><span>no solo rank stored</span></div>{% endif %}
+        </div>
+        {% if c.games %}
+        <div class="nums">
+          <div><span>Last {{ c.games }}</span><b>{{ wr(c.win_rate) }}</b><small>{{ c.wins }}W {{ c.losses }}L</small></div>
+          <div><span>KDA</span><b>{{ c.kda }}</b><small>{{ c.avg }}</small></div>
+          <div><span>Main</span><b class="role">{% if c.role_key %}{{ pos_icon(gd, c.role_key) }}{% endif %}{{ c.role or '-' }}</b><small>{{ c.role_share }}% of games</small></div>
+        </div>
+        <div class="form"><div class="cells">{% for f in c.form %}<span class="cell {{ f }}">{{ 'W' if f == 'win' else 'L' }}</span>{% endfor %}</div><span class="streak">streak {{ c.streak }}</span></div>
+        <div class="lchamps">{% for ch in c.champions %}<div data-tip="{{ ch.name }}&#10;{{ ch.games }} of the last {{ c.games }} games, {{ ch.win_rate }}% won"><img src="{{ ch.icon }}" alt="{{ ch.name }}" loading="lazy"><span>{{ ch.games }}</span></div>{% endfor %}</div>
+        {% else %}<p class="muted small">No games stored yet.</p>{% endif %}
+        <a class="btn" href="{{ c.url }}">Open profile &rarr;</a>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -214,6 +214,8 @@
       const root = tab.closest('.m-detail, .detail-root');
       $$('.d-tabs button', root).forEach((b) => b.classList.toggle('on', b === tab));
       $$('.d-pane', root).forEach((p) => p.classList.toggle('on', p.dataset.pane === tab.dataset.pane));
+      const pane = $$('.d-pane', root).find((p) => p.dataset.pane === tab.dataset.pane);
+      if (pane && pane.dataset.mapUrl && !pane.dataset.loaded) loadMap(pane);
       return;
     }
     const more = e.target.closest('[data-more]');
@@ -285,6 +287,170 @@
       location.href = url.toString();
     });
   }
+
+  // -- high-elo map: the game minute by minute on the minimap -------------------------------
+  async function loadMap(pane) {
+    pane.dataset.loaded = '1';
+    pane.innerHTML = '<div class="empty"><span class="spinner"></span><p>Replaying the game against high-elo play...</p></div>';
+    let data;
+    try {
+      const r = await fetch(pane.dataset.mapUrl);
+      if (!r.ok) throw new Error();
+      data = await r.json();
+    } catch { pane.innerHTML = '<div class="empty">Could not load the map for this game.</div>'; delete pane.dataset.loaded; return; }
+    const last = data.minutes.length - 1;
+    const start = data.first ?? Math.min(3, last);
+    const ticks = data.minutes.map((m) => m.advice && ['moment', 'good'].includes(m.advice.kind)
+      ? `<i class="${m.advice.kind}" style="left:${(100 * m.minute) / Math.max(1, last)}%" title="Minute ${m.minute}"></i>` : '').join('');
+    pane.innerHTML = `
+      <div class="hmap">
+        <div class="hmap-stage">
+          <img class="bg" src="${esc(data.map)}" alt="Summoner's Rift">
+          <svg class="arrows" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <marker id="ah-you" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" class="you"/></marker>
+              <marker id="ah-pro" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" class="pro"/></marker>
+            </defs>
+            <line class="you" marker-end="url(#ah-you)"/><line class="pro" marker-end="url(#ah-pro)"/>
+          </svg>
+          <div class="events"></div>
+          <div class="dots">${data.players.map((p) => `<div class="dot t${p.team}${p.me ? ' me' : ''}" data-pid="${p.pid}" data-tip="${esc(p.name)}&#10;${esc(p.champion)}${p.role ? ' · ' + esc(p.role) : ''}"><img src="${esc(p.icon)}" alt=""></div>`).join('')}</div>
+        </div>
+        <div class="hmap-side">
+          <div class="clock"><b>Minute <span class="min"></span></b><span class="kind"></span></div>
+          <div class="said"></div>
+          <div class="opts"></div>
+          <div class="hmap-sum">${data.compared
+            ? `<span><b>${data.agreement}%</b> of minutes ${data.first}-${data.last} matched the most common high-elo choice</span><span><b>${data.moments}</b> key moment${data.moments === 1 ? '' : 's'} where you went against a strong consensus</span><span class="muted">Compared with ${data.games ? Number(data.games).toLocaleString() + ' ' : ''}Grandmaster and Challenger games in the ${esc(data.role.toLowerCase())} role. Shares are how often those players chose each option in similar spots, not a guarantee it would have worked.</span>`
+            : '<span class="muted">No high-elo model covers this role yet, so this is a replay of positions, kills and objectives only.</span>'}</div>
+          <div class="legend"><span><i class="l-you"></i>your move to the next minute</span><span><i class="l-pro"></i>most common high-elo choice</span></div>
+        </div>
+        <div class="hmap-controls">
+          <button class="btn play" type="button" aria-label="Play">&#9654;</button>
+          <button class="btn step" data-d="-1" type="button" aria-label="Previous minute">&lsaquo;</button>
+          <div class="track"><div class="ticks">${ticks}</div><input type="range" min="0" max="${last}" value="${start}" aria-label="Minute"></div>
+          <button class="btn step" data-d="1" type="button" aria-label="Next minute">&rsaquo;</button>
+          <span class="keys"><button class="btn kprev" type="button" aria-label="Previous key moment">&lsaquo; Key moment</button><span class="kcount"></span><button class="btn knext" type="button" aria-label="Next key moment">Key moment &rsaquo;</button></span>
+        </div>
+      </div>`;
+    const range = $('input[type=range]', pane);
+    const you = $('line.you', pane), pro = $('line.pro', pane);
+    const kindText = { moment: 'Key moment', good: 'Matched high elo', agree: 'Most common choice', differ: 'Less common choice', neutral: '' };
+    // Minutes where the player went against a strong high-elo consensus, in order. Previous
+    // and Next stop at the ends rather than wrapping, so two moments don't flip back and forth.
+    const moments = data.minutes.map((m, i) => (m.advice && m.advice.kind === 'moment' ? i : -1)).filter((i) => i >= 0);
+    const kprev = $('.kprev', pane), knext = $('.knext', pane), kcount = $('.kcount', pane);
+    function showKeys(i) {
+      const at = moments.indexOf(i);
+      kcount.textContent = at >= 0 ? `${at + 1} of ${moments.length}` : `${moments.length} key moment${moments.length === 1 ? '' : 's'}`;
+      kprev.disabled = !moments.some((k) => k < i);
+      knext.disabled = !moments.some((k) => k > i);
+    }
+    function show(i) {
+      const m = data.minutes[i];
+      range.value = i;
+      showKeys(i);
+      $('.min', pane).textContent = m.minute;
+      for (const dot of $$('.dot', pane)) {
+        const p = m.pos[dot.dataset.pid];
+        dot.hidden = !p;
+        if (p) { dot.style.left = p.x + '%'; dot.style.top = p.y + '%'; }
+      }
+      const me = m.pos[String(data.me)];
+      const line = (el, to) => {
+        if (!me || !to) { el.style.display = 'none'; return; }
+        el.style.display = '';
+        el.setAttribute('x1', me.x); el.setAttribute('y1', me.y); el.setAttribute('x2', to.x); el.setAttribute('y2', to.y);
+      };
+      line(you, m.next);
+      line(pro, m.advice && m.advice.target);
+      $('.events', pane).innerHTML = m.events.map((e) => `<i class="ev ${e.kind} t${e.team}${e.mine ? ' mine' : ''}" style="left:${e.x}%;top:${e.y}%" data-tip="${e.kind === 'kill' ? (e.mine ? 'Your fight' : 'Kill') : esc(e.name)}&#10;minute ${m.minute}"></i>`).join('');
+      const a = m.advice;
+      const kind = $('.kind', pane);
+      kind.className = 'kind ' + (a ? a.kind : '');
+      kind.textContent = a ? kindText[a.kind] : '';
+      if (!a) {
+        $('.said', pane).innerHTML = data.compared && (m.minute < data.first || m.minute > data.last)
+          ? `<p class="muted">High-elo comparisons cover minutes ${data.first} to ${data.last}, the laning phase. Later minutes show positions, kills and objectives.</p>` : '';
+        $('.opts', pane).innerHTML = '';
+        return;
+      }
+      $('.said', pane).innerHTML = `<p>You <b>${esc(a.did)}</b>${a.did_share != null ? ` &middot; <span class="share">${a.did_share}%</span> of high-elo players did this here` : ''}.</p>`
+        + (a.kind === 'moment' || a.kind === 'differ' ? `<p>Most chose <b class="pro-text">${esc(a.best.toLowerCase())}</b> (${a.best_share}%).</p>` : '');
+      $('.opts', pane).innerHTML = a.options.map((o) => `<div class="opt${o.mine ? ' mine' : ''}"><span>${esc(o.label)}${o.mine ? ' <em>you</em>' : ''}</span><div class="bar"><i style="width:${o.share}%"></i></div><b>${o.share}%</b></div>`).join('');
+    }
+    let timer = null;
+    const stop = () => { clearInterval(timer); timer = null; $('.play', pane).innerHTML = '&#9654;'; };
+    range.addEventListener('input', () => { stop(); show(Number(range.value)); });
+    $('.play', pane).addEventListener('click', () => {
+      if (timer) return stop();
+      $('.play', pane).innerHTML = '&#10074;&#10074;';
+      if (Number(range.value) >= last) show(0);
+      timer = setInterval(() => { const i = Number(range.value) + 1; if (i > last) stop(); else show(i); }, 1100);
+    });
+    for (const b of $$('.step', pane)) b.addEventListener('click', () => { stop(); show(Math.min(last, Math.max(0, Number(range.value) + Number(b.dataset.d)))); });
+    knext.addEventListener('click', () => {
+      stop();
+      const now = Number(range.value);
+      const next = moments.find((k) => k > now);
+      if (next !== undefined) show(next);
+    });
+    kprev.addEventListener('click', () => {
+      stop();
+      const now = Number(range.value);
+      const prev = moments.filter((k) => k < now).pop();
+      if (prev !== undefined) show(prev);
+    });
+    if (!moments.length) $('.keys', pane).hidden = true;
+    show(start);
+  }
+
+  // -- why a matchup is good or bad ------------------------------------------------------
+  let whyBox = null;
+  function whyModal() {
+    if (whyBox) return whyBox;
+    whyBox = document.createElement('div');
+    whyBox.className = 'why-modal';
+    whyBox.setAttribute('role', 'dialog');
+    whyBox.setAttribute('aria-modal', 'true');
+    whyBox.innerHTML = '<div class="box"><button class="x" type="button" aria-label="Close">&times;</button><div class="body"></div></div>';
+    document.body.append(whyBox);
+    const close = () => whyBox.classList.remove('open');
+    whyBox.addEventListener('click', (e) => { if (e.target === whyBox || e.target.closest('.x')) close(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+    return whyBox;
+  }
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-why]');
+    if (!btn) return;
+    const box = whyModal(), body = $('.body', box);
+    const [i1, i2] = (btn.dataset.icons || '').split(' ');
+    const head = `<div class="head"><img src="${esc(i1)}" alt=""><span class="vs-word">vs</span><img src="${esc(i2)}" alt=""><h3>${esc(btn.dataset.title)}</h3></div>`;
+    body.innerHTML = head + '<div class="empty"><span class="spinner"></span><p>Reading both kits and the lane numbers... a new matchup takes about 20 seconds the first time.</p></div>';
+    box.classList.add('open');
+    try {
+      const r = await fetch(btn.dataset.why, { method: 'POST' });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || 'failed');
+      const ev = data.evidence || [];
+      const evText = Object.fromEntries(ev.map((x) => [x.id, x.text]));
+      const out = data.output;
+      let html = head;
+      if (out) {
+        if (out.verdict) html += `<p class="verdict">${esc(out.verdict)}</p>`;
+        html += (out.points || []).map((p) => `<div class="reason"><b>${esc(p.title)}</b><p>${esc(p.explanation)}</p>
+          <div class="cites">${(p.evidence_ids || []).map((id) => `<span data-tip="${esc(id)}&#10;${esc(evText[id] || '')}">${esc(id)}</span>`).join('')}</div></div>`).join('');
+        if ((out.tips || []).length) html += `<h4>How to play it</h4><ul class="tips">${out.tips.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>`;
+      } else {
+        html += `<p class="muted">${esc(data.note || 'No explanation available.')}</p>`;
+      }
+      html += `<details${out ? '' : ' open'}><summary>The evidence (${ev.length} items: lane numbers from ranked games, then both kits)</summary><ol class="ev">${ev.map((x) => `<li><b>${esc(x.id)}</b>${esc(x.text)}</li>`).join('')}</ol></details>`;
+      if (out) html += `<div class="foot">Written by AI from the evidence above; every number it uses is checked against it. ${data.cached ? 'Saved explanation.' : 'Just written.'}</div>`;
+      body.innerHTML = html;
+    } catch (err) {
+      body.innerHTML = head + `<div class="empty">${esc(friendly(String(err.message || err)))}</div>`;
+    }
+  });
 
   // -- copy link ---------------------------------------------------------------------------
   for (const b of $$('[data-copy]')) {

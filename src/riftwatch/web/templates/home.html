@@ -19,7 +19,7 @@
         <path class="you" d="M10,136 C70,126 120,112 170,104 C220,96 250,93 290,88 C330,83 370,74 410,66"/>
         <text class="lbl" x="10" y="12">minute 0</text><text class="lbl" x="410" y="148" text-anchor="end">minute 20</text>
       </svg>
-      <div class="legend"><span><i style="background:var(--amber)"></i>you</span><span><i style="background:var(--accent)"></i>typical at your rank</span><span><i style="background:var(--accent-soft);height:8px"></i>middle half</span></div>
+      <div class="legend"><span><i style="background:var(--win)"></i>you</span><span><i style="background:var(--accent)"></i>typical at your rank</span><span><i style="background:var(--accent-soft);height:8px"></i>middle half</span></div>
       <div class="note"><b>Work on farming.</b> From minute 7 your CS stayed in the bottom quarter of Platinum mid laners: 132 at minute 29 against a typical 204.</div>
     </div>
   </div>
@@ -45,14 +45,30 @@
   </div>
   {% endif %}
 
+  {% if watch %}
+  <div class="section-title"><h2>Patch watch</h2><a href="/champions">tiers include these &rarr;</a></div>
+  <div class="watch panel">
+    <div class="watch-rows" style="border-top:0">
+      {% for w in watch %}
+      <div class="watch-row">
+        <div class="wlab"><b>{{ w.patch }}</b><span class="{{ 'preview' if w.status == 'preview' else '' }}">{{ 'preview' if w.status == 'preview' else 'live' }} &middot; {{ w.date[5:] }}</span><a href="{{ w.source }}" rel="noopener" target="_blank">notes &#8599;</a></div>
+        <div class="wchips">
+          {% for c in w.changes %}<a class="pchip {{ c.kind }}" href="/champions/{{ c.slug }}" data-tip="{{ c.champion }} &middot; {{ {'buff': 'buffed', 'nerf': 'nerfed', 'adjust': 'changed'}[c.kind] }} in {{ w.patch }}{{ ' (preview)' if w.status == 'preview' }}&#10;{{ c.text }}"><img src="{{ c.icon }}" alt="{{ c.champion }}" loading="lazy"><i>{{ {'buff': '▲', 'nerf': '▼', 'adjust': '◆'}[c.kind] }}</i></a>{% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
   <div class="section-title"><h2>How a review works</h2><a href="/about">the method &rarr;</a></div>
   <div class="steps">
-    <div class="step-item"><span class="n">01</span><h3>Every game, laid out</h3><p>Items, runes, KDA, farm, vision and all ten players for each game, with build order, skill order and the gold lead over time.</p></div>
+    <div class="step-item"><span class="n">01</span><h3>Every game, laid out</h3><p>Items, runes, KDA, farm, vision and all ten players for each game, with what went well and what didn't, build and skill order, and the gold lead over time.</p></div>
     <div class="step-item"><span class="n">02</span><h3>Scored against your rank</h3><p>Each minute is compared with players at your rank, in your role, on your champion and matchup, so the numbers mean something.</p></div>
     <div class="step-item"><span class="n">03</span><h3>Coaching that cites its sources</h3><p>An AI coach explains the biggest gaps, and every number it quotes has to appear in the measured evidence.</p></div>
     <div class="step-item"><span class="n">04</span><h3>Habits over time</h3><p>Weekly progress against a fixed yardstick, your champion pool, and whether you slip late in a session or after losses.</p></div>
-    <div class="step-item"><span class="n">05</span><h3>Learned from high-elo play</h3><p>Models trained on Master+ games and replays show what top players do in spots like yours.</p></div>
-    <div class="step-item"><span class="n">06</span><h3>Live and meta</h3><p>Scout everyone in a game in progress, and check the tier board and builds from {{ '{:,}'.format(stats.ranked) }} ranked games.</p></div>
+    <div class="step-item"><span class="n">05</span><h3>Learned from high-elo play</h3><p>Models trained on Grandmaster and Challenger games show what top players do in spots like yours. Replay any game on the minimap beside their choices.</p></div>
+    <div class="step-item"><span class="n">06</span><h3>Live, lobby and meta</h3><p>Scout a game in progress, look up your whole lobby at once, and check builds and a tier board from {{ '{:,}'.format(stats.ranked) }} ranked games that accounts for the latest patch notes.</p></div>
   </div>
 </div>
 {% endblock %}

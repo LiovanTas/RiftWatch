@@ -192,6 +192,14 @@ def create_app(
                 extract.backfill(conn)
         except Exception:
             pass
+        try:
+            # Rank-and-role percentiles behind the match notes (web.insights).
+            from riftwatch.web import insights
+
+            with pool.connection() as conn:
+                insights.baselines(conn)
+        except Exception:
+            pass
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -486,7 +494,12 @@ def create_app(
         return HTMLResponse(app.state.site_chrome(game_html(result, coach_url=coach_url, links=links),
                                                   region.lower()))
 
-    site.register(app, services, coach=coach, advisor=advisor, brain=brain, gd=gamedata)
+    def guard(request: Request, action: str) -> None:
+        limit(request, action)
+        require_coach_budget()
+
+    site.register(app, services, coach=coach, advisor=advisor, brain=brain, gd=gamedata,
+                  guard=guard)
 
     return app
 

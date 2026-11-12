@@ -29,6 +29,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "riftwatch.db" = ["migrations/*.sql"]
+"riftwatch.stats" = ["patch_notes.json"]
 "riftwatch.vision" = ["data/*.npz"]
 "riftwatch.web" = ["templates/*.html", "static/*"]
 

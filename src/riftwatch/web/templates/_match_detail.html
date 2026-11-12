@@ -2,8 +2,10 @@
 <div class="detail-root">
   <div class="d-tabs">
     <button class="on" type="button" data-pane="overview">Overview</button>
+    {% if d.insights %}<button type="button" data-pane="insights">Insights</button>{% endif %}
     {% if d.me %}<button type="button" data-pane="build">Build</button>{% endif %}
     {% if d.gold_chart %}<button type="button" data-pane="gold">Gold graph</button>{% endif %}
+    {% if map_url %}<button type="button" data-pane="map" class="map-tab">{{ 'Map vs high elo' if map_compared else 'Map replay' }}</button>{% endif %}
     {% if analysis_url %}<a class="btn" style="margin:0 0 6px auto" href="{{ analysis_url }}">RiftWatch analysis &rarr;</a>{% endif %}
   </div>
   <div class="d-pane on" data-pane="overview">
@@ -45,6 +47,32 @@
     </div>
     {% endfor %}
   </div>
+  {% if d.insights %}
+  <div class="d-pane" data-pane="insights">
+    <div class="ins-grid">
+      <div class="ins good">
+        <h4>What went well</h4>
+        {% for n in d.insights.good %}<div class="ins-item"><b>{{ n.label }}</b><p>{{ n.why }}</p></div>
+        {% else %}<p class="muted small">Nothing stood out from players at this rank in this role.</p>{% endfor %}
+      </div>
+      <div class="ins bad">
+        <h4>What to work on</h4>
+        {% for n in d.insights.bad %}<div class="ins-item"><b>{{ n.label }}</b><p>{{ n.why }}</p></div>
+        {% else %}<p class="muted small">No clear weak spots in this game.</p>{% endfor %}
+      </div>
+    </div>
+    {% if d.insights.lane %}
+    <h4 style="margin-top:16px">Lane against {% if d.insights.opponent_icon %}<img class="inline-champ" src="{{ d.insights.opponent_icon }}" alt="" loading="lazy">{% endif %}{{ d.insights.opponent }}</h4>
+    <table class="board lane-table">
+      <thead><tr><th>Minute</th><th>Gold</th><th>CS</th><th>XP</th></tr></thead>
+      <tbody>{% for l in d.insights.lane %}<tr><td>{{ l.minute }}</td>
+        <td class="{{ 'up' if l.gold > 0 else 'down' if l.gold < 0 }}">{{ '%+d'|format(l.gold) }}</td>
+        <td class="{{ 'up' if l.cs > 0 else 'down' if l.cs < 0 }}">{{ '%+d'|format(l.cs) }}</td>
+        <td class="{{ 'up' if l.xp > 0 else 'down' if l.xp < 0 }}">{{ '%+d'|format(l.xp) }}</td></tr>{% endfor %}</tbody>
+    </table>
+    {% endif %}
+  </div>
+  {% endif %}
   {% if d.me %}
   <div class="d-pane" data-pane="build">
     <div class="detail-grid">
@@ -88,6 +116,9 @@
       {% endif %}
     </div>
   </div>
+  {% endif %}
+  {% if map_url %}
+  <div class="d-pane" data-pane="map" data-map-url="{{ map_url }}"></div>
   {% endif %}
   {% if d.gold_chart %}
   <div class="d-pane" data-pane="gold">
