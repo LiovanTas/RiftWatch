@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon %}
+{% block title %}Compare players | RiftWatch{% endblock %}
+{% block description %}Two League of Legends players side by side: ranks, recent form, farm, damage, vision, and their games together or against each other.{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="page-title">
+    <div class="eyebrow">Compare</div>
+    <h1>Two players, side by side</h1>
+    <p>Recent ranked numbers for each player (their last 50 games), and every stored game they played on the same team or against each other.</p>
+  </div>
+  <form class="panel compare-form" action="/compare" method="get">
+    <input name="a" value="{{ a }}" placeholder="First Riot ID, e.g. Faker#KR1" required spellcheck="false" aria-label="First Riot ID">
+    <span class="vs-word">vs</span>
+    <input name="b" value="{{ b }}" placeholder="Second Riot ID" required spellcheck="false" aria-label="Second Riot ID">
+    <button class="btn primary" type="submit">{{ icon('search') }} Compare</button>
+  </form>
+  {% if unparsed %}<p style="color:var(--loss)">Each player needs a Riot ID with a #, like Faker#KR1.</p>{% endif %}
+
+  {% if data %}
+  <div class="cmp-heads">
+    {% for s in data.sides %}
+    <div class="panel cmp-head {{ 'left' if loop.first else 'right' }}">
+      {% if s.found and s.stats %}
+      <img class="av" src="{{ s.stats.icon }}" alt="">
+      <div>
+        <a href="{{ s.url }}"><b>{{ s.name }}</b><span class="tag">#{{ s.tag }}</span></a>
+        <div class="muted small">{{ s.region|upper }}{% if s.stats.role %} &middot; {{ s.stats.role }}{% endif %} &middot; {{ s.stats.games }} recent ranked games</div>
+        <div class="rk">{% if s.rank %}<img src="{{ s.rank.crest }}" alt=""><b class="t-{{ s.rank.key }}">{{ s.rank.tier }} {{ s.rank.division }}</b> <span class="muted small">{{ s.rank.lp }} LP</span>{% else %}<span class="muted">Unranked</span>{% endif %}</div>
+        <div class="cmp-champs">{% for c in s.stats.champions %}<img src="{{ c.icon }}" alt="{{ c.name }}" data-tip="{{ c.name }}&#10;{{ c.games }} of the last {{ s.stats.games }} games">{% endfor %}</div>
+      </div>
+      {% elif s.found %}
+      <div><b>{{ s.name }}#{{ s.tag }}</b><p class="muted small">No ranked games stored yet.</p><a class="btn" href="{{ s.url }}">Open profile &rarr;</a></div>
+      {% else %}
+      <div><b>{{ s.name }}#{{ s.tag }}</b><p class="muted small">Not on RiftWatch yet.</p><a class="btn" href="{{ s.search }}">Load this player &rarr;</a></div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if data.rows %}
+  <div class="panel cmp-table">
+    {% for row in data.rows %}
+    <div class="cmp-row">
+      <div class="side a{{ ' better' if row.better == 0 }}"><b>{{ row.a }}</b><div class="bar"><i style="width:{{ row.a_pct }}%"></i></div></div>
+      <span class="lab">{{ row.label }}</span>
+      <div class="side b{{ ' better' if row.better == 1 }}"><div class="bar"><i style="width:{{ row.b_pct }}%"></i></div><b>{{ row.b }}</b></div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if data.h2h %}
+  {% set h = data.h2h %}
+  <div class="panel h2h" style="margin:12px 0 40px">
+    <div class="panel-head"><span><span class="n">H2H</span>Head to head</span><span class="muted small">stored games only</span></div>
+    <div class="panel-body h2h-body">
+      <div><span>Same team</span><b>{{ h.together }} game{{ 's' if h.together != 1 }}</b><small>{% if h.together %}{{ h.together_wins }}W {{ h.together - h.together_wins }}L ({{ (100 * h.together_wins / h.together)|round|int }}%){% else %}never stored together{% endif %}</small></div>
+      <div><span>Against each other</span><b>{{ h.against }} game{{ 's' if h.against != 1 }}</b><small>{% if h.against %}{{ data.sides[0].name }} {{ h.a_wins }} &ndash; {{ h.b_wins }} {{ data.sides[1].name }}{% else %}never stored on opposite teams{% endif %}</small></div>
+    </div>
+  </div>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

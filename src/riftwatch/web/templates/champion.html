@@ -45,6 +45,16 @@
     <div class="kpi"><span>CS / min</span><b>{{ '%.1f'|format(s.cs_min) }}</b></div>
     <div class="kpi"><span>Damage / min</span><b>{{ '{:,}'.format(s.dmg_min|round|int) }}</b></div>
   </div>
+  {% if curves and (curves.length or curves.patch) %}
+  <div class="cols-2" style="margin-bottom:12px">
+    {% for key, title, note in (('length', 'Win rate by game length', 'minutes'), ('patch', 'Win rate by patch', 'patches with 10+ games')) %}{% if curves[key] and (key == 'length' or curves[key]|length > 1) %}
+    <div class="panel">
+      <div class="panel-head"><span>{{ title }}</span><span class="muted small">{{ note }}</span></div>
+      <div class="panel-body wrc">{% for b in curves[key] %}<div class="wrc-col" data-tip="{{ b.label }}&#10;{{ b.games }} games, {{ '%.1f'|format(b.win_rate) }}% won"><div class="track"><i class="{{ 'up' if b.win_rate >= 50 else 'down' }}" style="height:{{ [((b.win_rate - 50)|abs * 4), 48]|min }}%;{{ 'bottom' if b.win_rate >= 50 else 'top' }}:50%"></i></div><b>{{ b.win_rate|round|int }}%</b><span>{{ b.label }}</span></div>{% endfor %}</div>
+    </div>
+    {% endif %}{% endfor %}
+  </div>
+  {% endif %}
 
   <div class="cols-2">
     <div class="panel">

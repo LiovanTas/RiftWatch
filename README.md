@@ -279,6 +279,17 @@ with RiftWatch's coaching built in.
   progress).
 - **Lobby lookup** (`/multi`): paste champ-select chat or a list of Riot IDs and see everyone
   at once: rank, last 20 games, KDA, main role, form and top champions.
+- **Season recap** (`/players/<region>/<id>/recap`): the season in numbers -- games and hours,
+  KDA totals, MVP/ACE count, multikills, most-played and best champion, month-by-month win
+  rate, longest streaks, best game, favourite duo, and a weekday-by-time heatmap drawn in the
+  visitor's own time zone. Shareable link.
+- **Compare** (`/compare`): two players side by side over their last 50 ranked games (win
+  rate, KDA, kill participation, farm, damage, gold, vision, deaths), the better side marked,
+  and every stored game they played together or against each other.
+- **Counter picks** (`/counters`): pick the enemy champion and see who has done best against
+  it in its lane (win rate adjusted for sample size, gold and CS at 15 minutes), each with a
+  Why?. With a Riot ID it adds the player's own record on each pick and their pool in that
+  role against the enemy.
 - **Tier board** from every stored ranked game: champions laid out in S+ to D rows by role,
   or as a sortable table with win, pick and ban rates and counters; filters by role, rank
   group and patch. It reads recent patch notes (see *Patch notes* below): a **Patch watch**
@@ -287,8 +298,9 @@ with RiftWatch's coaching built in.
 - **Champion pages:** runes (with the full most-played page), summoner spells, skill max order
   and level-by-level order, core builds, starting items, boots, later items by slot,
   toughest and best matchups (each with a **Why?**, see *Matchup explanations*), recent patch
-  changes, the best partner champions in the paired role (support for an ADC, jungler for a
-  mid or top laner), the players RiftWatch has seen play the champion most, and abilities.
+  changes, win rate by game length (and by patch once there are two), the best partner
+  champions in the paired role (support for an ADC, jungler for a mid or top laner), the
+  players RiftWatch has seen play the champion most, and abilities.
 - **Ladder:** the top 100 of each region live from Riot with a podium for the top three,
   refreshed every 30 minutes. Without an API key it falls back to the apex players RiftWatch
   has stored.

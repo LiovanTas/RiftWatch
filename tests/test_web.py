@@ -430,3 +430,19 @@ def test_rank_progression_and_comparison_state(web):
     # No high-elo model in tests, so there's no minute for the coach to explain.
     r = client.post(f"/api/players/na/Me-NA1/matches/{api.ids[0]}/map/10/explain")
     assert r.status_code == 404
+
+
+def test_recap_compare_and_counter_pages(web):
+    client, api, _, jobs = web
+    sync(client, jobs)
+    recap = client.get("/players/na/Me-NA1/recap")
+    assert recap.status_code == 200 and "Season recap" in recap.text and "Most played" in recap.text
+    assert 'class="heatmap" data-played="[[' in recap.text
+    profile = client.get("/players/na/Me-NA1").text
+    assert 'href="/players/na/Me-NA1/recap"' in profile and 'href="/compare?a=Me%23NA1"' in profile
+    cmp = client.get("/compare", params={"a": "Me#NA1", "b": "Stranger#EUW"}).text
+    assert "Load this player" in cmp and 'href="/players/na/Me-NA1"' in cmp
+    assert "needs a Riot ID" in client.get("/compare", params={"a": "nohash", "b": "x"}).text
+    counters = client.get("/counters")
+    assert counters.status_code == 200 and "Who are you up against?" in counters.text
+    assert client.get("/players/na/Nobody-NA1/recap", follow_redirects=False).status_code == 303

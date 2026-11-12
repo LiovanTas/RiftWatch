@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon, wr %}
+{% block title %}{{ name }}#{{ tag }} - Season {{ r.year if r else '' }} Recap | RiftWatch{% endblock %}
+{% block description %}{{ name }}'s League of Legends season in numbers: games, champions, streaks and highlights.{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="recap-hero">
+    <img class="av" src="{{ head.icon }}" alt="">
+    <div>
+      <div class="eyebrow">Season recap</div>
+      <h1>{{ name }}<span class="tag">#{{ tag }}</span>{% if r %} &middot; {{ r.year }}{% endif %}</h1>
+      <div class="meta-line"><a href="{{ profile_url }}">&larr; Back to the profile</a>{% if years|length > 1 %}<nav class="seg" aria-label="Season">{% for y in years %}<a href="?year={{ y }}" class="{{ 'on' if r and r.year == y }}">{{ y }}</a>{% endfor %}</nav>{% endif %}</div>
+    </div>
+    <button class="btn" data-copy type="button">{{ icon('link') }} Share</button>
+  </div>
+
+  {% if not r %}
+  <div class="panel empty" style="margin-bottom:40px"><h3>No games stored for this season</h3><p>Update the profile to download recent games.</p></div>
+  {% else %}
+  <div class="recap-tiles">
+    <div class="rt big"><span>Games</span><b>{{ '{:,}'.format(r.games) }}</b><small>{{ r.wins }}W {{ r.losses }}L &middot; {{ wr(r.win_rate) }}</small></div>
+    <div class="rt"><span>Hours in game</span><b>{{ r.hours }}</b><small>about {{ (r.hours / r.games * 60)|round|int }} min a game</small></div>
+    <div class="rt"><span>KDA</span><b>{{ r.kda }}</b><small>{{ '{:,}'.format(r.kills) }} / {{ '{:,}'.format(r.deaths) }} / {{ '{:,}'.format(r.assists) }}</small></div>
+    <div class="rt"><span>MVP / ACE</span><b>{{ r.mvp }} / {{ r.ace }}</b><small>best on your team, by performance score</small></div>
+    <div class="rt"><span>Multikills</span><b>{{ r.pentas }} penta{{ 's' if r.pentas != 1 }}</b><small>{{ r.quadras }} quadra, {{ r.triples }} triple</small></div>
+    <div class="rt"><span>Champions played</span><b>{{ r.champions_played }}</b><small>{{ r.first_bloods }} first bloods</small></div>
+    <div class="rt"><span>Farm</span><b>{{ r.cs_min }}</b><small>CS per minute</small></div>
+    <div class="rt"><span>Damage dealt</span><b>{{ '%.1f'|format(r.damage / 1000000) }}M</b><small>{{ '%.1f'|format(r.gold / 1000000) }}M gold earned</small></div>
+  </div>
+
+  <div class="recap-grid">
+    <div class="panel">
+      <div class="panel-head"><span><span class="n">01</span>Most played</span><span class="muted small">{{ r.roles[0].name if r.roles else '' }} main</span></div>
+      <div class="panel-body">
+        {% for c in r.top %}
+        <a class="rc-champ" href="/champions/{{ c.slug }}"><span class="pos">{{ loop.index }}</span><img src="{{ c.icon }}" alt=""><div><b>{{ c.name }}</b><span>{{ c.games }} games &middot; {{ c.kda }} KDA</span></div><b class="wr">{{ wr(c.win_rate) }}</b></a>
+        {% endfor %}
+        {% if r.best %}<div class="rc-best"><span class="eyebrow">Best champion</span> <b>{{ r.best.name }}</b> &middot; {{ r.best.wins }}W {{ r.best.games - r.best.wins }}L ({{ r.best.win_rate }}%)</div>{% endif %}
+        <div class="roles-bar" style="margin-top:12px">{% for p in r.roles %}<i style="width:{{ p.share }}%;background:var(--{{ ['accent', 'win', 'violet', 'orange', 'green'][loop.index0 % 5] }})" title="{{ p.name }} {{ p.share }}%"></i>{% endfor %}</div>
+        <div class="roles-key">{% for p in r.roles %}<span style="--c:var(--{{ ['accent', 'win', 'violet', 'orange', 'green'][loop.index0 % 5] }})">{{ p.name }} {{ p.share }}%</span>{% endfor %}</div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><span><span class="n">02</span>Highlights</span></div>
+      <div class="panel-body highlights">
+        {% if r.top_game %}<div class="hl"><img src="{{ r.top_game.icon }}" alt=""><div><span>Best game</span><b>{{ r.top_game.champion }} {{ r.top_game.kda }}</b><small>score {{ r.top_game.score }} &middot; {{ r.top_game.date }} &middot; {{ 'win' if r.top_game.win else 'loss' }}</small></div></div>{% endif %}
+        <div class="hl"><img src="{{ r.most_kills.icon }}" alt=""><div><span>Most kills</span><b>{{ r.most_kills.champion }} {{ r.most_kills.kda }}</b><small>{{ r.most_kills.date }} &middot; {{ 'win' if r.most_kills.win else 'loss' }}</small></div></div>
+        <div class="hl"><i class="ico up">{{ r.win_streak }}</i><div><span>Longest win streak</span><b>{{ r.win_streak }} in a row</b></div></div>
+        <div class="hl"><i class="ico down">{{ r.loss_streak }}</i><div><span>Longest losing streak</span><b>{{ r.loss_streak }} in a row</b></div></div>
+        {% if r.duo %}<div class="hl"><i class="ico">{{ icon('star') }}</i><div><span>Favourite duo</span><b>{% if r.duo.url %}<a href="{{ r.duo.url }}">{{ r.duo.name }}</a>{% else %}{{ r.duo.name }}{% endif %}</b><small>{{ r.duo.games }} games together &middot; {{ r.duo.win_rate }}% won</small></div></div>{% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="recap-grid">
+    <div class="panel">
+      <div class="panel-head"><span><span class="n">03</span>Month by month</span><span class="muted small">bar height: games &middot; colour: win rate</span></div>
+      <div class="panel-body months">
+        {% set most = r.months|map(attribute='games')|max %}
+        {% for m in r.months %}<div class="mo" data-tip="{{ m.label }}&#10;{{ m.games }} games, {{ m.win_rate }}% won"><i class="{{ 'up' if m.win_rate >= 52 else ('down' if m.win_rate < 48 else '') }}" style="height:{{ (100 * m.games / most)|round|int }}%"></i><b>{{ m.win_rate }}%</b><span>{{ m.label }}</span></div>{% endfor %}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><span><span class="n">04</span>When you play</span><span class="muted small">your local time &middot; colour: win rate</span></div>
+      <div class="panel-body"><div class="heatmap" data-played="{{ played_json }}"></div></div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

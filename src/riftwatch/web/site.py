@@ -16,7 +16,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -28,7 +28,7 @@ from riftwatch.db import repo
 from riftwatch.riot.routing import UnknownRegion, parse_riot_id, platform_for
 from riftwatch.stats import champions as champ_stats
 from riftwatch.stats import matchups, patches
-from riftwatch.web import gamedata, mapview, moments, pages, views
+from riftwatch.web import gamedata, mapview, moments, pages, recap, views
 
 log = logging.getLogger(__name__)
 
@@ -225,6 +225,74 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
 
     # -- player profile ---------------------------------------------------------------------
 
+    @app.get("/players/{region}/{riot_id}/recap", response_class=HTMLResponse)
+    def recap_page(region: str, riot_id: str, year: int | None = None) -> HTMLResponse:
+        """A player's season in numbers: champions, months, streaks, highlights."""
+        if region_or_none(region) is None:
+            return error_page("Unknown region", f"RiftWatch doesn't know the region {region!r}.")
+        gd_ = game_data()
+        with pool.connection() as conn:
+            name, tag, account = find_account(conn, region, riot_id)
+            if account is None:
+                return RedirectResponse(f"/players/{region}/{riot_id}", 303)
+            data = recap.season_recap(conn, gd_, account["puuid"], region.lower(), year)
+            years = [int(y) for (y,) in conn.execute(
+                """SELECT DISTINCT extract(year FROM game_start)::int FROM participant_builds
+                    WHERE puuid = %s ORDER BY 1 DESC""", (account["puuid"],))]
+            head = views.header(conn, gd_, account)
+        return render("recap.html", nav="recap", region=region.lower(), name=account["game_name"],
+                      tag=account["tag_line"], r=data, head=head, years=years,
+                      profile_url=f"/players/{region.lower()}/{riot_id}",
+                      played_json=json.dumps(data["played"]) if data else "[]")
+
+    @app.get("/compare", response_class=HTMLResponse)
+    def compare_page(a: str = "", b: str = "") -> HTMLResponse:
+        """Two players side by side, and their games together or against each other."""
+        ids = [views.parse_lobby(x)[:1] for x in (a, b)]
+        data = None
+        if all(ids):
+            with pool.connection() as conn:
+                data = recap.compare(conn, game_data(), [i[0] for i in ids], PLATFORM_REGION)
+        return render("compare.html", nav="compare", a=a, b=b, data=data,
+                      unparsed=bool(a.strip() or b.strip()) and not all(ids))
+
+    @app.get("/counters", response_class=HTMLResponse)
+    def counters_page(vs: str = "", role: str = "", me: str = "") -> HTMLResponse:
+        """Draft helper: who does best against a champion in its lane, and how you've done."""
+        gd_ = game_data()
+        champs = sorted(gd_.champions.values(), key=lambda c: c.name)
+        enemy = gd_.champion_by_slug(vs) if vs else None
+        ctx: dict[str, Any] = {"vs": vs, "role": role.upper(), "me": me, "enemy": None,
+                               "all": [{"name": c.name, "slug": c.slug, "icon": gd_.champion_icon(c.id)}
+                                       for c in champs]}
+        if enemy is not None:
+            with pool.connection() as conn:
+                position = role.upper() if role.upper() in gamedata.POSITIONS else champ_stats.main_position(conn, enemy.id)
+                rows = champ_stats.counter_picks(conn, enemy.id, position) if position else []
+                mine: dict[int, dict] = {}
+                found = recap.locate(conn, *views.parse_lobby(me)[0]) if views.parse_lobby(me) else None
+                if found and position:
+                    for cid, n, w, vs_n, vs_w in conn.execute(
+                            """SELECT champion_id, count(*), sum(win::int),
+                                      count(*) FILTER (WHERE opponent_champion_id = %s),
+                                      coalesce(sum(win::int) FILTER (WHERE opponent_champion_id = %s), 0)
+                                 FROM participant_builds WHERE puuid = %s AND position = %s AND NOT remake
+                                  AND queue_id IN (420, 440, 400) GROUP BY 1""",
+                            (enemy.id, enemy.id, found[0], position)):
+                        mine[cid] = {"games": n, "wins": w, "vs_games": vs_n, "vs_wins": vs_w}
+            ctx.update(enemy={"name": enemy.name, "slug": enemy.slug, "icon": gd_.champion_icon(enemy.id),
+                              "title": enemy.title},
+                       role=position or "", role_name=gamedata.POSITIONS.get(position or "", ""),
+                       me_found=found is not None, me_name=f"{found[2]}#{found[3]}" if found else "",
+                       rows=[{**r, "name": gd_.champion(r["champion_id"]).name,
+                              "slug": gd_.champion(r["champion_id"]).slug,
+                              "icon": gd_.champion_icon(r["champion_id"]),
+                              "mine": mine.get(r["champion_id"])} for r in rows],
+                       pool=sorted(({"name": gd_.champion(c).name, "slug": gd_.champion(c).slug,
+                                     "icon": gd_.champion_icon(c), **v} for c, v in mine.items()),
+                                   key=lambda x: -x["games"])[:8])
+        return render("counters.html", nav="counters", **ctx)
+
     @app.get("/players/{region}/{riot_id}", response_class=HTMLResponse)
     def player_page(request: Request, region: str, riot_id: str, tab: str = "overview",
                     queue: str = "all", cq: str = "ranked", job: str | None = None):
@@ -258,7 +326,9 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                 puuid = account["puuid"]
                 head = views.header(conn, gd, account)
                 name, tag = account["game_name"], account["tag_line"]
-                base.update(name=name, tag=tag, shown=f"{name}#{tag}")
+                base.update(name=name, tag=tag, shown=f"{name}#{tag}",
+                            recap_url=f"/players/{region}/{riot_id}/recap",
+                            compare_url=f"/compare?a={quote(name + '#' + tag)}")
                 ctx: dict[str, Any] = {
                     "synced": True, "head": head,
                     "solo": views.rank_card(repo.latest_rank(conn, puuid), gd),
@@ -540,6 +610,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                                      is_boots=item_check("is_boots"), is_starter=is_starter)
             mains = views.champion_players(conn, champ.id, s.get("position"), PLATFORM_REGION)
             duo = champ_stats.partners(conn, champ.id, s.get("position"))
+            curves = champ_stats.win_rate_curves(conn, champ.id, s.get("position"))
             table = champ_stats.matchup_table(conn, champ.id, s.get("position"))
             systems = item_changes()
             usage = champ_stats.item_usage(conn, champ.id, s.get("position"),
@@ -563,7 +634,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                                "qs": _query_string(request),
                                "patch_changes": patch_changes().get(champ.id, []),
                                "item_hits": item_hits,
-                               "mains": mains,
+                               "mains": mains, "curves": curves,
                                "matchup_rows": [{**m, "name": gd.champion(m["champion_id"]).name,
                                                  "slug": gd.champion(m["champion_id"]).slug,
                                                  "icon": gd.champion_icon(m["champion_id"])}

@@ -35,6 +35,8 @@
       <div class="head-actions">
         <button class="btn primary" data-sync="{{ sync_url }}" type="button">{{ icon('refresh') }} Update</button>
         <a class="btn" href="?tab=live">{{ icon('live') }} Live game</a>
+        {% if synced %}<a class="btn" href="{{ recap_url }}">{{ icon('trophy') }} Season recap</a>
+        <a class="btn" href="{{ compare_url }}" aria-label="Compare with another player">{{ icon('chart') }} Compare</a>{% endif %}
         <button class="btn star" id="fav" type="button" aria-label="Favourite">{{ icon('star') }}</button>
         <button class="btn" data-copy type="button" aria-label="Copy link">{{ icon('link') }}</button>
         <span class="status" id="sync-status"></span>

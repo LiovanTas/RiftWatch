@@ -634,6 +634,31 @@
     }
   });
 
+  // -- recap heatmap: games by weekday and time of day, in the visitor's own time zone --------
+  for (const box of $$('.heatmap')) {
+    const played = JSON.parse(box.dataset.played || '[]');
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const blocks = ['0-4', '4-8', '8-12', '12-16', '16-20', '20-24'];
+    const grid = days.map(() => blocks.map(() => [0, 0]));
+    for (const [t, win] of played) {
+      const d = new Date(t);
+      const cell = grid[(d.getDay() + 6) % 7][Math.floor(d.getHours() / 4)];
+      cell[0] += 1; cell[1] += win;
+    }
+    const most = Math.max(1, ...grid.flat().map((c) => c[0]));
+    let html = '<span></span>' + blocks.map((b) => `<span class="lab">${b}h</span>`).join('');
+    days.forEach((day, i) => {
+      html += `<span class="lab">${day}</span>`;
+      grid[i].forEach(([n, w], j) => {
+        if (!n) { html += '<span class="cell"></span>'; return; }
+        const rate = w / n, alpha = (0.25 + 0.75 * n / most).toFixed(2);
+        const colour = rate >= 0.5 ? `rgba(78,161,255,${alpha})` : `rgba(255,100,100,${alpha})`;
+        html += `<span class="cell" style="background:${colour}" data-tip="${day} ${blocks[j]}h&#10;${n} games, ${Math.round(100 * rate)}% won">${n}</span>`;
+      });
+    });
+    box.innerHTML = html + '<span class="note">Blue: won at least half; red: lost more. Stronger colour means more games.</span>';
+  }
+
   // -- copy link ---------------------------------------------------------------------------
   for (const b of $$('[data-copy]')) {
     b.addEventListener('click', async () => {

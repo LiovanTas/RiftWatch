@@ -353,3 +353,52 @@ def item_usage(conn: psycopg.Connection, champion_id: int, position: str | None,
             WHERE b.champion_id = %s AND b.position = %s AND b.queue_id = %s AND NOT b.remake
               AND x.item = ANY(%s) GROUP BY 1""", (champion_id, position, RANKED_SOLO, item_ids)).fetchall()
     return {item: count / n for item, count in rows}
+
+
+def main_position(conn: psycopg.Connection, champion_id: int) -> str | None:
+    """The role a champion is played in most in stored ranked games."""
+    row = conn.execute("""SELECT position FROM participant_builds WHERE champion_id = %s AND position <> ''
+                            AND queue_id IN (420, 440) GROUP BY 1 ORDER BY count(*) DESC LIMIT 1""",
+                       (champion_id,)).fetchone()
+    return row[0] if row else None
+
+
+def counter_picks(conn: psycopg.Connection, enemy_id: int, position: str,
+                  min_games: int = MIN_MATCHUP) -> list[dict]:
+    """Every champion seen laning against ``enemy_id`` in ``position`` with enough ranked games,
+    best first (win rate pulled towards 50% for small samples), with the average gold and CS
+    lead at 15 minutes."""
+    rows = conn.execute(
+        """SELECT x.champion_id, count(*), sum(x.win::int),
+                  avg(f.gold_diff)::float8, avg(f.cs_diff)::float8
+             FROM participant_builds x
+             LEFT JOIN participant_minute_features f
+                    ON f.match_id = x.match_id AND f.participant_id = x.participant_id AND f.minute = 15
+            WHERE x.opponent_champion_id = %s AND x.position = %s AND x.queue_id IN (420, 440)
+              AND NOT x.remake
+            GROUP BY 1 HAVING count(*) >= %s""", (enemy_id, position, min_games)).fetchall()
+    out = [{"champion_id": c, "games": n, "wins": w, "win_rate": 100 * w / n,
+            "shrunk": 100 * shrunk(w, n), "gold15": g, "cs15": cs} for c, n, w, g, cs in rows]
+    return sorted(out, key=lambda r: -r["shrunk"])
+
+
+def win_rate_curves(conn: psycopg.Connection, champion_id: int, position: str | None) -> dict:
+    """Win rate by game length and by patch, for the champion page's charts."""
+    if not position:
+        return {"length": [], "patch": []}
+    length = conn.execute(
+        """SELECT CASE WHEN duration_s < 1200 THEN 0 WHEN duration_s < 1500 THEN 1
+                       WHEN duration_s < 1800 THEN 2 WHEN duration_s < 2100 THEN 3 ELSE 4 END b,
+                  count(*), sum(win::int)
+             FROM participant_builds WHERE champion_id = %s AND position = %s
+              AND queue_id = %s AND NOT remake GROUP BY 1 ORDER BY 1""",
+        (champion_id, position, RANKED_SOLO)).fetchall()
+    labels = ("under 20", "20-25", "25-30", "30-35", "35+")
+    by_patch = conn.execute(
+        """SELECT patch, count(*), sum(win::int) FROM participant_builds
+            WHERE champion_id = %s AND position = %s AND queue_id = %s AND NOT remake
+            GROUP BY 1""", (champion_id, position, RANKED_SOLO)).fetchall()
+    by_patch = sorted(by_patch, key=lambda r: [int(x) for x in r[0].split(".") if x.isdigit()])
+    return {"length": [{"label": labels[b], "games": n, "win_rate": 100 * w / n} for b, n, w in length],
+            "patch": [{"label": f"{int(p.split('.')[0]) + 10}.{p.split('.')[1]}", "games": n, "win_rate": 100 * w / n}
+                      for p, n, w in by_patch if n >= 10][-8:]}

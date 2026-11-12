@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% from "_macros.html" import wr, pos_icon %}
+{% block title %}{% if enemy %}{{ enemy.name }} Counters{% if role_name %} {{ role_name }}{% endif %}{% else %}Counter Picks{% endif %} | RiftWatch{% endblock %}
+{% block description %}Who does best against {{ enemy.name if enemy else 'any champion' }} in lane: win rates and the gold lead at 15 minutes from stored ranked games, with explanations.{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="page-title">
+    <div class="eyebrow">Draft helper</div>
+    <h1>{% if enemy %}Countering {{ enemy.name }}{% else %}Counter picks{% endif %}</h1>
+    <p>Pick the champion you're facing. RiftWatch lists who has done best against it in lane, from stored ranked games, with the gold lead at 15 minutes and a Why? for each pick. Add your Riot ID to see how your own champions have done.</p>
+  </div>
+
+  <form class="panel counter-form" action="/counters" method="get">
+    <input type="hidden" name="vs" value="{{ vs }}">
+    <label class="sr-only" for="me">Your Riot ID</label>
+    <input id="me" name="me" value="{{ me }}" placeholder="Your Riot ID (optional), e.g. Faker#KR1" spellcheck="false">
+    {% if enemy %}
+    <nav class="seg" aria-label="Role">
+      {% for key, name in positions %}<a href="?vs={{ enemy.slug }}&amp;role={{ key|lower }}&amp;me={{ me|urlencode }}" class="{{ 'on' if role == key }}">{{ pos_icon(gd, key) }}<span>{{ name }}</span></a>{% endfor %}
+    </nav>
+    {% endif %}
+    <button class="btn primary" type="submit">Update</button>
+  </form>
+
+  {% if enemy %}
+  <div class="counter-head panel">
+    <img src="{{ enemy.icon }}" alt="">
+    <div><span class="eyebrow">Enemy {{ role_name|lower or 'champion' }}</span><b>{{ enemy.name }}</b><span class="muted">{{ enemy.title }}</span></div>
+    <a class="btn" href="/champions/{{ enemy.slug }}?role={{ role|lower }}">{{ enemy.name }} page &rarr;</a>
+  </div>
+
+  {% if me and not me_found %}<p class="muted small">RiftWatch hasn't seen {{ me }} yet. Search them first to include their record.</p>{% endif %}
+  {% if pool %}
+  <div class="panel" style="margin-bottom:12px">
+    <div class="panel-head"><span><span class="n">01</span>Your {{ role_name|lower }} pool against {{ enemy.name }}</span><span class="muted small">{{ me_name }}</span></div>
+    <div class="panel-body pool-row">
+      {% for c in pool %}<a class="pool-chip" href="/champions/{{ c.slug }}?role={{ role|lower }}" data-tip="{{ c.name }}&#10;{{ c.games }} games in this role, {{ (100 * c.wins / c.games)|round|int }}% won{% if c.vs_games %}; against {{ enemy.name }} {{ c.vs_wins }}-{{ c.vs_games - c.vs_wins }}{% endif %}"><img src="{{ c.icon }}" alt=""><span>{{ c.name }}</span><small>{% if c.vs_games %}vs {{ c.vs_wins }}-{{ c.vs_games - c.vs_wins }}{% else %}{{ c.games }}g {{ (100 * c.wins / c.games)|round|int }}%{% endif %}</small></a>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="panel" style="margin-bottom:40px">
+    <div class="panel-head"><span><span class="n">{{ '02' if pool else '01' }}</span>Best against {{ enemy.name }}</span><span class="muted small">{{ rows|length }} champions with 6+ games &middot; sorted by win rate, adjusted for sample size</span></div>
+    {% if rows %}
+    <div class="scroll"><table class="data">
+      <thead><tr><th class="l">#</th><th class="l" data-sort>Champion</th><th data-sort>Games</th><th data-sort>Win rate</th><th data-sort>Gold at 15</th><th data-sort>CS at 15</th>{% if me_found %}<th class="l">You</th>{% endif %}<th></th></tr></thead>
+      <tbody>{% for r in rows %}<tr>
+        <td class="rank">{{ loop.index }}</td>
+        <td class="l" data-v="{{ r.name }}"><a class="champ-cell" href="/champions/{{ r.slug }}?role={{ role|lower }}"><img src="{{ r.icon }}" alt="" loading="lazy"><b>{{ r.name }}</b></a></td>
+        <td data-v="{{ r.games }}">{{ r.games }}</td>
+        <td data-v="{{ r.shrunk }}"><div class="bar-cell">{{ wr(r.win_rate) }}<div class="bar"><i style="width:{{ r.win_rate }}%"></i></div></div></td>
+        <td data-v="{{ r.gold15 if r.gold15 is not none else 0 }}" class="{{ 'win-text' if (r.gold15 or 0) > 150 else ('loss-text' if (r.gold15 or 0) < -150 else '') }}">{{ '%+d'|format(r.gold15) if r.gold15 is not none else '-' }}</td>
+        <td data-v="{{ r.cs15 if r.cs15 is not none else 0 }}">{{ '%+.1f'|format(r.cs15) if r.cs15 is not none else '-' }}</td>
+        {% if me_found %}<td class="l">{% if r.mine %}<span class="mine-tag">{{ r.mine.games }}g {{ (100 * r.mine.wins / r.mine.games)|round|int }}%{% if r.mine.vs_games %} &middot; vs {{ r.mine.vs_wins }}-{{ r.mine.vs_games - r.mine.vs_wins }}{% endif %}</span>{% else %}<span class="muted">-</span>{% endif %}</td>{% endif %}
+        <td><button class="why-btn" type="button" data-why="/api/champions/{{ r.slug }}/matchups/{{ enemy.slug }}?role={{ role|lower }}" data-icons="{{ r.icon }} {{ enemy.icon }}" data-title="{{ r.name }} vs {{ enemy.name }} &middot; {{ role_name }}">Why?</button></td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+    {% else %}<div class="empty"><h3>Not enough games against {{ enemy.name }} in this role</h3><p>Try another role.</p></div>{% endif %}
+  </div>
+  {% endif %}
+
+  <details class="panel champ-picker"{% if not enemy %} open{% endif %}>
+    <summary>{{ 'Pick another champion' if enemy else 'Who are you up against?' }}</summary>
+    <div class="toolbar"><input type="search" placeholder="Find a champion" data-filter="#pick-grid a" aria-label="Find a champion" autofocus></div>
+    <div class="pick-grid" id="pick-grid">
+      {% for c in all %}<a href="/counters?vs={{ c.slug }}{% if me %}&amp;me={{ me|urlencode }}{% endif %}" data-name="{{ c.name|lower }}" title="{{ c.name }}"><img src="{{ c.icon }}" alt="" loading="lazy"><span>{{ c.name }}</span></a>{% endfor %}
+    </div>
+  </details>
+</div>
+{% endblock %}

@@ -315,3 +315,9 @@ def test_moment_notes_retry_and_drop_invented_numbers():
     note, usage = moments.write(coach, moments.evidence(MINUTE, {"champion": "Ahri", "role": "Mid"}))
     assert len(calls) == 2 and "75" in calls[1]["messages"][-1]["content"]
     assert note.explanation == "Most took the objective (62%)." and usage["requests"] == 2
+
+
+def test_recap_streaks():
+    from riftwatch.web.recap import _streaks
+    assert _streaks([True, True, False, True, True, True, False, False]) == (3, 2)
+    assert _streaks([]) == (0, 0)
