@@ -416,6 +416,38 @@
     wrap.classList.toggle('hover', true);
   });
 
+  // -- win chance: blue's chance at the moment under the pointer ----------------------------
+  // Drawn server-side in a 720-wide viewBox with 40 px on the left and 8 on the right
+  // (views.win_chart); x maps back to a second of the game on the same scale.
+  const hideWin = (wrap) => { wrap.classList.toggle('hover', false); $('.gold-tip', wrap).hidden = true; $('.gold-cursor', wrap).hidden = true; };
+  document.addEventListener('mousemove', (e) => {
+    const wrap = e.target.closest('.win-wrap');
+    for (const other of $$('.win-wrap.hover')) if (other !== wrap) hideWin(other);
+    if (!wrap) return;
+    const data = wrap._win || (wrap._win = JSON.parse(wrap.dataset.win));
+    const series = data.series;
+    if (!series || series.length < 2 || !data.end) return;
+    const svg = $('svg', wrap), box = svg.getBoundingClientRect();
+    const x = ((e.clientX - box.left) / box.width) * 720;
+    const sec = Math.max(0, Math.min(data.end, ((x - 40) / (720 - 48)) * data.end));
+    let point = series[0];
+    for (const p of series) { if (p[0] <= sec) point = p; else break; }
+    const blue = point[1], clock = `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+    let html = `<b>${clock}</b><span>Blue ${Math.round(blue)}% &middot; Red ${Math.round(100 - blue)}%</span>`;
+    if (data.team) {
+      const mine = data.team === 100 ? blue : 100 - blue;
+      html += `<span class="${mine >= 50 ? 'up' : 'down'}">Your team: ${Math.round(mine)}% to win</span>`;
+    }
+    const tip = $('.gold-tip', wrap), cur = $('.gold-cursor', wrap);
+    tip.innerHTML = html;
+    const px = ((40 + (720 - 48) * (sec / data.end)) / 720) * box.width;
+    cur.style.left = px + 'px';
+    tip.style.left = Math.min(Math.max(px + 12, 0), box.width - 250) + 'px';
+    tip.hidden = false;
+    cur.hidden = false;
+    wrap.classList.toggle('hover', true);
+  });
+
   // -- high-elo map: the game minute by minute on the minimap -------------------------------
   async function loadMap(pane) {
     pane.dataset.loaded = '1';

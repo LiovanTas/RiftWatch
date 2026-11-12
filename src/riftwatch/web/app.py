@@ -115,6 +115,9 @@ def create_app(
         from riftwatch.ml.advisor import Advisor
 
         advisor = Advisor(Path(settings.models_dir))
+    from riftwatch.winprob import model as winprob
+
+    win_model = winprob.load(settings.models_dir)         # None until `riftwatch winprob train`
     brain = None
     if (Path(settings.models_dir) / "brain" / "CURRENT").exists():
         from riftwatch.brain import registry
@@ -154,6 +157,12 @@ def create_app(
                 game = feature_store.load(conn, match_id)
                 if game is not None:
                     feature_store.save(conn, game)
+            if win_model is not None and result.new_matches:
+                from riftwatch.web.gamedata import shared as shared_gamedata
+                from riftwatch.winprob import swing
+
+                gd = gamedata or shared_gamedata()
+                swing.for_matches(conn, win_model, list(result.new_matches), lambda c: gd.champion(c).name)
             progress(f"analysed {len(result.new_matches)} new game(s)")
             return {"riot_id": result.riot_id, "new_matches": len(result.new_matches),
                     "already_cached": result.already_cached, "failed": len(result.failed)}
@@ -218,8 +227,22 @@ def create_app(
         import threading
 
         threading.Thread(target=warm_baselines, name="warm-baselines", daemon=True).start()
+        stop = threading.Event()
+        if owns_pool:                          # a real server, not a test with its own pool
+            from riftwatch.stats.champions import CACHE_S
+
+            def keep_tiers_warm() -> None:
+                while not stop.is_set():
+                    try:
+                        app.state.warm_tiers()
+                    except Exception:          # a cold board is only slower
+                        pass
+                    stop.wait(CACHE_S - 60)
+
+            threading.Thread(target=keep_tiers_warm, name="warm-tiers", daemon=True).start()
         services.jobs.start()
         yield
+        stop.set()
         services.jobs.shutdown()
         if owns_pool:
             pool.close()
@@ -507,7 +530,7 @@ def create_app(
         require_coach_budget()
 
     site.register(app, services, coach=coach, advisor=advisor, brain=brain, gd=gamedata,
-                  guard=guard)
+                  guard=guard, win_model=win_model)
 
     return app
 

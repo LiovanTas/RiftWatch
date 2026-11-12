@@ -58,8 +58,11 @@ def _asset_version() -> str:
     return hashlib.sha1(stamp.encode()).hexdigest()[:10]
 
 
+SWING_PRIOR_GAMES = 60            # how many games of evidence an average Swing is pulled with
+
+
 def register(app: FastAPI, services, *, coach, advisor, brain,
-             gd: gamedata.GameData | None = None, guard=None) -> None:
+             gd: gamedata.GameData | None = None, guard=None, win_model=None) -> None:
     """Mount the website on ``app`` (the JSON API stays in app.py)."""
     import mimetypes
 
@@ -203,6 +206,96 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
         with pool.connection() as conn:
             ranked = conn.execute("SELECT count(*) FROM matches WHERE queue_id = 420").fetchone()[0]
         return render("about.html", nav="about", ranked=ranked)
+
+    def warm_tiers() -> None:
+        """Rebuild the default tier board (the home page's and /champions') and the /swing
+        tables, which take a second or two, so the server can do it before the cached copies
+        run out."""
+        with pool.connection() as conn:
+            champ_stats.tier_list(conn, None, "all", patch_changes(), item_changes(), fresh=True)
+        if win_model is not None:
+            swing_tables("", fresh=True)
+
+    app.state.warm_tiers = warm_tiers
+
+    @app.get("/swing", response_class=HTMLResponse)
+    def swing_page(role: str = "") -> HTMLResponse:
+        """What Swing is, how well the network behind it predicts games, and the champions
+        and single games with the most of it."""
+        from riftwatch.winprob import model as winprob
+
+        position = role.upper() if role.upper() in gamedata.POSITIONS else ""
+        data = winprob.metrics(services.settings.models_dir)
+        champions, games, stored, by_role = [], [], 0, []
+        if win_model is not None:
+            champions, games, stored, by_role = swing_tables(position)
+        return render("swing.html", nav="swing", m=data, live=win_model is not None, by_role=by_role,
+                      champions=champions, games=games, stored=stored, role=position,
+                      roles=list(gamedata.POSITIONS.items()))
+
+    def swing_tables(position: str, fresh: bool = False) -> tuple:
+        """The /swing page's tables: half a second each over every stored player-game, so
+        they're kept for ten minutes like the tier board."""
+        from riftwatch.winprob import swing as swing_calc
+
+        def build():
+            with pool.connection() as conn:
+                return (*swing_board(conn, position), swing_roles(conn))
+        return champ_stats.cached(("swing", swing_calc.version(win_model), position), build, fresh)
+
+    def swing_roles(conn) -> list[dict]:
+        from riftwatch.winprob import swing as swing_calc
+
+        rows = conn.execute("""
+            WITH s AS (
+                SELECT b.position, b.win, ps.total AS v
+                  FROM player_swing ps JOIN participant_builds b USING (match_id, participant_id)
+                 WHERE ps.version = %s AND NOT b.remake AND b.position <> '')
+            SELECT position, avg(v), avg(v) FILTER (WHERE win), avg(v) FILTER (WHERE NOT win),
+                   percentile_cont(0.1) WITHIN GROUP (ORDER BY v), percentile_cont(0.9) WITHIN GROUP (ORDER BY v)
+              FROM s GROUP BY 1 HAVING count(*) >= 20""", (swing_calc.version(win_model),)).fetchall()
+        found = {r[0]: r for r in rows}
+        return [{"name": name, "avg": round(found[k][1], 1), "wins": round(found[k][2] or 0, 1),
+                 "losses": round(found[k][3] or 0, 1), "p10": found[k][4], "p90": found[k][5]}
+                for k, name in gamedata.POSITIONS.items() if k in found]
+
+    def swing_board(conn, position: str) -> tuple[list[dict], list[dict], int]:
+        from riftwatch.winprob import swing as swing_calc
+
+        gd = game_data()
+        ver = swing_calc.version(win_model)
+        stored = conn.execute("SELECT count(DISTINCT match_id) FROM player_swing WHERE version = %s",
+                              (ver,)).fetchone()[0]
+        role_sql, params = ("AND b.position = %s", [position]) if position else ("", [])
+        rows = conn.execute(f"""
+            WITH s AS (
+                SELECT b.champion_id, b.position, b.win, ps.total AS v
+                  FROM player_swing ps JOIN participant_builds b USING (match_id, participant_id)
+                 WHERE ps.version = %s AND NOT b.remake AND b.position <> '' {role_sql}),
+                 r AS (SELECT position, avg(v) AS role_avg FROM s GROUP BY 1)
+            SELECT champion_id, position, count(*), avg(v), avg(v) FILTER (WHERE win), avg(v) FILTER (WHERE NOT win),
+                   avg(win::int), avg(v) - max(role_avg)
+              FROM s JOIN r USING (position) GROUP BY 1, 2 HAVING count(*) >= 15""",
+                            (ver, *params)).fetchall()
+        # Ranked against the average for the role, so junglers (who take part in more kills and
+        # objectives) don't fill the board, and pulled towards it for small samples: one game's
+        # Swing varies by about 16, so 20 games of an off-role pick prove little.
+        champions = sorted(({"name": gd.champion(c).name, "slug": gd.champion(c).slug, "icon": gd.champion_icon(c),
+                             "role": gamedata.POSITIONS.get(pos, ""), "games": n, "avg": round(a, 1),
+                             "wins": round(w or 0, 1), "losses": round(lo or 0, 1), "win_rate": round(100 * wr),
+                             "rel": round(rel * n / (n + SWING_PRIOR_GAMES), 1)}
+                            for c, pos, n, a, w, lo, wr, rel in rows), key=lambda r: -r["rel"])
+        top = conn.execute(f"""
+            SELECT b.match_id, b.champion_id, b.riot_name, b.riot_tag, b.position, b.win,
+                   b.kills, b.deaths, b.assists, ps.total
+              FROM player_swing ps JOIN participant_builds b USING (match_id, participant_id)
+             WHERE ps.version = %s AND NOT b.remake {role_sql}
+             ORDER BY ps.total DESC LIMIT 10""", (ver, *params)).fetchall()
+        games = [{"match_id": mid, "champion": gd.champion(c).name, "icon": gd.champion_icon(c),
+                  "name": f"{n}#{t}" if n else "Unknown", "position": gamedata.POSITIONS.get(pos or "", ""),
+                  "win": w, "kda": f"{k}/{d}/{a}", "swing": round(v, 1)}
+                 for mid, c, n, t, pos, w, k, d, a, v in top]
+        return champions, games, stored
 
     @app.get("/api/autocomplete")
     def autocomplete(q: str = Query(..., min_length=1, max_length=40), region: str = "") -> dict[str, Any]:
@@ -473,7 +566,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                 if tab == "overview":
                     picked = gd.champion_by_slug(champ) if champ else None
                     rows = views.match_rows(conn, gd, puuid, region, queue,
-                                            champion_id=picked.id if picked else None)
+                                            champion_id=picked.id if picked else None, win_model=win_model)
                     solo_history = views.rank_history(conn, puuid)
                     if solo_history["points"]:
                         ctx["rank_json"] = json.dumps({
@@ -493,11 +586,12 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                         ctx["focus"] = views.focus(rows, ctx["summary"]["patterns"], insights.baselines(conn),
                                                    views.player_tier(conn, puuid))
                 else:                                   # the header's stat band and form
-                    ctx["summary"] = views.summary(views.match_rows(conn, gd, puuid, region))
+                    ctx["summary"] = views.summary(views.match_rows(conn, gd, puuid, region,
+                                                                    win_model=win_model))
                 if tab == "champions":
                     ctx["season"] = views.champion_stats(conn, gd, puuid, cq)
                     ctx["matchups"] = views.personal_matchups(conn, gd, puuid)
-                    ctx["records"] = recap.records(conn, gd, puuid, region, riot_id)
+                    ctx["records"] = recap.records(conn, gd, puuid, region, riot_id, win_model)
                     tier_rows = champ_stats.tier_list(conn, None, "all", patch_changes(), item_changes())["rows"]
                     ctx["try"] = recap.to_try(conn, gd, puuid, tier_rows)
                 elif tab == "coach":
@@ -596,7 +690,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             picked = game_data().champion_by_slug(champ) if champ else None
             rows = views.match_rows(conn, game_data(), account["puuid"], region.lower(),
                                     queue if queue in views.QUEUE_FILTERS else "all", offset=offset,
-                                    champion_id=picked.id if picked else None)
+                                    champion_id=picked.id if picked else None, win_model=win_model)
         html = env.get_template("_match_rows.html").render(
             groups=views.day_groups(rows, after_day or None),
             detail_base=f"/fragments/players/{region}/{riot_id}/matches")
@@ -615,7 +709,8 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             account = find_account(conn, region, riot_id)[2] if region and riot_id else None
             detail = views.match_detail(conn, game_data(), match_id,
                                         account["puuid"] if account else None,
-                                        (region or PLATFORM_REGION.get(match_id.split("_")[0].lower(), "na")).lower())
+                                        (region or PLATFORM_REGION.get(match_id.split("_")[0].lower(), "na")).lower(),
+                                        win_model=win_model)
         if detail is None:
             return None
         analysis = (f"/players/{region}/{riot_id}/matches/{match_id}"
@@ -799,6 +894,9 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             curves = champ_stats.win_rate_curves(conn, champ.id, s.get("position"))
             paths = champ_stats.build_paths(conn, champ.id, s.get("position"), item_check("is_legendary"))
             table = champ_stats.matchup_table(conn, champ.id, s.get("position"))
+            from riftwatch.winprob import swing as swing_calc
+
+            champ_swing = swing_calc.champion_swing(conn, win_model, champ.id, s.get("position"))
             systems = item_changes()
             usage = champ_stats.item_usage(conn, champ.id, s.get("position"),
                                            sorted({i for c in systems for i in c["ids"]}))
@@ -820,7 +918,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                                "role_name": gamedata.POSITIONS.get(s.get("position", ""), ""),
                                "qs": _query_string(request),
                                "patch_changes": patch_changes().get(champ.id, []),
-                               "item_hits": item_hits,
+                               "item_hits": item_hits, "swing": champ_swing,
                                "mains": mains, "curves": curves,
                                "paths": [{**pth, "icon": gd.item_icon(pth["item"]),
                                           "name": gd.item(pth["item"]).name if gd.item(pth["item"]) else str(pth["item"]),

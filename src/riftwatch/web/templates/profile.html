@@ -52,6 +52,9 @@
       {% if summary.champions %}{% set c = summary.champions[0] %}
       <div class="stat"><img class="sq" src="{{ c.icon }}" alt="" loading="lazy"><div><div class="k">Most played{% if summary.main_role %} &middot; {{ summary.main_role.name }}{% endif %}</div><div class="v">{{ c.name }}</div><div class="s">{{ c.games }} games &middot; {{ c.win_rate }}% won</div></div></div>
       {% endif %}
+      {% if summary.swing %}{% set s = summary.swing %}
+      <a class="stat swing-stat" href="/swing" data-tip="Swing&#10;percentage points of win chance added for the team per game, from RiftWatch's win-probability network{% if s.wins is not none %}&#10;in wins {{ '%+.1f'|format(s.wins) }}{% endif %}{% if s.losses is not none %}, in losses {{ '%+.1f'|format(s.losses) }}{% endif %}&#10;best: {{ '%+.1f'|format(s.best.swing) }} on {{ s.best.champion }}, {{ s.best.when }}"><div><div class="k">Average Swing</div><div class="v {{ 'up' if s.avg >= 0 else 'down' }}">{{ '%+.1f'|format(s.avg) }}</div><div class="s">positive in {{ s.positive }} of {{ s.games }} games</div></div></a>
+      {% endif %}
       {% else %}
       <div class="stat"><div><div class="k">Recent games</div><div class="v muted">None yet</div><div class="s">press Update to download</div></div></div>
       {% endif %}

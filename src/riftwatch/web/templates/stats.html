@@ -13,7 +13,7 @@
     <p>{% if tab == 'items' %}Every finished item from stored ranked games: how many players ended the game with it, their win rate, and the champions that build it most.{% else %}From {{ '{:,}'.format(o.games) if o and o.games else 'stored' }} ranked solo games. These are associations, not causes: the team that takes an objective is often the stronger team already.{% endif %}</p>
   </div>
   <div class="toolbar" style="padding:0 0 14px;border:0">
-    <nav class="seg" aria-label="Section"><a href="?tab=objectives&amp;rank={{ rank }}" class="{{ 'on' if tab == 'objectives' }}">Objectives</a><a href="?tab=items&amp;rank={{ rank }}" class="{{ 'on' if tab == 'items' }}">Items</a><a href="/benchmarks">Rank benchmarks</a><a href="/patches">Patches</a></nav>
+    <nav class="seg" aria-label="Section"><a href="?tab=objectives&amp;rank={{ rank }}" class="{{ 'on' if tab == 'objectives' }}">Objectives</a><a href="?tab=items&amp;rank={{ rank }}" class="{{ 'on' if tab == 'items' }}">Items</a><a href="/benchmarks">Rank benchmarks</a><a href="/patches">Patches</a><a href="/swing">Swing</a></nav>
     <div class="grow"></div>
     <select name="rank" data-nav aria-label="Rank">{% for key, label in ranks %}<option value="{{ key }}"{{ ' selected' if rank == key }}>{{ label }}</option>{% endfor %}</select>
     {% if tab == 'items' %}<input type="search" placeholder="Find an item" data-filter="#item-body tr" aria-label="Find an item">{% endif %}

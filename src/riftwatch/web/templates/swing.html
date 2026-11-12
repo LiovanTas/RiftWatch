@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% from "_macros.html" import wr %}
+{% block title %}Swing: Who Moved the Game | RiftWatch{% endblock %}
+{% block description %}Swing measures how much each League of Legends player moved their team's chance of winning, from a neural network trained on ranked games.{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="page-title">
+    <div class="eyebrow">RiftWatch metric</div>
+    <h1>Swing</h1>
+    <p>How much each player moved their team's chance of winning, in percentage points. A neural network reads the state of a game at any moment and gives each team's chance to win. Every change in that chance, from the first minute to the end, is shared out among the players responsible. Every game starts at 50%, so the winners' Swing adds up to +50 and the losers' to -50; a player's Swing is their part of it.</p>
+  </div>
+
+  {% if not m %}
+  <div class="panel empty"><h3>The network hasn't been trained on this server yet</h3><p class="muted">Run <code>riftwatch winprob train</code>, then restart the site.</p></div>
+  {% else %}
+  <div class="recap-grid">
+    <div class="panel">
+      <div class="panel-head"><span><span class="n">01</span>The network</span><span class="muted small">tested on {{ '{:,}'.format(m.test_games) }} games it never saw</span></div>
+      <div class="panel-body">
+        <p class="small" style="margin-top:0">A small neural network (two hidden layers of {{ m.network.layers|join(' and ') }} units) trained on {{ '{:,}'.format(m.games) }} ranked games, every minute from both teams' sides ({{ '{:,}'.format(m.rows) }} moments). It reads {{ m.features|length }} numbers: the minute; the gold, XP, CS and level gaps; kills; towers; inhibitors currently down; dragons and soul; Baron and Elder (taken, and whether the buff is still up); heralds, voidgrubs and Atakhan; and how many players on each side are alive right now. It's then calibrated on separate games, so "70%" means that team won about 70% of the time.</p>
+        <table class="sw-metrics">
+          <thead><tr><th></th><th data-tip="Log loss&#10;how surprised it is by the real result, lower is better">Log loss</th><th data-tip="Brier score&#10;average squared gap between the chance and the result (0 or 1), lower is better">Brier</th><th data-tip="AUC&#10;how often it gives the eventual winner a higher chance than the loser: 0.5 is a coin flip, 1 is always">AUC</th><th data-tip="Calibration error&#10;average gap between a predicted chance and how often that actually happened, lower is better">Calib. error</th></tr></thead>
+          <tbody>
+            <tr class="net"><td>Network</td><td>{{ '%.3f'|format(m.network.log_loss) }}</td><td>{{ '%.3f'|format(m.network.brier) }}</td><td>{{ '%.3f'|format(m.network.auc) }}</td><td>{{ '%.3f'|format(m.network.ece) }}</td></tr>
+            <tr class="base"><td>Gold lead only</td><td>{{ '%.3f'|format(m.baseline.log_loss) }}</td><td>{{ '%.3f'|format(m.baseline.brier) }}</td><td>{{ '%.3f'|format(m.baseline.auc) }}</td><td>{{ '%.3f'|format(m.baseline.ece) }}</td></tr>
+          </tbody>
+        </table>
+        <p class="muted small">The baseline knows only the gold lead and the minute (a logistic regression). The network has to beat it to be worth using.</p>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><span><span class="n">02</span>How well it reads the game, by minute</span><span class="muted small">AUC</span></div>
+      <div class="panel-body">
+        <div class="auc-rows">
+          {% for span, v in m.auc_by_minute.items() %}
+          <div class="auc-row" data-tip="Minutes {{ span }}&#10;network {{ '%.3f'|format(v.network) }}, gold lead only {{ '%.3f'|format(v.baseline) }} ({{ '{:,}'.format(v.rows) }} moments)">
+            <span>{{ span }} min</span>
+            <span class="bars"><i class="net" style="width:{{ ((v.network - 0.5) * 200)|round|int }}%"></i><i class="base" style="width:{{ ((v.baseline - 0.5) * 200)|round|int }}%"></i></span>
+            <b>{{ '%.3f'|format(v.network) }}</b>
+          </div>
+          {% endfor %}
+        </div>
+        <p class="muted small">Gold bar: the network. Grey: gold lead only. Bars start at a coin flip (0.5). Early games are hard to call for anyone; the network pulls ahead late, when Baron, Elder, inhibitors and who's alive decide more than gold.</p>
+      </div>
+    </div>
+    {% if m.calibration %}
+    <div class="panel">
+      <div class="panel-head"><span><span class="n">03</span>Does 70% mean 70%?</span><span class="muted small">calibration on the test games</span></div>
+      <div class="panel-body">
+        <svg viewBox="0 0 230 220" class="calib" role="img" aria-label="Predicted chance against how often the team actually won">
+          <line class="axis" x1="34" y1="196" x2="214" y2="196"/><line class="axis" x1="34" y1="16" x2="34" y2="196"/>
+          <line class="diag" x1="34" y1="196" x2="214" y2="16"/>
+          {% for v in (0, 50, 100) %}<text class="tick" x="{{ 34 + 1.8 * v }}" y="210" text-anchor="middle">{{ v }}%</text><text class="tick" x="28" y="{{ 199 - 1.8 * v }}" text-anchor="end">{{ v }}%</text>{% endfor %}
+          <polyline points="{% for c in m.calibration %}{{ '%.1f'|format(34 + 180 * c.predicted) }},{{ '%.1f'|format(196 - 180 * c.actual) }} {% endfor %}"/>
+          {% for c in m.calibration %}<circle cx="{{ '%.1f'|format(34 + 180 * c.predicted) }}" cy="{{ '%.1f'|format(196 - 180 * c.actual) }}" r="4" data-tip="Predicted {{ (100 * c.predicted)|round|int }}%&#10;actually won {{ (100 * c.actual)|round|int }}% of {{ '{:,}'.format(c.rows) }} moments"/>{% endfor %}
+        </svg>
+        <p class="muted small">Across: the chance it gave. Up: how often that team actually won. On the dashed line, its chances are exactly right.</p>
+      </div>
+    </div>
+    {% endif %}
+    <div class="panel"{% if not m.calibration %} style="grid-column:1 / -1"{% endif %}>
+      <div class="panel-head"><span><span class="n">{{ '04' if m.calibration else '03' }}</span>How it's shared out</span></div>
+      <div class="panel-body sw-rules">
+        <div class="sw-rule"><b>Fights</b>A kill's jump goes half to the killer and half to the assisters (all to the killer if nobody helped). The player who died takes the other team's loss.</div>
+        <div class="sw-rule"><b>Objectives</b>Dragons, Baron, Elder, heralds, voidgrubs and Atakhan: half the gain goes to the players who took part, half to the whole team (who made it possible); the other team shares the loss.</div>
+        <div class="sw-rule"><b>Structures</b>Towers and inhibitors, the same way.</div>
+        <div class="sw-rule"><b>Economy</b>Whatever moved between fights (farming, plates, trading, pressure) goes to the team it favoured, half evenly and half by gold and XP earned that minute; the other team shares the loss.</div>
+      </div>
+    </div>
+  </div>
+
+  {% if live and by_role %}
+  <div class="panel" style="margin-top:16px">
+    <div class="panel-head"><span>Swing by role</span><span class="muted small">every stored game</span></div>
+    <div class="panel-body">
+      <div class="scroll"><table class="data">
+        <thead><tr><th>Role</th><th>Average</th><th>In wins</th><th>In losses</th><th>Typical range</th></tr></thead>
+        <tbody>{% for r in by_role %}<tr><td>{{ r.name }}</td><td class="sw-cell {{ 'up' if r.avg >= 0 else 'down' }}">{{ '%+.1f'|format(r.avg) }}</td><td class="sw-cell up">{{ '%+.1f'|format(r.wins) }}</td><td class="sw-cell down">{{ '%+.1f'|format(r.losses) }}</td><td class="muted">{{ '%+.0f'|format(r.p10) }} to {{ '%+.0f'|format(r.p90) }}</td></tr>{% endfor %}</tbody>
+      </table></div>
+      <p class="muted small">Junglers take part in more kills and nearly every objective, so they average a little more; a support's vision and peel show up less in kills and gold, so they average a little less. Compare players in the same role. Typical range: the middle 80% of games.</p>
+    </div>
+  </div>
+  {% endif %}
+  {% if live %}
+  <div class="toolbar" style="padding:18px 0 12px;border:0">
+    <nav class="seg" aria-label="Role"><a href="/swing" class="{{ 'on' if not role }}">All roles</a>{% for key, name in roles %}<a href="/swing?role={{ key|lower }}" class="{{ 'on' if role == key }}">{{ name }}</a>{% endfor %}</nav>
+    <div class="grow"></div>
+    <span class="muted small">{{ '{:,}'.format(stored) }} games worked out so far</span>
+  </div>
+  <div class="recap-grid">
+    <div class="panel">
+      <div class="panel-head"><span><span class="n">05</span>Champions that swing games</span><span class="muted small">15+ games, ranked against their role</span></div>
+      {% if champions %}
+      <div class="scroll"><table class="data">
+        <thead><tr><th>Champion</th><th>Games</th><th>Win rate</th><th data-tip="Average Swing&#10;over every game">Swing</th><th data-tip="Against the role&#10;average Swing minus the average for players in that role, pulled towards 0 when there are few games">vs role</th><th data-tip="Swing in wins&#10;how much of a win this champion usually carries">In wins</th><th data-tip="Swing in losses&#10;how much of a loss lands on this champion">In losses</th></tr></thead>
+        <tbody>{% for c in champions[:25] %}<tr>
+          <td><a class="champ-cell" href="/champions/{{ c.slug }}"><img src="{{ c.icon }}" alt="" loading="lazy" width="24" height="24"> {{ c.name }}{% if not role %} <span class="muted small">{{ c.role }}</span>{% endif %}</a></td>
+          <td>{{ c.games }}</td><td>{{ wr(c.win_rate) }}</td>
+          <td class="sw-cell {{ 'up' if c.avg >= 0 else 'down' }}">{{ '%+.1f'|format(c.avg) }}</td>
+          <td class="sw-cell {{ 'up' if c.rel >= 0 else 'down' }}">{{ '%+.1f'|format(c.rel) }}</td>
+          <td class="sw-cell up">{{ '%+.1f'|format(c.wins) }}</td><td class="sw-cell down">{{ '%+.1f'|format(c.losses) }}</td>
+        </tr>{% endfor %}</tbody>
+      </table></div>
+      {% else %}<div class="panel-body"><p class="muted small">Not enough games worked out yet. Swing is worked out the first time a game is opened, or for every stored game with <code>riftwatch winprob backfill</code>.</p></div>{% endif %}
+    </div>
+    <div class="panel">
+      <div class="panel-head"><span><span class="n">06</span>Biggest single-game Swings</span></div>
+      {% if games %}
+      <div class="panel-body sw-top-games">
+        {% for g in games %}<a class="sw-play up" href="/games/{{ g.match_id }}"><img src="{{ g.icon }}" alt="" width="24" height="24" loading="lazy"><span class="t">{{ g.name }} <span class="muted small">{{ g.champion }}{% if g.position %} &middot; {{ g.position }}{% endif %} &middot; {{ g.kda }} &middot; {{ 'Victory' if g.win else 'Defeat' }}</span></span><b>{{ '%+.1f'|format(g.swing) }}</b></a>{% endfor %}
+      </div>
+      {% else %}<div class="panel-body"><p class="muted small">None yet.</p></div>{% endif %}
+    </div>
+  </div>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

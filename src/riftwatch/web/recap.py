@@ -290,7 +290,8 @@ def achievements(conn: psycopg.Connection, gd: GameData, puuid: str, year: int |
 
 # -- personal records and champions to try ---------------------------------------------------
 
-def records(conn: psycopg.Connection, gd: GameData, puuid: str, region: str, riot_path: str) -> list[dict]:
+def records(conn: psycopg.Connection, gd: GameData, puuid: str, region: str, riot_path: str,
+            win_model=None) -> list[dict]:
     """The player's best single games among everything stored."""
     # Games under 15 minutes are early surrenders (an AFK the remake vote didn't catch), not
     # real records: a normal surrender can't come sooner.
@@ -325,6 +326,12 @@ def records(conn: psycopg.Connection, gd: GameData, puuid: str, region: str, rio
         g = max(best_kda, key=lambda g: (g["kills"] + g["assists"]) / max(1, g["deaths"]))
         out.append(view("Best KDA", g, "Perfect" if g["deaths"] == 0 else
                         f"{(g['kills'] + g['assists']) / g['deaths']:.1f} KDA"))
+    from riftwatch.winprob import swing
+
+    best = swing.player_best(conn, win_model, puuid)
+    by_id = {g["match_id"]: g for g in games}
+    if best and best[1] is not None and best[0] in by_id:
+        out.insert(0, view("Biggest Swing", by_id[best[0]], f"{best[1]:+.1f} Swing"))
     return out
 
 

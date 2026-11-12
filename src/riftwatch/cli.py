@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import sys
 from datetime import UTC, datetime
 
@@ -194,6 +195,78 @@ def cmd_ml_train(settings: Settings, args: argparse.Namespace) -> int:
               f"{auc('team_objective'):>13} {auc('player_died'):>9}")
     print(f"models saved to {settings.models_dir} "
           f"({trained.metrics['games']} games, tested on {trained.metrics['test_games']} unseen)")
+    return 0
+
+
+def cmd_winprob_train(settings: Settings, args: argparse.Namespace) -> int:
+    """Train the win-probability network that Swing is built on."""
+    from riftwatch.winprob import model as wp
+
+    import numpy as np
+
+    cache = Path(settings.models_dir).parent / "winprob_dataset.npz"
+    if args.reuse and cache.exists() and not args.limit:
+        print(f"reusing the games read last time ({cache})")
+        with np.load(cache) as f:
+            X, y, games, minutes = f["X"], f["y"], f["games"], f["minutes"]
+    else:
+        with connect(settings.database_url) as conn:
+            print("reading games...")
+            X, y, games, minutes = wp.load_dataset(conn, limit=args.limit)
+        if not args.limit:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(cache, X=X, y=y, games=games, minutes=minutes)
+    print(f"{len(set(games.tolist())):,} games, {len(y):,} minute snapshots (both sides)")
+    layers = tuple(int(n) for n in args.layers.split(",")) if args.layers else wp.LAYERS
+    trained, metrics = wp.train(X, y, games, minutes, layers=layers)
+    out = wp.save(trained, metrics, settings.models_dir)
+    n, b = metrics["network"], metrics["baseline"]
+    print(f"{'':<10} {'log loss':>9} {'brier':>7} {'AUC':>6} {'calib. err':>10}")
+    print(f"{'network':<10} {n['log_loss']:>9.4f} {n['brier']:>7.4f} {n['auc']:>6.3f} {n['ece']:>10.4f}")
+    print(f"{'baseline':<10} {b['log_loss']:>9.4f} {b['brier']:>7.4f} {b['auc']:>6.3f} {b['ece']:>10.4f}  (gold lead and minute only)")
+    for span, v in metrics["auc_by_minute"].items():
+        print(f"  minutes {span:<6} AUC network {v['network']:.3f}  baseline {v['baseline']:.3f}  ({v['rows']:,} rows)")
+    print(f"saved to {out} (tested on {metrics['test_games']:,} games it never saw)")
+    return 0
+
+
+def cmd_winprob_backfill(settings: Settings, args: argparse.Namespace) -> int:
+    """Work out Swing for every stored game that doesn't have it yet (pages also do it on
+    first view, so this only makes champion-wide numbers complete)."""
+    from riftwatch.web.gamedata import shared
+    from riftwatch.winprob import model as wp
+    from riftwatch.winprob import swing
+
+    model = wp.load(settings.models_dir)
+    if model is None:
+        print("no win-probability model yet: run `riftwatch winprob train` first")
+        return 1
+    gd = shared()
+    with connect(settings.database_url) as conn:
+        todo = [r[0] for r in conn.execute(
+            """SELECT t.match_id FROM match_timelines t JOIN matches m USING (match_id)
+                LEFT JOIN match_swing s ON s.match_id = t.match_id AND s.version = %s
+               WHERE s.match_id IS NULL AND m.queue_id IN (420, 440) ORDER BY t.match_id""",
+            (swing.version(model),))]
+        if args.limit:
+            todo = todo[: args.limit]
+    print(f"{len(todo):,} games to work out")
+    from concurrent.futures import ThreadPoolExecutor
+
+    def chunk(ids: list[str]) -> int:
+        # Each worker has its own connection: reading timelines waits on Postgres, so four
+        # at once keep the (single-threaded) Swing arithmetic busy.
+        with connect(settings.database_url) as conn:
+            return len(swing.for_matches(conn, model, ids, lambda c: gd.champion(c).name))
+
+    done = 0
+    chunks = [todo[i:i + 50] for i in range(0, len(todo), 50)]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for n, got in enumerate(pool.map(chunk, chunks), 1):
+            done += got
+            if n % 10 == 0 or n == len(chunks):
+                print(f"  {min(50 * n, len(todo)):,} / {len(todo):,}", flush=True)
+    print(f"{done:,} games now have Swing")
     return 0
 
 
@@ -1023,6 +1096,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--data", default="out/ml/data", help="tables from `ml dataset`")
     p.add_argument("--roles", help="comma list, e.g. JUNGLE,MIDDLE (default: all five)")
     p.set_defaults(func=cmd_ml_train)
+
+    wpcmd = sub.add_parser("winprob", help="the win-probability network behind Swing").add_subparsers(
+        dest="winprob_command", required=True)
+    p = wpcmd.add_parser("train", help="train and evaluate it on every stored game with a timeline")
+    p.add_argument("--limit", type=int, help="only this many games (a quick trial)")
+    p.add_argument("--reuse", action="store_true", help="reuse the games read last time instead of the database")
+    p.add_argument("--layers", help="hidden layer sizes, e.g. 128,64 (default 64,32)")
+    p.set_defaults(func=cmd_winprob_train)
+    p = wpcmd.add_parser("backfill", help="work out Swing for every stored game that doesn't have it")
+    p.add_argument("--limit", type=int, help="only this many games")
+    p.set_defaults(func=cmd_winprob_backfill)
 
     p = sub.add_parser("record", help="record games second by second from the game client")
     p.add_argument("--interval", type=float, default=1.0, help="seconds between samples")

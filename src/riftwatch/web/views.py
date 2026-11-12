@@ -20,6 +20,7 @@ from psycopg.rows import dict_row
 from riftwatch.riot.api import QUEUE_NAMES
 from riftwatch.web import insights
 from riftwatch.web.gamedata import POSITIONS, GameData
+from riftwatch.winprob import swing as swing_calc
 
 QUEUE_FILTERS = {"all": None, "solo": 420, "flex": 440, "normal": 400}
 QUEUE_SHORT = {420: "Ranked Solo", 440: "Ranked Flex", 400: "Normal Draft"}
@@ -152,9 +153,10 @@ def player_tier(conn: psycopg.Connection, puuid: str) -> str:
 
 def match_rows(conn: psycopg.Connection, gd: GameData, puuid: str, region: str,
                queue: str = "all", limit: int = 20, offset: int = 0,
-               tier: str | None = None, champion_id: int | None = None) -> list[dict]:
+               tier: str | None = None, champion_id: int | None = None, win_model=None) -> list[dict]:
     """The player's games, newest first, as match-history rows, each with a few notes on
-    what went well and what didn't (see insights)."""
+    what went well and what didn't (see insights) and, when the win-probability model is
+    trained, the player's Swing."""
     queue_id = QUEUE_FILTERS.get(queue)
     tier = tier or player_tier(conn, puuid)
     table = insights.baselines(conn)
@@ -192,9 +194,12 @@ def match_rows(conn: psycopg.Connection, gd: GameData, puuid: str, region: str,
                 WHERE f.match_id = ANY(%s) AND f.minute = 15 GROUP BY 1, 2""",
             ([m["match_id"] for m in mine],)):
         team15[match_id][team_id] = gold
+    swings = swing_calc.for_matches(conn, win_model, [m["match_id"] for m in mine if not m["remake"]],
+                                    lambda cid: gd.champion(cid).name)
     out = []
     for m in mine:
         players = everyone[m["match_id"]]
+        sw = (swings.get(m["match_id"]) or {}).get("players", {}).get(str(m["participant_id"]))
         scores = _scores(players)
         me = _player_view(m, gd, region)
         winners = [p for p in players if p["win"]]
@@ -230,8 +235,18 @@ def match_rows(conn: psycopg.Connection, gd: GameData, puuid: str, region: str,
                 leads.get(m["match_id"]), _team_lead(team15.get(m["match_id"]), m["team_id"]))),
             "notes": insights.card(found),
             "score_pct": round(10 * scores[m["participant_id"]]),
+            "swing": sw["total"] if sw else None, "swing_parts": _parts(sw) if sw else None,
         })
     return out
+
+
+SWING_PARTS = (("fights", "Fights"), ("objectives", "Objectives"), ("structures", "Structures"),
+               ("economy", "Economy"))
+
+
+def _parts(sw: dict) -> str:
+    """'Fights +4.1, Objectives -1.0, ...' for a tooltip."""
+    return ", ".join(f"{name} {sw[key]:+.1f}" for key, name in SWING_PARTS)
 
 
 def _team_lead(golds: dict[int, int] | None, team: int) -> int | None:
@@ -296,7 +311,19 @@ def summary(rows: list[dict]) -> dict | None:
         if r["result_key"] != streak_kind:
             break
         streak += 1
-    return {"games": len(games), "wins": wins, "losses": len(games) - wins,
+    swung = [r for r in games if r.get("swing") is not None]
+    swing = None
+    if len(swung) >= 3:
+        best = max(swung, key=lambda r: r["swing"])
+        won = [r["swing"] for r in swung if r["win"]]
+        lost = [r["swing"] for r in swung if not r["win"]]
+        swing = {"games": len(swung), "avg": round(fmean(r["swing"] for r in swung), 1),
+                 "wins": round(fmean(won), 1) if won else None,
+                 "losses": round(fmean(lost), 1) if lost else None,
+                 "positive": sum(r["swing"] > 0 for r in swung),
+                 "best": {"swing": best["swing"], "champion": best["champion"], "when": best["when"],
+                          "match_id": best["match_id"]}}
+    return {"games": len(games), "wins": wins, "losses": len(games) - wins, "swing": swing,
             "main_role": main if main["share"] else None,
             "streak": f"{streak}{'W' if streak_kind == 'win' else 'L'}",
             "streak_kind": streak_kind,
@@ -429,6 +456,116 @@ def gold_chart(series: list[dict], width: int = 720, height: int = 160) -> str |
             f"{ticks}</svg>")
 
 
+def win_chart(series: list[list[float]], end_s: float, marks: list[dict],
+              width: int = 720, height: int = 190) -> str | None:
+    """Inline SVG of blue's chance to win over the game: above the middle line blue is
+    favoured, below red is. ``series`` is [[seconds, blue %], ...]; ``marks`` are the
+    numbered moments ({"t": ms, "after": %, "n": 1})."""
+    if len(series) < 2 or end_s <= 0:
+        return None
+    pad_x, top, bottom = 40, 10, height - 18
+
+    def x(sec: float) -> float:
+        return pad_x + (width - pad_x - 8) * min(sec, end_s) / end_s
+
+    def y(v: float) -> float:
+        return bottom - (bottom - top) * v / 100
+
+    mid = y(50)
+    pts = " ".join(f"{x(t):.1f},{y(v):.1f}" for t, v in series)
+    area = f"{x(series[0][0]):.1f},{mid:.1f} {pts} {x(series[-1][0]):.1f},{mid:.1f}"
+    ticks = "".join(f'<text x="{x(m * 60):.1f}" y="{height - 3}" class="tick" text-anchor="middle">{m}</text>'
+                    for m in range(0, int(end_s // 60) + 1, 5))
+    grid = "".join(f'<line x1="{pad_x}" x2="{width - 8}" y1="{y(v):.1f}" y2="{y(v):.1f}" class="grid"/>'
+                   f'<text x="{pad_x - 6}" y="{y(v) + 4:.1f}" class="tick" text-anchor="end">{v}%</text>'
+                   for v in (0, 25, 75, 100))
+    placed: list[tuple[float, float]] = []
+    dots = ""
+    for m in marks:                                   # nudge markers that would overlap
+        mx, my = x(m["t"] / 1000), y(m["after"])
+        step = 17 if my < (top + bottom) / 2 else -17     # away from the nearer edge
+        for _ in range(6):
+            if not any(abs(mx - px) < 15 and abs(my - py) < 15 for px, py in placed):
+                break
+            my += step
+        placed.append((mx, my))
+        dots += (f'<g class="mark" transform="translate({mx:.1f},{my:.1f})">'
+                 f'<circle r="8"/><text y="3.5" text-anchor="middle">{m["n"]}</text></g>')
+    return (f'<svg viewBox="0 0 {width} {height}" class="gold-chart win-chart" role="img" '
+            f'aria-label="Blue team&#39;s chance to win over the game">'
+            f'<defs><clipPath id="wabove"><rect x="0" y="0" width="{width}" height="{mid:.1f}"/></clipPath>'
+            f'<clipPath id="wbelow"><rect x="0" y="{mid:.1f}" width="{width}" height="{height}"/></clipPath></defs>'
+            f'{grid}<line x1="{pad_x}" x2="{width - 8}" y1="{mid:.1f}" y2="{mid:.1f}" class="axis"/>'
+            f'<text x="{pad_x - 6}" y="{mid + 4:.1f}" class="tick" text-anchor="end">50%</text>'
+            f'<polygon points="{area}" class="area-blue" clip-path="url(#wabove)"/>'
+            f'<polygon points="{area}" class="area-red" clip-path="url(#wbelow)"/>'
+            f'<polyline points="{pts}" class="line"/>{dots}{ticks}</svg>')
+
+
+def swing_view(sw: dict, players: list[dict], gd: GameData, me: dict | None) -> dict:
+    """The Win chance tab: the chart, everyone's Swing by team, the moments that moved the
+    game most, and the player's own biggest plays and costliest moments."""
+    by_pid = {p["participant_id"]: p for p in players}
+    my_team = me["team_id"] if me else None
+    order = sorted(swing_calc.top_moments(sw, 8), key=lambda m: m["t"])
+    numbered = {(m["t"], m["text"]): i + 1 for i, m in enumerate(order)}
+
+    my_pid = me["participant_id"] if me else None
+
+    def how(m: dict) -> str | None:
+        """The player's part in a moment: their kill, an assist, their death, or taking part."""
+        if my_pid is None:
+            return None
+        if my_pid in m.get("lost", []):
+            return "you died"
+        if m["part"] == "fights" and my_pid in m["players"]:
+            return None if m.get("by") == my_pid else "assist"
+        if my_pid in m["players"]:
+            return "you helped"
+        return None
+
+    def moment(m: dict, amount: float | None = None) -> dict:
+        return {"n": numbered.get((m["t"], m["text"])), "clock": m["clock"], "text": m["text"], "how": how(m),
+                "part": m["part"], "swing": m["swing"], "team": m["team"], "before": m["before"],
+                "after": m["after"], "good": (m["team"] == my_team) if my_team else None, "amount": amount,
+                "icons": [gd.champion_icon(by_pid[x]["champion_id"]) for x in m["players"][:5] if x in by_pid]}
+
+    peak = max([abs(v["total"]) for v in sw["players"].values()] + [1])
+    teams = []
+    for team_id, label in ((100, "Blue"), (200, "Red")):
+        rows = []
+        for p in players:
+            v = sw["players"].get(str(p["participant_id"]))
+            if p["team_id"] != team_id or v is None:
+                continue
+            rows.append({"name": p["riot_name"] or "Unknown", "champion": gd.champion(p["champion_id"]).name,
+                         "icon": gd.champion_icon(p["champion_id"]),
+                         "position": POSITIONS.get(p["position"] or "", ""),
+                         "total": v["total"], "bar": round(50 * abs(v["total"]) / peak),
+                         "parts": [{"key": k, "name": n, "value": v[k]} for k, n in SWING_PARTS],
+                         "me": me is not None and p["participant_id"] == me["participant_id"]})
+        rows.sort(key=lambda r: -r["total"])
+        if rows:
+            teams.append({"id": team_id, "label": label, "win": sw["winner"] == team_id, "players": rows})
+    mine = None
+    if me is not None and str(me["participant_id"]) in sw["players"]:
+        v = sw["players"][str(me["participant_id"])]
+        everyone = sorted((x["total"] for x in sw["players"].values()), reverse=True)
+        moments = sw["moments"]
+        mine = {"total": v["total"], "rank": everyone.index(v["total"]) + 1,
+                "parts": [{"key": k, "name": n, "value": v[k]} for k, n in SWING_PARTS],
+                "best": [moment(moments[b["moment"]], b["swing"]) for b in v.get("best", [])],
+                "worst": [moment(moments[b["moment"]], b["swing"]) for b in v.get("worst", [])],
+                "strongest": max(SWING_PARTS, key=lambda kn: v[kn[0]])[1],
+                "weakest": min(SWING_PARTS, key=lambda kn: v[kn[0]])[1]}
+    marks = [{"t": m["t"], "after": m["after"], "n": i + 1} for i, m in enumerate(order)]
+    values = [v for _, v in sw["series"]]
+    return {"chart": win_chart(sw["series"], sw["end_s"], marks),
+            "data": json.dumps({"series": sw["series"], "end": sw["end_s"], "team": my_team}),
+            "teams": teams, "moments": [moment(m) for m in order], "me": mine,
+            "peak_blue": max(values), "low_blue": min(values)}
+
+
 def _rune_page(p: dict, gd: GameData) -> dict | None:
     if not p.get("perks"):
         return None
@@ -466,7 +603,7 @@ def _skill_grid(order: str | None) -> list[dict]:
 
 
 def match_detail(conn: psycopg.Connection, gd: GameData, match_id: str, puuid: str | None,
-                 region: str) -> dict | None:
+                 region: str, win_model=None) -> dict | None:
     players = _rows(conn, "SELECT * FROM participant_builds WHERE match_id = %s "
                           "ORDER BY participant_id", (match_id,))
     if not players:
@@ -532,6 +669,13 @@ def match_detail(conn: psycopg.Connection, gd: GameData, match_id: str, puuid: s
                  and p["position"] == me["position"]), None) if me is not None else None)
     gold = _gold_series(timeline[0] if timeline else None,
                         me["participant_id"] if me else None, opp["participant_id"] if opp else None)
+    sw = swing_calc.for_timeline(conn, win_model, match_id, timeline[0] if timeline else None,
+                                 {p["participant_id"]: gd.champion(p["champion_id"]).name for p in players})
+    if sw is not None:
+        for t in teams:
+            for v, p in zip(t["players"], [p for p in players if p["team_id"] == t["id"]], strict=True):
+                got = sw["players"].get(str(p["participant_id"]))
+                v["swing"], v["swing_parts"] = (got["total"], _parts(got)) if got else (None, None)
     notes = None
     if me is not None:
         tier = player_tier(conn, me["puuid"])
@@ -554,6 +698,7 @@ def match_detail(conn: psycopg.Connection, gd: GameData, match_id: str, puuid: s
         "date": players[0]["game_start"].strftime("%b %d, %Y %H:%M UTC"), "when": ago(players[0]["game_start"]),
         "queue": QUEUE_NAMES.get(players[0]["queue_id"], "Custom"), "patch": players[0]["patch"],
         "teams": teams, "gold_chart": gold_chart(gold),
+        "swing": swing_view(sw, players, gd, me) if sw else None,
         "gold_data": json.dumps({"series": gold, "team": me["team_id"] if me else None,
                                  "opp": gd.champion(opp["champion_id"]).name if opp else None}),
         "gold_end": gold[-1]["diff"] if gold else None,

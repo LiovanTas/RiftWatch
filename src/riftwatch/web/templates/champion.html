@@ -41,6 +41,7 @@
     <div class="kpi"><span>Pick rate</span><b>{{ '%.1f'|format(s.pick_rate) }}%</b></div>
     <div class="kpi"><span>Ban rate</span><b>{{ '%.1f'|format(s.ban_rate) }}%</b></div>
     <div class="kpi"><span>Games</span><b>{{ '{:,}'.format(s.games) }}</b></div>
+    {% if swing %}<a class="kpi" href="/swing" data-tip="Average Swing&#10;percentage points of win chance this champion adds for its team per game{% if role_name %} as {{ role_name }}{% endif %}: {{ '%+.1f'|format(swing.wins) }} in wins, {{ '%+.1f'|format(swing.losses) }} in losses ({{ '{:,}'.format(swing.games) }} games)"><span>Swing</span><b class="{{ 'up' if swing.avg >= 0 else 'down' }}">{{ '%+.1f'|format(swing.avg) }}</b></a>{% endif %}
     <div class="kpi"><span>KDA</span><b>{{ '%.2f'|format(s.kda) }}</b></div>
     <div class="kpi"><span>CS / min</span><b>{{ '%.1f'|format(s.cs_min) }}</b></div>
     <div class="kpi"><span>Damage / min</span><b>{{ '{:,}'.format(s.dmg_min|round|int) }}</b></div>

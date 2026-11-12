@@ -32,7 +32,7 @@
         </div>
         <div class="m-items">
           {{ item_slot(m['items'][0]) }}{{ item_slot(m['items'][1]) }}{{ item_slot(m['items'][2]) }}{{ item_slot(m['items'][3]) }}{{ item_slot(m['items'][4]) }}{{ item_slot(m['items'][5]) }}<span class="sep"></span>{{ item_slot(m.trinket) }}
-          <span class="tags">{% if m.multikill %}<span class="badge multi">{{ m.multikill }}</span>{% endif %}{% if not m.badge and m.result_key != 'remake' %}<span class="badge rank">{{ m.rank_in_game|ordinal }} of 10</span>{% endif %}</span>
+          <span class="tags">{% if m.swing is not none %}<span class="badge swing {{ 'up' if m.swing >= 0 else 'down' }}" data-tip="Swing {{ '%+.1f'|format(m.swing) }}&#10;percentage points of win chance you added for your team: {{ m.swing_parts }}">{{ '%+.1f'|format(m.swing) }} swing</span>{% endif %}{% if m.multikill %}<span class="badge multi">{{ m.multikill }}</span>{% endif %}{% if not m.badge and m.result_key != 'remake' %}<span class="badge rank">{{ m.rank_in_game|ordinal }} of 10</span>{% endif %}</span>
         </div>
         {% if m.notes %}<div class="m-notes">{% for n in m.notes %}<span class="note {{ n.kind }}" data-tip="{{ 'Did well' if n.kind == 'good' else 'Could improve' }}: {{ n.label }}&#10;{{ n.why }}">{{ n.label }}</span>{% endfor %}</div>{% endif %}
       </div>

@@ -41,16 +41,19 @@ _cache: dict[tuple, tuple[float, Any]] = {}
 _lock = threading.Lock()
 
 
-def _cached(key: tuple, build):
+def _cached(key: tuple, build, fresh: bool = False):
     now = time.monotonic()
     with _lock:
         hit = _cache.get(key)
-        if hit and now - hit[0] < CACHE_S:
+        if hit and now - hit[0] < CACHE_S and not fresh:
             return hit[1]
     value = build()
     with _lock:
         _cache[key] = (now, value)
     return value
+
+
+cached = _cached           # for other pages' slow numbers, on the same 10-minute clock
 
 
 def clear_cache() -> None:
@@ -86,14 +89,14 @@ def shrunk(wins: float, games: float) -> float:
 
 def tier_list(conn: psycopg.Connection, patch: str | None = None, rank: str = "all",
               changes: dict[int, list[dict]] | None = None,
-              systems: list[dict] | None = None) -> dict:
+              systems: list[dict] | None = None, fresh: bool = False) -> dict:
     """Every champion in every role it's really played in, with win, pick and ban rates and a
     tier, plus its hardest lane matchups. With ``changes`` (champion id -> patch-note changes,
     see stats.patches) each changed champion's score is nudged for buffs and nerfs the data
     predates, and ``tier_raw`` keeps the tier the data alone gives. ``systems`` (item changes
     from stats.patches.systems) move each champion by how often it buys the item."""
     return _cached(("tiers", patch, rank, bool(changes or systems)),
-                   lambda: _tier_list(conn, patch, rank, changes or {}, systems or []))
+                   lambda: _tier_list(conn, patch, rank, changes or {}, systems or []), fresh)
 
 
 def _assign_tiers(group: list[dict], key: str, field: str) -> None:

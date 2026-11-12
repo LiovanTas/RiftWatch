@@ -46,9 +46,14 @@ def web(request, tmp_path):
     coach, coach_calls = fake_coach(ok, ok, ok)
     # Tests can pass extra settings with @pytest.mark.parametrize("web", [{...}], indirect=True).
     # An empty models folder, so the tests don't load whatever models are trained locally.
+    params = dict(getattr(request, "param", {}))
+    if params.pop("winprob", False):          # a tiny win-probability network, for Swing
+        from tests.test_winprob import tiny_model
+
+        tiny_model(tmp_path / "models")
     settings = Settings.from_env({"RIFTWATCH_DATABASE_URL": TEST_DB,
                                   "RIFTWATCH_MODELS_DIR": str(tmp_path / "models"),
-                                  **getattr(request, "param", {})})
+                                  **params})
     from riftwatch.web.gamedata import GameData
 
     from riftwatch.web import insights, mapview
@@ -58,6 +63,9 @@ def web(request, tmp_path):
     mapview.clear_cache()         # module-level caches would carry one test's games into the next
     insights.clear_cache()
     game_stats.clear_cache()
+    from riftwatch.stats import champions as champion_stats
+
+    champion_stats.clear_cache()
     gd = GameData()
     gd.loaded = True              # no Data Dragon in tests: names fall back, icons are empty
     app = create_app(settings, api=api, coach=coach, pool=pool, jobs=jobs, gamedata=gd)
@@ -506,3 +514,47 @@ def test_death_map_matchup_page_and_timeline_tab(web):
     detail = client.get(f"/fragments/players/na/Me-NA1/matches/{api.ids[0]}").text
     assert 'data-pane="log"' in detail and 'class="event-log"' in detail
     assert client.get("/matchups/nobody/noone").status_code == 404
+
+
+@pytest.mark.parametrize("web", [{"winprob": True}], indirect=True)
+def test_swing_on_match_history_the_game_and_its_page(web, tmp_path):
+    client, api, _, jobs = web
+    sync(client, jobs)
+    page = client.get("/players/na/Me-NA1").text
+    assert "badge swing" in page and "Average Swing" in page
+    detail = client.get(f"/fragments/players/na/Me-NA1/matches/{api.ids[0]}").text
+    assert 'data-pane="swing"' in detail and "Win chance" in detail and "Your Swing" in detail
+    assert "win-chart" in detail and "Moments that moved the game most" in detail
+    assert 'class="sw-cell' in detail                                  # the scoreboard column
+    assert ">+50<" in detail and ">-50<" in detail
+    from psycopg import connect
+
+    with connect(TEST_DB) as conn:                                     # worked out once, then stored
+        stored = conn.execute("SELECT count(*) FROM match_swing").fetchone()[0]
+    assert stored >= len(api.ids)
+    assert client.get(f"/games/{api.ids[0]}").status_code == 200
+    swing_page = client.get("/swing").text
+    assert "Gold lead only" in swing_page and "Does 70% mean 70%?" in swing_page
+    assert "Biggest single-game Swings" in swing_page and 'href="/games/' in swing_page
+    assert client.get("/swing?role=jungle").status_code == 200
+    # Every stored game worked out: champion averages and the player's biggest game.
+    from riftwatch.winprob import model as wp
+    from riftwatch.winprob import swing
+
+    model = wp.load(tmp_path / "models")
+    with connect(TEST_DB, autocommit=True) as conn:
+        ids = [r[0] for r in conn.execute("SELECT match_id FROM match_timelines")]
+        assert len(swing.for_matches(conn, model, ids)) == len(ids)
+        champion, position = conn.execute(
+            "SELECT champion_id, position FROM participant_builds GROUP BY 1, 2 ORDER BY count(*) DESC LIMIT 1").fetchone()
+        got = swing.champion_swing(conn, model, champion, position)
+    assert got is not None and got["games"] >= 15 and isinstance(got["avg"], float)
+    assert "Biggest Swing" in client.get("/players/na/Me-NA1?tab=champions").text
+
+
+def test_swing_needs_a_trained_network(web):
+    client, api, _, jobs = web
+    sync(client, jobs)
+    assert "hasn't been trained" in client.get("/swing").text
+    detail = client.get(f"/fragments/players/na/Me-NA1/matches/{api.ids[0]}").text
+    assert 'data-pane="swing"' not in detail and "badge swing" not in client.get("/players/na/Me-NA1").text

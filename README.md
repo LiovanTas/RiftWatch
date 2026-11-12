@@ -79,6 +79,8 @@ riftwatch coach "Name#TAG" --last --html last-game.html
 | `cache` | Cache size and hit rate |
 | `watchdog` | Arms the black-screen kill switch (Windows); `--record` also records each game |
 | `record` | Records games second by second from the game client; `--import` links recordings to matches |
+| `winprob train` | Trains the win-probability network behind Swing and compares it with a gold-only baseline; `--reuse` skips re-reading the games |
+| `winprob backfill` | Works out Swing for every stored game that doesn't have it yet |
 | `serve` | Runs the website and JSON API on http://127.0.0.1:8000 |
 | `doctor`, `db migrate`, `db status` | Setup checks and schema migrations |
 
@@ -275,6 +277,12 @@ with RiftWatch's coaching built in.
   - the player's item build by minute, skill order and rune page
   - a team gold graph; hovering shows each minute's exact gold for both teams, the player
     and their lane opponent
+  - **Win chance:** blue's chance to win at every moment of the game (from the
+    win-probability network, see *Win probability and Swing*), with the eight moments that
+    moved it most numbered on the chart. Below it, every player's **Swing** by team, split
+    into fights, objectives, structures and economy, and the player's own biggest plays and
+    costliest moments (their kills, assists, deaths and objectives). The scoreboard gets a
+    Swing column, each match card a Swing chip, and the profile an average
   - **Timeline:** every kill, objective and tower in order, with the player's finished items
     and levels 6, 11 and 16, filterable to what involved them
   - **High Elo Comparison:** the game replayed minute by minute on the minimap (every
@@ -583,6 +591,74 @@ with the options high-elo players actually chose in similar spots. A *key moment
 choice was uncommon and a common alternative was followed by clearly better outcomes. The
 review shows those moments, and the coach explains them as "in similar Grandmaster/Challenger
 situations, most players..." -- never "you should have".
+
+## Win probability and Swing
+
+```bash
+riftwatch winprob train       # reads every stored game, trains, compares, saves to out/ml/models/winprob
+riftwatch winprob backfill    # Swing for every stored game (pages also do it on first view)
+```
+
+**Swing** is RiftWatch's own impact metric: how many percentage points of win chance a
+player added for their team. A neural network reads the state of a game at any moment and
+gives each team's chance to win. Every change in that chance is shared out among the players
+responsible (`winprob/swing.py`):
+
+- **fights:** a kill's jump goes half to the killer and half to the assisters (all to the
+  killer when nobody helped); the player who died takes the other team's loss
+- **objectives:** dragons, Baron, Elder, heralds, voidgrubs and Atakhan: half the gain to the
+  players who took part, half to the whole team; the other team shares the loss
+- **structures:** towers and inhibitors, the same way
+- **economy:** whatever moved between minutes that no event explains (farming, plates,
+  trading, pressure) goes to the team it favoured, half evenly and half by each player's gold
+  and XP earned that minute; the other team shares the loss evenly. The last step, from the
+  final minute to the result, is shared evenly too.
+
+The two "half" rules are there so the rules themselves don't favour a role. Giving all of an
+objective to whoever took part, and all of the economy by gold earned, left junglers at +6.9
+a game and supports at -4.3 (800 ranked games); the half split narrows that to +4.7 and -2.5.
+Sharing everything evenly narrows it further but throws away who did what. What's left is
+real (junglers are in more kills), and `/swing` shows each role's average so players are
+compared within their role.
+
+Every game starts at exactly 50% (both sides look the same, and the network is asked from
+both sides and averaged), so a winning team's Swing adds up to +50 and a losing team's to -50.
+
+The state (`winprob/state.py`) has 29 inputs, all rebuilt from the timeline at any second:
+the minute; gold, XP, CS and level gaps (interpolated between minute frames); kills; towers;
+inhibitors currently down; dragons and soul; Baron and Elder taken and whether the buff is
+still up; heralds, voidgrubs and Atakhan; and how many players on each side are alive, from
+respawn timers. The model (`winprob/model.py`) is a scikit-learn MLP (two hidden layers, 64
+and 32 units, ReLU, early stopping) on standardised inputs, then isotonic calibration on
+separate games. Games, not rows, are split 70/15/15 into training, calibration and test.
+
+Measured on 1,374 games it never saw (9,156 ranked games, 515,020 moments seen from both sides):
+
+| | Log loss | Brier | AUC | Calibration error |
+|---|---|---|---|---|
+| Network | **0.532** | **0.181** | **0.802** | **0.007** |
+| Gold lead and minute only (logistic regression) | 0.546 | 0.186 | 0.790 | 0.012 |
+
+| Minutes | 0-10 | 10-15 | 15-20 | 20-25 | 25-30 | 30+ |
+|---|---|---|---|---|---|---|
+| AUC, network | 0.673 | 0.788 | 0.833 | 0.873 | 0.894 | 0.885 |
+| AUC, gold only | 0.665 | 0.777 | 0.828 | 0.868 | 0.883 | 0.836 |
+
+The network beats the baseline everywhere, and most after 30 minutes, when Baron, Elder,
+open inhibitors and who's alive decide games more than gold does. Calibrated chances hold up:
+moments it called 74% were won 73% of the time. A larger network (128 and 64 units) gained
+nothing worth its size (log loss 0.5312 against 0.5320). Training takes about 30 seconds;
+reading the games takes about 6 minutes, so `--reuse` trains again from the copy saved in
+`out/ml/winprob_dataset.npz`.
+
+A game's Swing is worked out once (about 30 ms; the state at a few hundred moments, then one
+batch through the network) and stored in `match_swing` (the curve and moments) and
+`player_swing` (one row per player, for the pages that add it up), tagged with the model it
+came from, so a retrained model recomputes it. Synced games get it straight away; the backfill
+did all 9,315 stored games in about 9 minutes. `/swing` explains the metric with the numbers
+above, each role's average, the champions with the most Swing against their role's average
+(pulled towards it for small samples, like win rates on the tier board) and the biggest
+single games. Its tables are rebuilt in the background with the tier board, every 9 minutes.
 
 ## Live recording (Windows)
 
