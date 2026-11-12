@@ -15,6 +15,7 @@ import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from statistics import median
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -283,6 +284,28 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                       profile_url=f"/players/{region.lower()}/{riot_id}",
                       played_json=json.dumps(data["played"]) if data else "[]")
 
+    @app.get("/benchmarks", response_class=HTMLResponse)
+    def benchmarks_page(role: str = "", me: str = "") -> HTMLResponse:
+        """What a typical player does at each rank in a role, and where a player's numbers sit."""
+        ctx: dict[str, Any] = {"me": me, "me_found": False}
+        with pool.connection() as conn:
+            found = recap.locate(conn, *views.parse_lobby(me)[0]) if views.parse_lobby(me) else None
+            mine = tier = None
+            if found:
+                puuid = found[0]
+                position = role.upper() if role.upper() in gamedata.POSITIONS else (
+                    champ_stats.mains(conn, [puuid]).get(puuid, {}).get("role") or "MIDDLE")
+                mine = views.role_stats(conn, puuid, position)
+                tier = views.player_tier(conn, puuid)
+                ctx.update(me_found=True, me_name=f"{found[2]}#{found[3]}",
+                           me_url=f"/players/{PLATFORM_REGION.get(found[1], found[1])}/{views.path_id(found[2], found[3])}",
+                           me_tier=insights.TIER_NAME.get(tier, "") if tier != "ALL" else "")
+            else:
+                position = role.upper() if role.upper() in gamedata.POSITIONS else "MIDDLE"
+            data = views.benchmarks(insights.baselines(conn), position, mine, tier)
+        return render("benchmarks.html", nav="benchmarks", role=position,
+                      role_name=gamedata.POSITIONS.get(position, ""), b=data, **ctx)
+
     @app.get("/patches", response_class=HTMLResponse)
     def patches_page() -> HTMLResponse:
         """Recent patch notes, and how each change moved champions on the tier board."""
@@ -474,6 +497,9 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                 if tab == "champions":
                     ctx["season"] = views.champion_stats(conn, gd, puuid, cq)
                     ctx["matchups"] = views.personal_matchups(conn, gd, puuid)
+                    ctx["records"] = recap.records(conn, gd, puuid, region, riot_id)
+                    tier_rows = champ_stats.tier_list(conn, None, "all", patch_changes(), item_changes())["rows"]
+                    ctx["try"] = recap.to_try(conn, gd, puuid, tier_rows)
                 elif tab == "coach":
                     ctx.update(_coach_tab(conn, puuid, region, riot_id))
                 elif tab == "live":
@@ -762,6 +788,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             mains = views.champion_players(conn, champ.id, s.get("position"), PLATFORM_REGION)
             duo = champ_stats.partners(conn, champ.id, s.get("position"))
             curves = champ_stats.win_rate_curves(conn, champ.id, s.get("position"))
+            paths = champ_stats.build_paths(conn, champ.id, s.get("position"), item_check("is_legendary"))
             table = champ_stats.matchup_table(conn, champ.id, s.get("position"))
             systems = item_changes()
             usage = champ_stats.item_usage(conn, champ.id, s.get("position"),
@@ -786,6 +813,11 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                                "patch_changes": patch_changes().get(champ.id, []),
                                "item_hits": item_hits,
                                "mains": mains, "curves": curves,
+                               "paths": [{**pth, "icon": gd.item_icon(pth["item"]),
+                                          "name": gd.item(pth["item"]).name if gd.item(pth["item"]) else str(pth["item"]),
+                                          "next": [{**n, "icon": gd.item_icon(n["item"]),
+                                                    "name": gd.item(n["item"]).name if gd.item(n["item"]) else str(n["item"])}
+                                                   for n in pth["next"]]} for pth in paths],
                                "matchup_rows": [{**m, "name": gd.champion(m["champion_id"]).name,
                                                  "slug": gd.champion(m["champion_id"]).slug,
                                                  "icon": gd.champion_icon(m["champion_id"])}
@@ -876,7 +908,20 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
         ids = views.parse_lobby(q)
         with pool.connection() as conn:
             cards = [views.multi_card(conn, gd_, n, t, PLATFORM_REGION) for n, t in ids]
-        return render("multi.html", nav="multi", q=q, cards=cards,
+        # The lobby at a glance: average rank and recent form of the players found.
+        ranked = [c for c in cards if c.get("rank")]
+        summary = None
+        if ranked or any(c.get("games") for c in cards):
+            scores = [views.ladder_score(c["rank"]["tier"].upper(), c["rank"]["division"] or None, c["rank"]["lp"])
+                      for c in ranked]
+            recent = [c for c in cards if c.get("games")]
+            summary = {"found": sum(1 for c in cards if c["found"]), "of": len(cards),
+                       # the median: one Challenger's thousands of LP would drag a mean far up
+                       "rank": views.ladder_label(median(scores)).rsplit(" ", 2)[0] if scores else None,
+                       "win_rate": round(sum(c["win_rate"] for c in recent) / len(recent)) if recent else None,
+                       "hot": [c["name"] for c in recent if c["streak"].endswith("W") and int(c["streak"][:-1]) >= 3],
+                       "cold": [c["name"] for c in recent if c["streak"].endswith("L") and int(c["streak"][:-1]) >= 3]}
+        return render("multi.html", nav="multi", q=q, cards=cards, summary=summary,
                       unparsed=bool(q.strip()) and not ids)
 
     # -- leaderboard ------------------------------------------------------------------------

@@ -487,3 +487,10 @@ def test_patches_page_and_champion_search(web):
     assert page.status_code == 200 and "Patch notes, and what they moved" in page.text and "Patch 26.22" in page.text
     found = client.get("/api/autocomplete?q=ah").json()
     assert "players" in found and "champions" in found
+
+
+def test_benchmarks_page(web):
+    client, *_ = web
+    page = client.get("/benchmarks?role=jungle")
+    assert page.status_code == 200 and "What jungle players do at each rank" in page.text
+    assert client.get("/benchmarks?role=nonsense").status_code == 200

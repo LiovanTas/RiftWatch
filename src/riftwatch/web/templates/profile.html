@@ -233,6 +233,22 @@
   </div>
 
 {% elif tab == 'champions' %}
+  {% if try and try.picks %}
+  <div class="panel try-panel" style="margin-top:20px">
+    <div class="panel-head"><span><span class="n">&#9733;</span>Champions to try</span><span class="muted small">strong in {{ try.role|lower }} right now{% if try.best %}, chosen to suit your {{ try.best|join(' and ') }}{% endif %}</span></div>
+    <div class="panel-body try-grid">
+      {% for c in try.picks %}<a class="try-card" href="/champions/{{ c.slug }}?role={{ try.position|lower }}"><img src="{{ c.icon }}" alt=""><div><b>{{ c.name }}</b> <span class="tier-b t-{{ c.tier|replace('+', 'p') }}">{{ c.tier }}</span><p>{{ c.reason[:1]|upper }}{{ c.reason[1:] }}</p><small>{{ c.win_rate|round|int }}% win rate over {{ '{:,}'.format(c.games) }} games{% if c.played %} &middot; you've played {{ c.played }}{% endif %}</small></div></a>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  {% if records %}
+  <div class="panel" style="margin-top:12px">
+    <div class="panel-head"><span><span class="n">&#9873;</span>Personal records</span><span class="muted small">every stored game</span></div>
+    <div class="panel-body records">
+      {% for r in records %}<a class="rec" href="{{ r.url }}"><img src="{{ r.icon }}" alt=""><div><span>{{ r.label }}</span><b>{{ r.value }}</b><small>{{ r.champion }} {{ r.kda }} &middot; {{ r.date }} &middot; {{ 'win' if r.win else 'loss' }}</small></div></a>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
   {% if matchups and (matchups.hard or matchups.easy) %}
   <div class="cols-2" style="margin:20px 0 12px">
     {% for kind, title, note in (('hard', 'Your hardest lane opponents', 'most losses beyond an even record'), ('easy', 'Your easiest lane opponents', 'most wins beyond an even record')) %}

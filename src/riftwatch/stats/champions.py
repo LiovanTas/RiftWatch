@@ -426,3 +426,43 @@ def mains(conn: psycopg.Connection, puuids: list[str], top: int = 3) -> dict[str
                       "role": roles[puuid].most_common(1)[0][0] if roles[puuid] else None,
                       "games": sum(merged.values())}
     return out
+
+
+def build_paths(conn: psycopg.Connection, champion_id: int, position: str | None, is_legendary,
+                firsts: int = 4, seconds: int = 3) -> list[dict]:
+    """The most common first finished items, and for each the second items bought after it,
+    with games and win rates."""
+    if not position:
+        return []
+    return _cached(("paths", champion_id, position), lambda: _build_paths(conn, champion_id, position,
+                                                                         is_legendary, firsts, seconds))
+
+
+def _build_paths(conn, champion_id, position, is_legendary, firsts, seconds):
+    first: dict[int, list[int]] = defaultdict(lambda: [0, 0])
+    pair: dict[tuple[int, int], list[int]] = defaultdict(lambda: [0, 0])
+    for purchases, items, win in conn.execute(
+            """SELECT purchases, items, win FROM participant_builds WHERE champion_id = %s AND position = %s
+                AND queue_id = %s AND NOT remake""", (champion_id, position, RANKED_SOLO)):
+        seq: list[int] = []
+        for i in (purchases or items or []):
+            if i and i not in seq and is_legendary(i):
+                seq.append(i)
+            if len(seq) == 2:
+                break
+        if not seq:
+            continue
+        first[seq[0]][0] += 1
+        first[seq[0]][1] += win
+        if len(seq) == 2:
+            pair[(seq[0], seq[1])][0] += 1
+            pair[(seq[0], seq[1])][1] += win
+    out = []
+    for item, (n, w) in sorted(first.items(), key=lambda kv: -kv[1][0])[:firsts]:
+        if n < 10:
+            continue
+        nexts = sorted(((m, (pn, pw)) for (a, m), (pn, pw) in pair.items() if a == item and pn >= 5),
+                       key=lambda kv: -kv[1][0])[:seconds]
+        out.append({"item": item, "games": n, "win_rate": 100 * w / n,
+                    "next": [{"item": m, "games": pn, "win_rate": 100 * pw / pn} for m, (pn, pw) in nexts]})
+    return out

@@ -370,3 +370,34 @@ def test_tilt_splits_sessions_and_finds_losing_streak_effects():
     assert [b["win_rate"] for b in t["by_index"]] == [0, 0, 0, 100]
     assert t["after_two"] == {"games": 24, "win_rate": 50}
     assert tilt(Conn(), "p", min_games=100) is None
+
+
+def test_benchmarks_place_each_number_at_a_rank():
+    from riftwatch.web.views import benchmarks
+    def tier(cs, deaths):
+        return {"cs_min": (0, cs, 0, 500), "dmg_min": (0, 600, 0, 500), "vision_min": (0, 0.9, 0, 500),
+                "kp": (0, 0.5, 0, 500), "deaths_10": (0, deaths, 0, 500), "control_wards": (0, 1, 0, 500)}
+    table = {("SILVER", "MIDDLE"): tier(6.0, 2.2), ("GOLD", "MIDDLE"): tier(6.5, 2.0),
+             ("PLATINUM", "MIDDLE"): tier(7.0, 1.9)}
+    mine = {"cs_min": 6.6, "dmg_min": 700, "vision_min": 0.5, "kp": 0.5, "deaths_10": 2.1, "control_wards": 1}
+    b = benchmarks(table, "MIDDLE", mine, "GOLD")
+    assert b["tiers"] == ["Silver", "Gold", "Platinum"]
+    rows = {r["key"]: r for r in b["rows"]}
+    assert rows["cs_min"]["like"] == "Gold" and rows["cs_min"]["met"] == [True, True, False]
+    assert rows["deaths_10"]["like"] == "Silver"                    # lower is better
+    assert rows["vision_min"]["like"] == "below Iron"
+    assert b["step"]["next"] == "Platinum" and b["step"]["label"] == "Vision per minute"
+
+
+def test_build_paths_follow_purchase_order():
+    from riftwatch.stats import champions as cs
+    rows = [([1001, 3031, 3036], None, True)] * 12 + [([3031, 6672], None, False)] * 6 + [([6672, 3031], None, True)] * 3
+
+    class Conn:
+        def execute(self, sql, params):
+            return iter(rows)
+    cs.clear_cache()
+    paths = cs._build_paths(Conn(), 1, "BOTTOM", lambda i: i > 3000, 4, 3)
+    assert paths[0]["item"] == 3031 and paths[0]["games"] == 18
+    assert {n["item"]: n["games"] for n in paths[0]["next"]} == {3036: 12, 6672: 6}
+    assert all(p["games"] >= 10 for p in paths)                     # 6672 first only 3 times

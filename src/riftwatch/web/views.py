@@ -921,3 +921,69 @@ def tilt(conn: psycopg.Connection, puuid: str, min_games: int = 30) -> dict | No
         advice.append(f"From the 4th game of a session you win {rate(late)}%. Shorter sessions may pay off.")
     out["advice"] = advice
     return out
+
+
+# -- rank benchmarks ------------------------------------------------------------------------
+
+LADDER_BUCKETS = ("IRON", "BRONZE", "SILVER", "GOLD", "PLATINUM", "EMERALD", "DIAMOND", "MASTER_PLUS")
+BENCH = (  # metric, label, format, higher is better, scale
+    ("cs_min", "CS per minute", "{:.1f}", True, 1),
+    ("dmg_min", "Damage per minute", "{:,.0f}", True, 1),
+    ("vision_min", "Vision per minute", "{:.2f}", True, 1),
+    ("kp", "Kill participation", "{:.0f}%", True, 100),
+    ("deaths_10", "Deaths per 10 minutes", "{:.2f}", False, 1),
+    ("control_wards", "Control wards", "{:.0f}", True, 1),
+)
+
+
+def role_stats(conn: psycopg.Connection, puuid: str, position: str, games: int = 50) -> dict | None:
+    """The player's per-minute numbers over their last ranked games in one role."""
+    rows = _rows(conn, """SELECT * FROM participant_builds WHERE puuid = %s AND position = %s
+                           AND queue_id IN (420, 440) AND NOT remake ORDER BY game_start DESC LIMIT %s""",
+                 (puuid, position, games))
+    if len(rows) < 5:
+        return None
+    minutes = sum(r["duration_s"] for r in rows) / 60
+    return {"games": len(rows), "cs_min": sum(r["cs"] for r in rows) / minutes,
+            "dmg_min": sum(r["damage"] for r in rows) / minutes,
+            "vision_min": sum(r["vision_score"] for r in rows) / minutes,
+            "kp": fmean((r["kills"] + r["assists"]) / max(1, r["team_kills"]) for r in rows),
+            "deaths_10": sum(r["deaths"] for r in rows) / (minutes / 10),
+            "control_wards": fmean(r["control_wards"] for r in rows)}
+
+
+def benchmarks(table: dict, position: str, mine: dict | None = None, tier: str | None = None) -> dict:
+    """Typical (median) numbers at each rank in one role, the rank each of the player's numbers
+    matches, and the biggest step to the next rank."""
+    from riftwatch.web import insights
+
+    tiers = [t for t in LADDER_BUCKETS if (t, position) in table]
+    rows = []
+    for key, label, fmt, higher, scale in BENCH:
+        medians = [table[(t, position)][key][1] * scale for t in tiers]
+        row = {"label": label, "key": key, "higher": higher,
+               "cells": [fmt.format(v) for v in medians], "games": [table[(t, position)][key][3] for t in tiers]}
+        lo, hi = min(medians), max(medians)
+        row["pct"] = [round(100 * (v - lo) / (hi - lo)) if hi > lo else 50 for v in medians]
+        if mine:
+            v = mine[key] * scale
+            met = [t for t, m in zip(tiers, medians, strict=True) if (v >= m if higher else v <= m)]
+            row["you"] = fmt.format(v)
+            row["like"] = insights.TIER_NAME.get(met[-1], met[-1].title()) if met else "below Iron"
+            row["met"] = [t in met for t in tiers]
+        rows.append(row)
+    step = None
+    if mine and tier in tiers and tiers.index(tier) + 1 < len(tiers):
+        nxt = tiers[tiers.index(tier) + 1]
+        gaps = []
+        for key, label, fmt, higher, scale in BENCH:
+            target = table[(nxt, position)][key][1] * scale
+            v = mine[key] * scale
+            short = (target - v) if higher else (v - target)
+            if short > 0 and target:
+                gaps.append((short / abs(target), label, fmt.format(v), fmt.format(target)))
+        if gaps:
+            _, label, have, want = max(gaps)
+            step = {"next": insights.TIER_NAME.get(nxt, nxt.title()), "label": label, "have": have, "want": want}
+    return {"tiers": [insights.TIER_NAME.get(t, t.title()) for t in tiers], "tier_keys": tiers,
+            "rows": rows, "step": step, "mine": mine}

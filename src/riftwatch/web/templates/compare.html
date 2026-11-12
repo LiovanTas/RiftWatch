@@ -50,6 +50,14 @@
   </div>
   {% endif %}
 
+  {% if data.shared %}
+  <div class="panel" style="margin-top:12px">
+    <div class="panel-head"><span>Champions you both play</span><span class="muted small">last 50 ranked games each</span></div>
+    <div class="panel-body shared">
+      {% for c in data.shared %}<a class="sh" href="/champions/{{ c.slug }}"><span class="a{{ ' better' if c.a_wr > c.b_wr }}">{{ c.a_wr }}%<small>{{ c.a_games }}g</small></span><img src="{{ c.icon }}" alt="" data-tip="{{ c.name }}"><span class="b{{ ' better' if c.b_wr > c.a_wr }}">{{ c.b_wr }}%<small>{{ c.b_games }}g</small></span></a>{% endfor %}
+    </div>
+  </div>
+  {% endif %}
   {% if data.h2h %}
   {% set h = data.h2h %}
   <div class="panel h2h" style="margin:12px 0 40px">

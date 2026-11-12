@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% from "_macros.html" import pos_icon %}
+{% block title %}What {{ role_name }} Players Do at Each Rank | RiftWatch{% endblock %}
+{% block description %}Typical farm, damage, vision, kill participation and deaths for {{ role_name|lower }} players at every rank, from stored ranked games.{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="page-title">
+    <div class="eyebrow">Benchmarks</div>
+    <h1>What {{ role_name|lower }} players do at each rank</h1>
+    <p>The typical (median) player at every rank, from stored ranked solo games. Add a Riot ID to see which rank each of your numbers matches, and the biggest step to the next one.</p>
+  </div>
+  <form class="panel counter-form" action="/benchmarks" method="get">
+    <input type="hidden" name="role" value="{{ role|lower }}">
+    <input name="me" value="{{ me }}" placeholder="Your Riot ID (optional), e.g. Faker#KR1" spellcheck="false" aria-label="Your Riot ID">
+    <nav class="seg" aria-label="Role">{% for key, name in positions %}<a href="?role={{ key|lower }}&amp;me={{ me|urlencode }}" class="{{ 'on' if role == key }}">{{ pos_icon(gd, key) }}<span>{{ name }}</span></a>{% endfor %}</nav>
+    <button class="btn primary" type="submit">Compare</button>
+  </form>
+  {% if me and not me_found %}<p class="muted small">RiftWatch hasn't seen {{ me }} yet. Search them first.</p>{% endif %}
+  {% if me_found and not b.mine %}<p class="muted small">{{ me_name }} has fewer than 5 ranked {{ role_name|lower }} games stored. Try another role.</p>{% endif %}
+
+  {% if b.step %}
+  <div class="panel bench-step">
+    <span class="eyebrow">Biggest step to {{ b.step.next }}</span>
+    <p><b>{{ b.step.label }}</b>: you're at <b>{{ b.step.have }}</b>; a typical {{ b.step.next }} {{ role_name|lower }} player is at <b>{{ b.step.want }}</b>.</p>
+  </div>
+  {% endif %}
+
+  <div class="panel" style="margin-bottom:40px">
+    <div class="scroll"><table class="data bench">
+      <thead><tr><th class="l">Typical {{ role_name|lower }}</th>{% for t in b.tiers %}<th>{{ t }}</th>{% endfor %}{% if b.mine %}<th class="you-col"><a href="{{ me_url }}">You</a></th><th class="l">Plays like</th>{% endif %}</tr></thead>
+      <tbody>{% for r in b.rows %}<tr>
+        <td class="l">{{ r.label }}{% if not r.higher %} <span class="muted small">(lower is better)</span>{% endif %}</td>
+        {% for c in r.cells %}<td class="{{ 'met' if r.met and r.met[loop.index0] }}"><span class="bv">{{ c }}</span><i class="heat" style="opacity:{{ (0.15 + 0.6 * r.pct[loop.index0] / 100)|round(2) }}"></i></td>{% endfor %}
+        {% if b.mine %}<td class="you-col"><b>{{ r.you }}</b></td><td class="l"><span class="like">{{ r.like }}</span></td>{% endif %}
+      </tr>{% endfor %}</tbody>
+    </table></div>
+    <p class="muted small" style="padding:0 16px 12px;margin:0">{% if b.mine %}Shaded columns are ranks whose typical player you match or beat on that stat ({{ b.mine.games }} recent ranked {{ role_name|lower }} games of {{ me_name }}). {% endif %}Background strength shows how the stat rises with rank.</p>
+  </div>
+</div>
+{% endblock %}

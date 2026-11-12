@@ -123,6 +123,20 @@
     </div>
   </div>
 
+  {% if paths %}
+  <div class="panel" style="margin-top:12px">
+    <div class="panel-head"><span>Build paths</span><span class="muted small">first finished item, then what came next</span></div>
+    <div class="panel-body paths">
+      {% for pth in paths %}
+      <div class="path">
+        <div class="p-first"><div class="slot" data-tip="{{ pth.name }}"><img src="{{ pth.icon }}" alt="{{ pth.name }}"></div><div><b>{{ pth.name }}</b><span>{{ wr(pth.win_rate) }} &middot; {{ '{:,}'.format(pth.games) }} games</span></div></div>
+        {% for n in pth.next %}<div class="p-next"><span class="arrow">&rarr;</span><div class="slot" data-tip="{{ n.name }}"><img src="{{ n.icon }}" alt="{{ n.name }}"></div><span class="nm">{{ n.name }}</span><span class="wrb"><i class="{{ 'up' if n.win_rate >= 50 else 'down' }}" style="width:{{ n.win_rate|round|int }}%"></i></span><b>{{ n.win_rate|round|int }}%</b><small>{{ n.games }}</small></div>
+        {% else %}<p class="muted small">Not enough games to show what follows.</p>{% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
   {% if late %}
   <div class="panel" style="margin-top:12px">
     <div class="panel-head"><span><span class="n">05</span>Later items</span><span class="muted small">by slot</span></div>

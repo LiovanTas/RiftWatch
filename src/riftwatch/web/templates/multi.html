@@ -15,6 +15,14 @@
     <div class="row"><span class="muted small">Players RiftWatch hasn't seen yet get a link that loads them.</span><button class="btn primary" type="submit">{{ icon('search') }} Look up</button></div>
   </form>
   {% if unparsed %}<p class="err" style="color:var(--loss)">No Riot IDs found. Each needs a name, a # and a tag, like Faker#KR1.</p>{% endif %}
+  {% if summary %}
+  <div class="panel lobby-sum">
+    <div><span>Players found</span><b>{{ summary.found }} of {{ summary.of }}</b></div>
+    {% if summary.rank %}<div><span>Typical rank</span><b>{{ summary.rank }}</b></div>{% endif %}
+    {% if summary.win_rate is not none %}<div><span>Average recent win rate</span><b>{{ summary.win_rate }}%</b></div>{% endif %}
+    <div><span>On a streak</span><b>{% if summary.hot %}<span class="win-text">{{ summary.hot|join(', ') }} hot</span>{% endif %}{% if summary.hot and summary.cold %} &middot; {% endif %}{% if summary.cold %}<span class="loss-text">{{ summary.cold|join(', ') }} cold</span>{% endif %}{% if not summary.hot and not summary.cold %}<span class="muted">nobody 3+ in a row</span>{% endif %}</b></div>
+  </div>
+  {% endif %}
   {% if cards %}
   <div class="lobby">
     {% for c in cards %}

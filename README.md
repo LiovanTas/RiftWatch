@@ -285,7 +285,9 @@ with RiftWatch's coaching built in.
     grounded explanation of a key moment (`web/moments.py`, stored in `moment_notes`)
   - a link to RiftWatch's minute-by-minute analysis and AI coaching, and to the game's own
     shareable page (`/games/<match id>`, from that player's side with `?as=<region>/<id>`).
-- **Tabs:** Champions (sortable season stats), AI Coach (coaching on recent games, weekly
+- **Tabs:** Champions (champions to try -- strong in the player's main role, barely played,
+  and sharing a class with the champions they win on -- personal records with links to each
+  game, their hardest and easiest matchups, and sortable season stats), AI Coach (coaching on recent games, weekly
   progress, sessions, champion pool) and Live game (scouting all ten players in a game in
   progress, with the likely lane opponent marked and a Why? for the player's champion against
   each enemy).
@@ -293,14 +295,19 @@ with RiftWatch's coaching built in.
   <kbd>Enter</kbd> opens one, <kbd>g</kbd> goes to its page, <kbd>?</kbd> lists the shortcuts.
   The site has a web app manifest, so it can be installed from the browser.
 - **Lobby lookup** (`/multi`): paste champ-select chat or a list of Riot IDs and see everyone
-  at once: rank, last 20 games, KDA, main role, form and top champions.
+  at once: rank, last 20 games, KDA, main role, form and top champions, with the lobby's
+  average rank and recent win rate and who is on a streak.
 - **Season recap** (`/players/<region>/<id>/recap`): the season in numbers -- games and hours,
   KDA totals, MVP/ACE count, multikills, most-played and best champion, month-by-month win
   rate, longest streaks, best game, favourite duo, and a weekday-by-time heatmap drawn in the
   visitor's own time zone. Shareable link.
 - **Compare** (`/compare`): two players side by side over their last 50 ranked games (win
   rate, KDA, kill participation, farm, damage, gold, vision, deaths), the better side marked,
-  and every stored game they played together or against each other.
+  the champions they both play with each one's record, and every stored game they played
+  together or against each other.
+- **Rank benchmarks** (`/benchmarks`): the typical player at every rank in a role (farm,
+  damage, vision, kill participation, deaths, control wards). With a Riot ID, the rank each of
+  the player's numbers matches and the biggest step to the next rank.
 - **Patches** (`/patches`): every champion and item change in `stats/patch_notes.json`, with
   each champion's tier before and after the change is accounted for, and the champions an
   item change hits hardest (by how often they buy it).
@@ -319,6 +326,7 @@ with RiftWatch's coaching built in.
   champions carry a badge, and their tier accounts for the change. **Raw** shows the games alone.
 - **Champion pages:** runes (with the full most-played page), summoner spells, skill max order
   and level-by-level order, core builds, starting items, boots, later items by slot,
+  build paths (each common first item, then which second items followed and how they did),
   toughest and best matchups (each with a **Why?**, see *Matchup explanations*), recent patch
   changes, win rate by game length (and by patch once there are two), the best partner
   champions in the paired role (support for an ADC, jungler for a mid or top laner), the

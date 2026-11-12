@@ -179,6 +179,8 @@ def player_stats(conn: psycopg.Connection, gd: GameData, puuid: str, games: int 
         "champions": [{"name": gd.champion(c).name, "icon": gd.champion_icon(c), "games": g}
                       for c, g in champs.most_common(4)],
         "icon": gd.profile_icon(rows[0]["profile_icon"]), "level": rows[0]["summoner_level"],
+        "by_champ": {c: [sum(1 for r in rows if r["champion_id"] == c),
+                         sum(r["win"] for r in rows if r["champion_id"] == c)] for c in champs},
     }
 
 
@@ -220,7 +222,14 @@ def compare(conn: psycopg.Connection, gd: GameData, ids: list[tuple[str, str]],
                          "a_pct": round(100 * va / top), "b_pct": round(100 * vb / top)})
     h2h = (head_to_head(conn, sides[0]["puuid"], sides[1]["puuid"])
            if len(sides) == 2 and all(s.get("puuid") for s in sides) else None)
-    return {"sides": sides, "rows": rows, "h2h": h2h}
+    shared = []
+    if len(sides) == 2 and all(s.get("stats") for s in sides):
+        a, b = sides[0]["stats"]["by_champ"], sides[1]["stats"]["by_champ"]
+        for c in sorted(set(a) & set(b), key=lambda c: -(a[c][0] + b[c][0]))[:8]:
+            shared.append({"name": gd.champion(c).name, "slug": gd.champion(c).slug, "icon": gd.champion_icon(c),
+                           "a_games": a[c][0], "a_wr": round(100 * a[c][1] / a[c][0]),
+                           "b_games": b[c][0], "b_wr": round(100 * b[c][1] / b[c][0])})
+    return {"sides": sides, "rows": rows, "h2h": h2h, "shared": shared}
 
 
 # -- season badges -------------------------------------------------------------------------
@@ -277,3 +286,84 @@ def achievements(conn: psycopg.Connection, gd: GameData, puuid: str, year: int |
     ]
     return [{"key": key, "name": name, "icon": icon, "detail": detail}
             for key, name, icon, earned, detail in candidates if earned]
+
+
+# -- personal records and champions to try ---------------------------------------------------
+
+def records(conn: psycopg.Connection, gd: GameData, puuid: str, region: str, riot_path: str) -> list[dict]:
+    """The player's best single games among everything stored."""
+    # Games under 15 minutes are early surrenders (an AFK the remake vote didn't catch), not
+    # real records: a normal surrender can't come sooner.
+    games = _rows(conn, """SELECT * FROM participant_builds WHERE puuid = %s AND queue_id = ANY(%s)
+                            AND NOT remake AND duration_s >= 900""", (puuid, list(QUEUES)))
+    if not games:
+        return []
+    mins = lambda g: g["duration_s"] / 60  # noqa: E731
+
+    def view(label: str, g: dict, value: str) -> dict:
+        return {"label": label, "value": value, "champion": gd.champion(g["champion_id"]).name,
+                "icon": gd.champion_icon(g["champion_id"]), "win": g["win"],
+                "kda": f"{g['kills']}/{g['deaths']}/{g['assists']}", "date": g["game_start"].strftime("%b %d, %Y"),
+                "url": f"/games/{g['match_id']}?as={region}/{riot_path}"}
+
+    long_enough = [g for g in games if mins(g) >= 15] or games
+    wins = [g for g in games if g["win"]]
+    best_kda = [g for g in games if g["kills"] + g["assists"] >= 10]
+    out = [
+        view("Most kills", (g := max(games, key=lambda g: (g["kills"], -g["deaths"]))), f"{g['kills']} kills"),
+        view("Most assists", (g := max(games, key=lambda g: g["assists"])), f"{g['assists']} assists"),
+        view("Most damage", (g := max(games, key=lambda g: g["damage"])), f"{g['damage']:,} damage"),
+        view("Best farm", (g := max(long_enough, key=lambda g: g["cs"] / mins(g))), f"{g['cs'] / mins(g):.1f} CS/min"),
+        view("Most vision", (g := max(games, key=lambda g: g["vision_score"])), f"{g['vision_score']} vision score"),
+        view("Longest game", (g := max(games, key=lambda g: g["duration_s"])),
+             f"{g['duration_s'] // 60}m {g['duration_s'] % 60:02d}s"),
+    ]
+    if wins:
+        g = min(wins, key=lambda g: g["duration_s"])
+        out.append(view("Fastest win", g, f"{g['duration_s'] // 60}m {g['duration_s'] % 60:02d}s"))
+    if best_kda:
+        g = max(best_kda, key=lambda g: (g["kills"] + g["assists"]) / max(1, g["deaths"]))
+        out.append(view("Best KDA", g, "Perfect" if g["deaths"] == 0 else
+                        f"{(g['kills'] + g['assists']) / g['deaths']:.1f} KDA"))
+    return out
+
+
+TIER_BONUS = {"S+": 3, "S": 2, "A": 1}
+
+
+def to_try(conn: psycopg.Connection, gd: GameData, puuid: str, tier_rows: list[dict], limit: int = 4) -> dict | None:
+    """Champions strong in the player's main role that they've barely played, preferring ones
+    that share a class with the champions they already win on."""
+    games = conn.execute("""SELECT champion_id, position, count(*), sum(win::int) FROM participant_builds
+                             WHERE puuid = %s AND queue_id IN (420, 440, 400) AND NOT remake
+                             GROUP BY 1, 2""", (puuid,)).fetchall()
+    if not games:
+        return None
+    roles = Counter()
+    played = Counter()
+    for champ, position, n, _ in games:
+        played[champ] += n
+        if position:
+            roles[position] += n
+    if not roles:
+        return None
+    role = roles.most_common(1)[0][0]
+    best = sorted(((shrunk(w, n), c) for c, p, n, w in games if p == role and n >= 8), reverse=True)[:2]
+    best_champs = [gd.champion(c) for _, c in best]
+    best_tags = {t for c in best_champs for t in c.tags}
+    picks = []
+    for r in tier_rows:
+        if r["position"] != role or r["tier"] not in TIER_BONUS or played[r["champion_id"]] >= 3:
+            continue
+        champ = gd.champion(r["champion_id"])
+        shared = [t for t in champ.tags if t in best_tags]
+        like = next((b for b in best_champs if set(b.tags) & set(champ.tags)), None)
+        score = TIER_BONUS[r["tier"]] + len(shared) + r["win_rate"] / 100
+        reason = (f"plays like your {like.name} ({', '.join(sorted(set(like.tags) & set(champ.tags))).lower()})"
+                  if like else f"{r['win_rate']:.0f}% win rate in {POSITIONS.get(role, role).lower()}")
+        picks.append((score, {"name": champ.name, "slug": champ.slug, "icon": gd.champion_icon(champ.id),
+                              "tier": r["tier"], "win_rate": r["win_rate"], "games": r["games"],
+                              "reason": reason, "played": played[r["champion_id"]]}))
+    picks.sort(key=lambda p: -p[0])
+    return {"role": POSITIONS.get(role, role), "position": role,
+            "best": [c.name for c in best_champs], "picks": [p for _, p in picks[:limit]]}
