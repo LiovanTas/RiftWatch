@@ -3,10 +3,14 @@ services:
     image: postgres:17
     environment:
       POSTGRES_USER: riftwatch
-      POSTGRES_PASSWORD: riftwatch
+      # Set POSTGRES_PASSWORD (in the shell or a .env next to this file) on any server; the
+      # default is for local development. It's only read when the database is first created.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-riftwatch}
       POSTGRES_DB: riftwatch
     ports:
-      - "5432:5432"
+      # Only this machine: published on every interface, the database (and its password)
+      # would be open to the network, and Docker's published ports bypass host firewalls.
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -22,7 +26,7 @@ services:
     build: .
     env_file: .env
     environment:
-      RIFTWATCH_DATABASE_URL: postgresql://riftwatch:riftwatch@db:5432/riftwatch
+      RIFTWATCH_DATABASE_URL: postgresql://riftwatch:${POSTGRES_PASSWORD:-riftwatch}@db:5432/riftwatch
       # Set to your reverse proxy's address so visitor limits see real client addresses.
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
     volumes:

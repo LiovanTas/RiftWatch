@@ -416,6 +416,9 @@
     wrap.classList.toggle('hover', true);
   });
 
+  // Buttons that reload the page (no inline handlers: the content security policy forbids them).
+  document.addEventListener('click', (e) => { if (e.target.closest('[data-reload]')) location.reload(); });
+
   // -- win chance: blue's chance at the moment under the pointer ----------------------------
   // Drawn server-side in a 720-wide viewBox with 40 px on the left and 8 on the right
   // (views.win_chart); x maps back to a second of the game on the same scale.

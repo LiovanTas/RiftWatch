@@ -469,6 +469,12 @@ What makes it safe to put in public:
   (`RIFTWATCH_RATE_LIMITS`, default `sync=30,scout=60,coach=10,matchup=20,moment=30`), counted in Postgres and
   answered with `429` and `Retry-After`. Behind a reverse proxy, set `FORWARDED_ALLOW_IPS` to
   the proxy's address so the limits see visitors' real addresses.
+- **No cross-site requests.** Anything that changes something (Update, scouting, coaching, a
+  matchup's Why?, Ask the coach) is refused with `403` when the browser says another site sent
+  it (`Sec-Fetch-Site: cross-site`, or an `Origin` that isn't this host or the proxy's
+  `X-Forwarded-Host`). Otherwise any page could make its visitors' browsers spend the coaching
+  budget and Riot quota, each under that visitor's own limits. Scripts and curl send neither
+  header and are unaffected.
 - **Coaching budget.** AI coaching stops for the day once that day's coaching has cost
   `RIFTWATCH_COACH_DAILY_BUDGET_USD` (default 5; about 400 games at ~$0.012 each). Cached
   coaching and everything else keep working.
@@ -476,8 +482,22 @@ What makes it safe to put in public:
   nobody can step through other visitors' lookups (a scout result lists a whole lobby).
 - **One Riot rate limiter** per server process, sized from Riot's own response headers, and
   every page reads Postgres only.
-- Riot's required legal notice on every page, gzip for pages and JSON, and `nosniff`,
-  `DENY` framing and `same-origin` referrer headers.
+- **Browser hardening.** A content security policy on every page: scripts only from the site
+  itself plus its four fixed inline scripts, allowed by SHA-256 hash (`web/inline.py`; no
+  `unsafe-inline`, no inline event handlers), requests only back to the site, images only from
+  Riot's CDNs, fonts from Google, and no plugins, framing, `<base>` or off-site forms. So even a
+  markup injection couldn't run a script, load one, or send data elsewhere; all player names and
+  AI text are escaped on the server and in the page script anyway, and a test checks every
+  inline script on the rendered pages is covered by a hash. Plus
+  `nosniff`, `DENY` framing, `same-origin` referrers, a permissions policy, `same-origin`
+  opener isolation and HSTS once served over https. The API docs (`/api/docs`) skip the
+  policy, since Swagger UI loads from a CDN.
+- **The database stays private.** Postgres is published on `127.0.0.1` only (published on
+  every interface it would be reachable from the network, and Docker's published ports bypass
+  host firewalls). On a server, set `POSTGRES_PASSWORD` before the first
+  `docker compose up` (it's only read when the database is created); the web service builds its
+  connection URL from the same variable.
+- Riot's required legal notice on every page, and gzip for pages and JSON.
 
 Put it behind a reverse proxy that terminates HTTPS (the compose file's `caddy` service, or the
 host's load balancer) and schedule `riftwatch refresh` daily.

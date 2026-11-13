@@ -42,11 +42,29 @@ from riftwatch.riot.routing import RiotId, UnknownRegion, platform_for
 from riftwatch.web import limits, serialize, site
 from riftwatch.web.jobs import JobQueue
 
+from riftwatch.web.inline import SCRIPT_HASHES
+
 SECURITY_HEADERS = (
     ("x-content-type-options", "nosniff"),
     ("x-frame-options", "DENY"),
     ("referrer-policy", "same-origin"),
+    ("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()"),
+    ("cross-origin-opener-policy", "same-origin"),
+    # Ignored over plain http (local use); once the site is behind https, browsers stick to it.
+    ("strict-transport-security", "max-age=31536000"),
 )
+# What pages may load: scripts only from this site, plus the few fixed inline scripts by hash
+# (web/inline.py), so injected markup can't run a script of its own; images from Riot's Data Dragon and CommunityDragon, fonts from
+# Google, and requests only back to this site, so injected markup can't pull in a script from
+# elsewhere or send anything off-site. The interactive API docs load Swagger UI from a CDN, so
+# they go without it.
+CONTENT_SECURITY_POLICY = (
+    f"default-src 'self'; script-src 'self' {SCRIPT_HASHES}; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data: https://ddragon.leagueoflegends.com https://raw.communitydragon.org; "
+    "connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+)
+CSP_EXEMPT = ("/api/docs", "/api/openapi.json")
 
 
 class SecurityHeaders:
@@ -59,15 +77,44 @@ class SecurityHeaders:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
+        if scope.get("method") in UNSAFE_METHODS and _cross_site(scope):
+            # Another site's page making its visitors' browsers start coaching, scouting or
+            # updates would spend the server's AI budget and Riot quota under each visitor's
+            # own limits. Browsers say where a request comes from; scripts and curl send
+            # neither header and aren't affected.
+            response = JSONResponse({"error": "cross-site requests aren't accepted"}, status_code=403)
+            return await response(scope, receive, send)
 
         async def send_with_headers(message):
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
                 for name, value in SECURITY_HEADERS:
                     headers.setdefault(name, value)
+                if not scope.get("path", "").startswith(CSP_EXEMPT):
+                    headers.setdefault("content-security-policy", CONTENT_SECURITY_POLICY)
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
+
+
+UNSAFE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
+
+
+def _cross_site(scope) -> bool:
+    """Whether the browser says this request came from another site: Sec-Fetch-Site says
+    cross-site, or the Origin's host isn't this one."""
+    from urllib.parse import urlsplit
+
+    headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+    if headers.get("sec-fetch-site") == "cross-site":
+        return True
+    origin = headers.get("origin")
+    if origin is None:
+        return False
+    # A proxy may pass the public host on in X-Forwarded-Host; a cross-site page can't set that
+    # header without a CORS preflight, which this site never grants.
+    hosts = {headers.get("host", "").lower(), headers.get("x-forwarded-host", "").split(",")[0].strip().lower()}
+    return urlsplit(origin).netloc.lower() not in hosts - {""}
 
 
 def parse_path_riot_id(text: str) -> RiotId:

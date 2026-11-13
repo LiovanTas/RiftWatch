@@ -71,6 +71,9 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
     env = Environment(loader=PackageLoader("riftwatch.web", "templates"),
                       autoescape=select_autoescape(["html"]), trim_blocks=True, lstrip_blocks=True)
     env.filters["ordinal"] = _ordinal
+    from riftwatch.web.inline import REPORT_THEME_JS, THEME_JS
+
+    env.globals["theme_js"] = THEME_JS          # allowed by hash in the content security policy
     # Riot's game version (16.22) as players know the patch (26.22).
     env.filters["patchname"] = lambda v: (f"{int(v.split('.')[0]) + 10}.{v.split('.')[1]}"
                                           if v and v.split(".")[0].isdigit() and int(v.split(".")[0]) < 20 else v)
@@ -1182,9 +1185,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
     def site_chrome(page_html: str, region: str) -> str:
         asset_version = _asset_version()
         head = (f'<link rel="stylesheet" href="/static/site.css?v={asset_version}">'
-                '<script>try{var t=JSON.parse(localStorage.getItem("rw-theme"));'
-                'document.documentElement.dataset.theme=t||"dark"}catch(e){'
-                'document.documentElement.dataset.theme="dark"}</script>')
+                f"<script>{REPORT_THEME_JS}</script>")
         header = env.get_template("_header.html").render(regions=REGIONS, region=region,
                                                          nav="match")
         script = f'<script src="/static/site.js?v={asset_version}" defer></script>'

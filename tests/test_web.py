@@ -325,6 +325,48 @@ def test_pages_carry_the_legal_notice_headers_and_compression(web):
     assert r.headers["x-content-type-options"] == "nosniff"
     assert r.headers["x-frame-options"] == "DENY"
     assert client.get("/api/health").headers["referrer-policy"] == "same-origin"
+    # A content security policy on pages (scripts and requests only to this site, images only
+    # from Riot's CDNs), but not on the API docs, which load Swagger UI from a CDN.
+    csp = r.headers["content-security-policy"]
+    assert "script-src 'self'" in csp and "connect-src 'self'" in csp and "object-src 'none'" in csp
+    assert "'unsafe-inline'" not in csp.split("script-src")[1].split(";")[0]    # inline scripts by hash only
+    assert "frame-ancestors 'none'" in csp and "https://ddragon.leagueoflegends.com" in csp
+    assert "content-security-policy" not in client.get("/api/docs").headers
+    assert r.headers["permissions-policy"].startswith("camera=()")
+
+
+def test_every_inline_script_is_allowed_by_the_policy(web):
+    import base64
+    import hashlib
+    import re
+
+    client, api, _, jobs = web
+    sync(client, jobs)
+    for url in ("/", "/players/na/Me-NA1?tab=coach", f"/players/na/Me-NA1/matches/{api.ids[0]}"):
+        r = client.get(url)
+        assert r.status_code == 200
+        csp = r.headers["content-security-policy"]
+        scripts = re.findall(r"<script(?![^>]*\s(?:src|type)=)[^>]*>(.*?)</script>", r.text, re.S)
+        assert scripts, url
+        for body in scripts:
+            digest = base64.b64encode(hashlib.sha256(body.encode()).digest()).decode()
+            assert f"'sha256-{digest}'" in csp, (url, body[:60])
+        assert " onclick=" not in r.text
+
+
+def test_cross_site_posts_are_refused(web):
+    client, *_ = web
+    # Another site's page can't start an update (or coaching) with its visitors' browsers.
+    evil = client.post("/api/players/na/Me-NA1/sync", headers={"Origin": "https://evil.example"})
+    assert evil.status_code == 403 and "cross-site" in evil.json()["error"]
+    assert client.post("/api/players/na/Me-NA1/sync", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+    # The site's own pages, scripts without an Origin, and the public host behind a proxy pass.
+    assert client.post("/api/players/na/Me-NA1/sync", headers={"Origin": "http://testserver"}).status_code == 202
+    assert client.post("/api/players/na/Me-NA1/sync").status_code == 202
+    proxied = client.post("/api/players/na/Me-NA1/sync",
+                          headers={"Origin": "https://riftwatch.example", "X-Forwarded-Host": "riftwatch.example"})
+    assert proxied.status_code == 202
+    assert client.get("/", headers={"Origin": "https://evil.example"}).status_code == 200    # reading is fine
 
 
 def test_parse_limits():
