@@ -150,6 +150,25 @@
     </div>
   </div>
   {% endif %}
+  {% if choices %}
+  <div class="panel" style="margin-top:12px">
+    <div class="panel-head"><span><span class="n">05b</span>Choices that beat the game state</span><span class="muted small">result minus the win chance when it was chosen &middot; <a href="/swing#choices">how</a></span></div>
+    <div class="panel-body choice-grid">
+      {% for c in choices %}
+      <div>
+        <div class="muted small" style="margin-bottom:6px;font-weight:700">{{ c.title }}</div>
+        {% for o in c.options %}
+        <div class="build-row" data-tip="{{ o.label }}&#10;{{ o.games }} games: won {{ o.win_rate }}% when the game state gave {{ o.expected }}% (raw {{ '%+.1f'|format(o.raw) }}, pulled towards 0 for the sample size)">
+          <div class="its">{% if o.icon %}<img class="ci" src="{{ o.icon }}" alt="" width="22" height="22" loading="lazy">{% endif %}<span class="small">{{ o.label }}</span></div>
+          <div class="rt"><b class="{{ 'up' if o.value > 0 else 'down' if o.value < 0 }}">{{ '%+.1f'|format(o.value) }}</b><span class="muted">&plusmn;{{ o.sd }} &middot; {{ o.games }}</span></div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+    <p class="muted small" style="padding:0 16px 12px">A raw win rate by item mostly measures who was already winning: teams that are ahead buy differently. Here each choice is compared with the chance RiftWatch's network gave the team at the moment it was made, and pulled towards 0 by how much choices really differ. Across all stored games, how repeatable these are between two random halves of the games (0 is noise, 1 fully repeatable): {% for k, v in choice_reliability.items() if v is not none %}{{ {'item': 'items', 'skill': 'first ability', 'keystone': 'keystones', 'spells': 'spells'}[k] }} {{ v }}{{ ', ' if not loop.last }}{% endfor %}. So far, which item a player picks on a champion matters little next to the state of the game when they buy it.</p>
+  </div>
+  {% endif %}
 
   <div class="cols-2" style="margin-top:12px">
     <div class="panel">

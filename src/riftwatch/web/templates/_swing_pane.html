@@ -1,0 +1,125 @@
+{% set sw = d.swing %}
+{% macro why_block(m) -%}
+{% if m.why or m.lines %}
+<div class="sw-why">
+  {% if m.why %}<div class="chips">{% for w in m.why %}<span class="{{ 'up' if w.value > 0 else 'down' }}">{{ w.label }} <b>{{ '%+.1f'|format(w.value) }}</b></span>{% endfor %}</div>{% endif %}
+  {% for line in m.lines %}<p>{{ line }}</p>{% endfor %}
+</div>
+{% endif %}
+{%- endmacro %}
+{% macro play(m, kind) -%}
+<details class="sw-play {{ kind }}">
+  <summary><span class="clock">{{ m.clock }}</span><span class="t">{{ m.text }}{% if m.how %} <small class="how">{{ m.how }}</small>{% endif %}</span>{% if m.leverage and m.leverage >= 2 %}<span class="lev" data-tip="Leverage&#10;{{ m.leverage }}x the swing of a typical moment like it at that stage of the game">{{ m.leverage }}x</span>{% endif %}<b>{{ '%+.1f'|format(m.amount) }}</b></summary>
+  {{ why_block(m) }}
+</details>
+{%- endmacro %}
+<div class="d-pane" data-pane="swing">
+  <div class="sw-top">
+    <h4>Blue's chance to win &middot; above the line blue is favoured, below red is &middot; hover for the exact chance</h4>
+    <a class="muted small" href="/swing">What is Swing? &rarr;</a>
+  </div>
+  {% if sw.reads_items and sw.my_start is not none and (sw.my_start - 50)|abs >= 1 %}<p class="sw-note">Before a minute was played, the two drafts gave your team <b>{{ sw.my_start|round|int }}%</b>: the network knows which champions win early and late, and how the teams' damage and classes match up.</p>{% endif %}
+  <div class="win-wrap" data-win="{{ sw.data }}">
+    {{ sw.chart|safe }}
+    <i class="gold-cursor" hidden></i>
+    <div class="gold-tip" hidden></div>
+  </div>
+  {% if sw.me %}{% set me = sw.me %}
+  <div class="sw-me">
+    <div class="sw-big {{ 'up' if me.total >= 0 else 'down' }}">
+      <span class="k">Your Swing</span>
+      <b>{{ '%+.1f'|format(me.total) }}</b>
+      <span class="s">{{ me.rank|ordinal }} of 10 &middot; percentage points of win chance you added for your team</span>
+      {% if me.spark %}<div class="sw-spark-wrap" data-tip="Your Swing over the game&#10;running total, minute by minute">{{ me.spark|safe }}</div>{% endif %}
+    </div>
+    {% if me.opponent %}{% set o = me.opponent %}
+    <div class="sw-opp" data-tip="You against {{ o.champion }}&#10;{% for x in o.parts %}{{ x.name }} {{ '%+.1f'|format(x.mine) }} vs {{ '%+.1f'|format(x.theirs) }}{{ ', ' if not loop.last }}{% endfor %}">
+      <span class="k">Against your lane opponent</span>
+      <span class="v">{{ o.champion }} <b class="{{ 'up' if o.total >= 0 else 'down' }}">{{ '%+.1f'|format(o.total) }}</b> &middot; you were {{ '%.1f'|format((me.total - o.total)|abs) }} {{ 'ahead of' if me.total >= o.total else 'behind' }} them</span>
+      <span class="gaps">{% for x in o.parts if x.gap|abs >= 1 %}<i class="{{ 'up' if x.gap > 0 else 'down' }}">{{ x.name }} {{ '%+.1f'|format(x.gap) }}</i>{% endfor %}</span>
+    </div>
+    {% endif %}
+    <div class="sw-parts">{% for x in me.parts %}<div class="sw-part" data-tip="{{ x.name }}&#10;{{ x.tip }}"><span>{{ x.name }}</span><b class="{{ 'up' if x.value > 0 else 'down' if x.value < 0 }}">{{ '%+.1f'|format(x.value) }}</b></div>{% endfor %}</div>
+  </div>
+  {% if me.deaths %}<p class="sw-note">You died <b>{{ me.deaths.count }}</b> time{{ 's' if me.deaths.count != 1 }}: the deaths themselves moved your team's chance by <b>{{ me.deaths.swing }}</b> points{% if me.deaths.while_dead %}, and the enemy took <b>{{ me.deaths.while_dead }}</b> more while you were down ({{ me.deaths.costly }} of those deaths){% endif %}. Open a death below to see why it cost what it did.</p>{% endif %}
+  <div class="sw-plays">
+    <div>
+      <h5>Your biggest plays</h5>
+      {% for m in me.best %}{{ play(m, 'up') }}{% else %}<p class="muted small">No single play of yours moved the game much.</p>{% endfor %}
+    </div>
+    <div>
+      <h5>Your costliest moments</h5>
+      {% for m in me.worst %}{{ play(m, 'down') }}{% else %}<p class="muted small">Nothing you did cost your team much.</p>{% endfor %}
+    </div>
+  </div>
+  {% if me['items'] %}
+  <h5 class="sw-h">Your items</h5>
+  <div class="sw-items">
+    {% for it in me['items'] %}
+    <details class="sw-item">
+      <summary>
+        <img src="{{ it.icon }}" alt="" loading="lazy" width="28" height="28">
+        <span class="t">{{ it.name }} <small class="muted">{{ it.slot|ordinal }} item &middot; {{ it.clock }}</small></span>
+        {% if it.network_best %}<span class="alt-flag" data-tip="The network's read&#10;at this moment, finishing {{ it.network_best.name }} would have moved your chance {{ '%+.1f'|format(it.network_best.swing) }}">{{ it.network_best.name }} {{ '%+.1f'|format(it.network_best.swing) }}</span>{% endif %}
+        <b class="{{ 'up' if it.gain >= 0 else 'down' }}">{{ '%+.1f'|format(it.gain) }}</b>
+      </summary>
+      <div class="sw-why">
+        {% if it.why %}<div class="chips">{% for w in it.why %}<span class="{{ 'up' if w.value > 0 else 'down' }}">{{ w.label }} <b>{{ '%+.1f'|format(w.value) }}</b></span>{% endfor %}</div>{% endif %}
+        {% if it.alternatives %}<p><b>The network, at this exact moment:</b> {% for a in it.alternatives %}{{ a.name }} {{ '%+.1f'|format(a.swing) }}{{ ', ' if not loop.last }}{% endfor %} (you: {{ '%+.1f'|format(it.gain) }}). It reads an item by what it gives (armor, magic resist, damage, crit, penetration, anti-heal...) against this enemy team, at this point in this game.</p>{% endif %}
+        {% if it.stats and it.stats.options %}
+        <p><b>Players on this champion, {{ it.stats.context }}</b> (result minus the win chance when they finished it, {{ it.slot|ordinal }} item):</p>
+        <div class="sw-opts">{% for o in it.stats.options %}<span class="{{ 'mine' if o.is_mine }}" data-tip="{{ o.name }}&#10;{{ o.games }} games: won {{ o.win_rate }}% when the game state gave {{ o.expected }}%"><img src="{{ o.icon }}" alt="" width="20" height="20" loading="lazy">{{ o.name }} <b class="{{ 'up' if o.value > 0 else 'down' if o.value < 0 }}">{{ '%+.1f'|format(o.value) }}</b><small>&plusmn;{{ o.sd }}</small></span>{% endfor %}</div>
+        {% set rel = me.reliability.get('item') %}{% if rel is not none and rel < 0.3 %}<p class="muted small">Split-half reliability for item choices is {{ rel }}: once the game state is taken out, items on one champion barely differ beyond chance in the stored games, so these are pulled close to 0 (hover for the raw numbers). The network's read above pools every champion and is the steadier guide.</p>{% endif %}
+        {% if it.stats.mine and not (it.stats.options|selectattr('is_mine')|list) %}<p class="muted small">Yours, {{ it.name }}: {{ '%+.1f'|format(it.stats.mine.value) }} &plusmn;{{ it.stats.mine.sd }} over {{ it.stats.mine.games }} games.</p>{% endif %}
+        {% endif %}
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if me.choices %}
+  <h5 class="sw-h">Your choices <span class="muted small">what each did for players on this champion beyond the game state &middot; split-half reliability {% for k, v in me.reliability.items() if k != 'item' and v is not none %}{{ k }} {{ v }}{{ ', ' if not loop.last }}{% endfor %} (0 is noise, 1 fully repeatable)</span></h5>
+  <div class="sw-choices">
+    {% for c in me.choices %}
+    <div class="sw-choice">
+      <span class="k">{{ c.kind }}</span>
+      <span class="v">{{ c.choice }}{% if c.mine %} <b class="{{ 'up' if c.mine.value > 0 else 'down' if c.mine.value < 0 }}">{{ '%+.1f'|format(c.mine.value) }}</b>{% endif %}</span>
+      <div class="sw-opts">{% for o in c.options %}<span class="{{ 'mine' if o.is_mine }}" data-tip="{{ o.label }}&#10;{{ o.games }} games: won {{ o.win_rate }}% when the game state gave {{ o.expected }}%">{{ o.label }} <b class="{{ 'up' if o.value > 0 else 'down' if o.value < 0 }}">{{ '%+.1f'|format(o.value) }}</b><small>&plusmn;{{ o.sd }}</small></span>{% endfor %}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% endif %}
+  <div class="sw-grid">
+    <div class="sw-teams">
+      {% for t in sw.teams %}
+      <div class="sw-team">
+        <div class="sw-team-head {{ 'win' if t.win else 'loss' }}"><span>{{ t.label }} &middot; {{ 'Victory' if t.win else 'Defeat' }}</span><b data-tip="Team Swing&#10;the winners' Swing always adds up to +50 and the losers' to -50">{{ '+50' if t.win else '-50' }}</b></div>
+        {% for p in t.players %}
+        <div class="sw-row{{ ' me' if p.me }}" data-tip="{{ p.name }} &middot; {{ p.champion }}&#10;{% for x in p.parts %}{{ x.name }} {{ '%+.1f'|format(x.value) }}{{ ', ' if not loop.last }}{% endfor %}">
+          <img src="{{ p.icon }}" alt="" loading="lazy">
+          <span class="nm">{{ p.champion }}<small>{{ p.name }}{% if p.position %} &middot; {{ p.position }}{% endif %}</small></span>
+          <span class="sw-bar"><i class="{{ 'up' if p.total >= 0 else 'down' }}" style="width:{{ p.bar }}%"></i></span>
+          <span class="sw-mini" data-tip="{{ p.champion }}'s Swing over the game">{{ p.spark|safe if p.spark }}</span>
+          <b class="{{ 'up' if p.total >= 0 else 'down' }}">{{ '%+.1f'|format(p.total) }}</b>
+        </div>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+    <div class="sw-moments">
+      <h5>Moments that moved the game most</h5>
+      <ol>
+        {% for m in sw.moments %}
+        <li class="t{{ m.team }}{{ ' good' if m.good == true }}{{ ' bad' if m.good == false }}">
+          <details>
+            <summary><span class="n">{{ m.n }}</span><span class="clock">{{ m.clock }}</span><span class="t">{{ m.text }}</span><b data-tip="Blue's chance {{ m.before|round|int }}% &rarr; {{ m.after|round|int }}%">{{ m.swing }} pts</b></summary>
+            <p class="muted small">Blue's chance {{ m.before|round|int }}% &rarr; {{ m.after|round|int }}%</p>
+            {{ why_block(m) }}
+          </details>
+        </li>
+        {% endfor %}
+      </ol>
+    </div>
+  </div>
+</div>

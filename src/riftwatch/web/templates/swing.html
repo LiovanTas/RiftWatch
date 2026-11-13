@@ -7,7 +7,7 @@
   <div class="page-title">
     <div class="eyebrow">RiftWatch metric</div>
     <h1>Swing</h1>
-    <p>How much each player moved their team's chance of winning, in percentage points. A neural network reads the state of a game at any moment and gives each team's chance to win. Every change in that chance, from the first minute to the end, is shared out among the players responsible. Every game starts at 50%, so the winners' Swing adds up to +50 and the losers' to -50; a player's Swing is their part of it.</p>
+    <p>How much each player moved their team's chance of winning, in percentage points. A neural network reads the state of a game at any moment and gives each team's chance to win. Every change in that chance, from the draft to the end, is shared out among the players responsible, and each moment says why it moved the chance as much as it did. Counting the draft, the winners' Swing always adds up to +50 and the losers' to -50; a player's Swing is their part of it.</p>
   </div>
 
   {% if not m %}
@@ -17,15 +17,16 @@
     <div class="panel">
       <div class="panel-head"><span><span class="n">01</span>The network</span><span class="muted small">tested on {{ '{:,}'.format(m.test_games) }} games it never saw</span></div>
       <div class="panel-body">
-        <p class="small" style="margin-top:0">A small neural network (two hidden layers of {{ m.network.layers|join(' and ') }} units) trained on {{ '{:,}'.format(m.games) }} ranked games, every minute from both teams' sides ({{ '{:,}'.format(m.rows) }} moments). It reads {{ m.features|length }} numbers: the minute; the gold, XP, CS and level gaps; kills; towers; inhibitors currently down; dragons and soul; Baron and Elder (taken, and whether the buff is still up); heralds, voidgrubs and Atakhan; and how many players on each side are alive right now. It's then calibrated on separate games, so "70%" means that team won about 70% of the time.</p>
+        <p class="small" style="margin-top:0">A small neural network (two hidden layers of {{ m.network.layers|join(' and ') }} units) trained on {{ '{:,}'.format(m.games) }} ranked games, every minute from both teams' sides ({{ '{:,}'.format(m.rows) }} moments). It reads the game state: the minute; the gold, XP, CS and level gaps; kills; towers; inhibitors currently down; dragons and soul; Baron and Elder (taken, and whether the buff is still up); heralds, voidgrubs and Atakhan; and how many players on each side are alive right now.{% if m.chosen == 'stacked' %} A logistic layer on top adds each team's finished items by what they give ({{ m.items_known }} items: armor, magic resist, health, damage, crit, penetration, lifesteal, anti-heal), how they match the enemy's damage (armor against physical, magic resist against magic), the teams' classes, and each champion's strength and how it changes over the game.{% endif %} It's then calibrated on separate games, so "70%" means that team won about 70% of the time.</p>
         <table class="sw-metrics">
           <thead><tr><th></th><th data-tip="Log loss&#10;how surprised it is by the real result, lower is better">Log loss</th><th data-tip="Brier score&#10;average squared gap between the chance and the result (0 or 1), lower is better">Brier</th><th data-tip="AUC&#10;how often it gives the eventual winner a higher chance than the loser: 0.5 is a coin flip, 1 is always">AUC</th><th data-tip="Calibration error&#10;average gap between a predicted chance and how often that actually happened, lower is better">Calib. error</th></tr></thead>
           <tbody>
-            <tr class="net"><td>Network</td><td>{{ '%.3f'|format(m.network.log_loss) }}</td><td>{{ '%.3f'|format(m.network.brier) }}</td><td>{{ '%.3f'|format(m.network.auc) }}</td><td>{{ '%.3f'|format(m.network.ece) }}</td></tr>
+            {% if m.variants %}{% for v in m.variants %}<tr class="{{ 'net' if v.name == m.chosen else 'base' }}"><td data-tip="{{ v.label }}&#10;{{ v.inputs }} inputs{% if v.validation_games_log_loss %} &middot; {{ '%.4f'|format(v.validation_games_log_loss) }} on the validation games{% endif %}">{{ v.label }}{% if v.name == m.chosen %} <span class="badge mvp">used</span>{% endif %}</td><td>{{ '%.3f'|format(v.log_loss) }}</td><td>{{ '%.3f'|format(v.brier) }}</td><td>{{ '%.3f'|format(v.auc) }}</td><td>{{ '%.3f'|format(v.ece) }}</td></tr>{% endfor %}
+            {% else %}<tr class="net"><td>Network</td><td>{{ '%.3f'|format(m.network.log_loss) }}</td><td>{{ '%.3f'|format(m.network.brier) }}</td><td>{{ '%.3f'|format(m.network.auc) }}</td><td>{{ '%.3f'|format(m.network.ece) }}</td></tr>{% endif %}
             <tr class="base"><td>Gold lead only</td><td>{{ '%.3f'|format(m.baseline.log_loss) }}</td><td>{{ '%.3f'|format(m.baseline.brier) }}</td><td>{{ '%.3f'|format(m.baseline.auc) }}</td><td>{{ '%.3f'|format(m.baseline.ece) }}</td></tr>
           </tbody>
         </table>
-        <p class="muted small">The baseline knows only the gold lead and the minute (a logistic regression). The network has to beat it to be worth using.</p>
+        <p class="muted small">The baseline knows only the gold lead and the minute (a logistic regression); a version has to beat it to be worth using. {% if m.variants %}Every version trains on the same games and is stopped on held-out games; the one used is the best on those. Putting items and champions straight into the network lets it recognise each game by its line-up and memorise who won, so it does worse on new games; the logistic layer can't, and keeps only what holds across games.{% endif %}</p>
       </div>
     </div>
     <div class="panel">
@@ -61,13 +62,43 @@
     <div class="panel"{% if not m.calibration %} style="grid-column:1 / -1"{% endif %}>
       <div class="panel-head"><span><span class="n">{{ '04' if m.calibration else '03' }}</span>How it's shared out</span></div>
       <div class="panel-body sw-rules">
-        <div class="sw-rule"><b>Fights</b>A kill's jump goes half to the killer and half to the assisters (all to the killer if nobody helped). The player who died takes the other team's loss.</div>
+        {% if m.chosen == 'stacked' %}<div class="sw-rule"><b>Draft</b>The network knows the champions, so a game can start above or below 50%: the difference is the two drafts, shared by each team.</div>{% endif %}
+        <div class="sw-rule"><b>Kills</b>A kill's jump goes half to the killer and half to the assisters (all to the killer if nobody helped).</div>
+        <div class="sw-rule"><b>Deaths</b>The player who died takes the other team's gain, and half of whatever their team loses before they respawn.</div>
         <div class="sw-rule"><b>Objectives</b>Dragons, Baron, Elder, heralds, voidgrubs and Atakhan: half the gain goes to the players who took part, half to the whole team (who made it possible); the other team shares the loss.</div>
         <div class="sw-rule"><b>Structures</b>Towers and inhibitors, the same way.</div>
+        {% if m.chosen == 'stacked' %}<div class="sw-rule"><b>Items</b>Finishing an item moves the chance by what it gives against this enemy team; the buyer gets it.</div>{% endif %}
         <div class="sw-rule"><b>Economy</b>Whatever moved between fights (farming, plates, trading, pressure) goes to the team it favoured, half evenly and half by gold and XP earned that minute; the other team shares the loss.</div>
+        <div class="sw-rule"><b>Why a moment cost what it did</b>Each jump is split exactly among what changed (a player down, the bounty, the kill score, the dragon, an item's armor) by Shapley values: each change's average effect over every order the changes could be added in. Deaths also record the damage, place, timer, gold held and what the enemy took meanwhile.</div>
       </div>
     </div>
   </div>
+  {% if context %}
+  <div class="panel" style="margin-top:16px">
+    <div class="panel-head"><span>What the logistic layer learned</span><span class="muted small">roughly percentage points in an even game, on top of the game state</span></div>
+    <div class="panel-body cw-groups">
+      {% for g in context %}
+      <div><h5 class="sw-h" style="margin-top:0">{{ g.title }}</h5>
+        {% for r in g.rows %}<div class="cw" data-tip="{{ r.label }}&#10;{{ '%+.3f'|format(r.value) }} log-odds"><span>{{ r.label }}</span><b class="{{ 'up' if r.value > 0 else 'down' if r.value < 0 }}">{{ '%+.1f'|format(r.pts) }}</b></div>{% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+    <p class="muted small" style="padding:0 16px 12px">These are on top of what the game-state network already sees (the gold an item cost is already in the gold lead), so they're what an item's stats or a team's classes add beyond that, learned across thousands of games. They're associations: defensive items, for instance, are often bought by the team that's already behind. Each champion's own strength and scaling is learned too (not listed).</p>
+  </div>
+  {% endif %}
+  {% if choice_summary %}
+  <div class="panel" id="choices" style="margin-top:16px">
+    <div class="panel-head"><span>Choices: items, skills, runes, spells</span><span class="muted small">{{ '{:,}'.format(choice_summary.choices) }} choices in stored games</span></div>
+    <div class="panel-body">
+      <p class="small" style="margin-top:0">Each choice is compared with the win chance the network gave the player's team when it was made: the item when it was finished, the first ability maxed at 3 minutes, the keystone and spells at the start. A raw win rate by item mostly measures who was already winning; this takes the game state out. Averages are pulled towards zero by how much real difference there is between choices (empirical Bayes), and items are also measured against the enemy team's damage type and tanks.</p>
+      <table class="sw-metrics">
+        <thead><tr><th>Choice</th><th data-tip="True spread&#10;how much choices really differ, after taking out sampling noise (percentage points)">True spread</th><th data-tip="Split-half reliability&#10;how well the values from one random half of the games match the other half: 0 is noise, 1 is fully repeatable">Split-half</th><th>Choices compared</th></tr></thead>
+        <tbody>{% for key, k in choice_summary.kinds.items() %}<tr><td>{{ k.name }}</td><td>&plusmn;{{ k.signal_sd }} pts</td><td>{{ k.reliability if k.reliability is not none else 'n/a' }}</td><td>{{ k.pairs }}</td></tr>{% endfor %}</tbody>
+      </table>
+      <p class="muted small">These are associations with the game state taken out, not proof that a choice causes a win. Where the split-half number is low, most of the difference between choices is noise, and the values are pulled close to zero accordingly.</p>
+    </div>
+  </div>
+  {% endif %}
 
   {% if live and by_role %}
   <div class="panel" style="margin-top:16px">

@@ -207,6 +207,17 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             ranked = conn.execute("SELECT count(*) FROM matches WHERE queue_id = 420").fetchone()[0]
         return render("about.html", nav="about", ranked=ranked)
 
+    def swing_norms() -> dict:
+        """Typical moments, role habits and how much signal each kind of choice carries."""
+        from riftwatch.winprob import choices as choice_values
+        from riftwatch.winprob import swing as swing_calc
+
+        if win_model is None:
+            return {}
+        summary = choice_values.summary(services.settings.models_dir) or {}
+        return {**swing_calc.norms(services.settings.models_dir),
+                "_choices": {k: v.get("reliability") for k, v in (summary.get("kinds") or {}).items()}}
+
     def warm_tiers() -> None:
         """Rebuild the default tier board (the home page's and /champions') and the /swing
         tables, which take a second or two, so the server can do it before the cached copies
@@ -215,6 +226,10 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             champ_stats.tier_list(conn, None, "all", patch_changes(), item_changes(), fresh=True)
         if win_model is not None:
             swing_tables("", fresh=True)
+            from riftwatch.web import swingview
+
+            with pool.connection() as conn:
+                swingview.role_parts(conn, win_model, fresh=True)
 
     app.state.warm_tiers = warm_tiers
 
@@ -229,7 +244,12 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
         champions, games, stored, by_role = [], [], 0, []
         if win_model is not None:
             champions, games, stored, by_role = swing_tables(position)
+        from riftwatch.web import swingview
+        from riftwatch.winprob import choices as choice_values
+
         return render("swing.html", nav="swing", m=data, live=win_model is not None, by_role=by_role,
+                      choice_summary=choice_values.summary(services.settings.models_dir),
+                      context=swingview.context_view((data or {}).get("context_weights")),
                       champions=champions, games=games, stored=stored, role=position,
                       roles=list(gamedata.POSITIONS.items()))
 
@@ -581,6 +601,9 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                                          + (f"&champ={picked.slug}" if picked else "")),
                                champ=picked.slug if picked else "")
                     ctx["badges"] = recap.achievements(conn, gd, puuid)
+                    from riftwatch.web import swingview
+
+                    ctx["swing_profile"] = swingview.swing_profile(conn, gd, puuid, win_model, swing_norms())
                     ctx["tilt"] = views.tilt(conn, puuid)
                     if ctx["summary"]:
                         ctx["focus"] = views.focus(rows, ctx["summary"]["patterns"], insights.baselines(conn),
@@ -710,7 +733,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             detail = views.match_detail(conn, game_data(), match_id,
                                         account["puuid"] if account else None,
                                         (region or PLATFORM_REGION.get(match_id.split("_")[0].lower(), "na")).lower(),
-                                        win_model=win_model)
+                                        win_model=win_model, norms=swing_norms())
         if detail is None:
             return None
         analysis = (f"/players/{region}/{riot_id}/matches/{match_id}"
@@ -897,6 +920,9 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             from riftwatch.winprob import swing as swing_calc
 
             champ_swing = swing_calc.champion_swing(conn, win_model, champ.id, s.get("position"))
+            from riftwatch.web import swingview
+
+            champ_choices = swingview.champion_choices(conn, win_model, gd, champ.id)
             systems = item_changes()
             usage = champ_stats.item_usage(conn, champ.id, s.get("position"),
                                            sorted({i for c in systems for i in c["ids"]}))
@@ -918,7 +944,8 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                                "role_name": gamedata.POSITIONS.get(s.get("position", ""), ""),
                                "qs": _query_string(request),
                                "patch_changes": patch_changes().get(champ.id, []),
-                               "item_hits": item_hits, "swing": champ_swing,
+                               "item_hits": item_hits, "swing": champ_swing, "choices": champ_choices,
+                               "choice_reliability": swing_norms().get("_choices") or {},
                                "mains": mains, "curves": curves,
                                "paths": [{**pth, "icon": gd.item_icon(pth["item"]),
                                           "name": gd.item(pth["item"]).name if gd.item(pth["item"]) else str(pth["item"]),

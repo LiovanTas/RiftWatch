@@ -140,70 +140,7 @@
     <ol class="event-log">{% for e in d.events %}<li class="ev-{{ e.icon|replace(' ', ' ev-') }}{{ ' mine' if e.mine }}"><i></i><span>{{ e.text }}</span></li>{% endfor %}</ol>
   </div>
   {% endif %}
-  {% if d.swing %}{% set sw = d.swing %}
-  <div class="d-pane" data-pane="swing">
-    <div class="sw-top">
-      <h4>Blue's chance to win &middot; above the line blue is favoured, below red is &middot; hover for the exact chance</h4>
-      <a class="muted small" href="/swing">What is Swing? &rarr;</a>
-    </div>
-    <div class="win-wrap" data-win="{{ sw.data }}">
-      {{ sw.chart|safe }}
-      <i class="gold-cursor" hidden></i>
-      <div class="gold-tip" hidden></div>
-    </div>
-    {% if sw.me %}
-    <div class="sw-me">
-      <div class="sw-big {{ 'up' if sw.me.total >= 0 else 'down' }}">
-        <span class="k">Your Swing</span>
-        <b>{{ '%+.1f'|format(sw.me.total) }}</b>
-        <span class="s">{{ sw.me.rank|ordinal }} of 10 in this game &middot; percentage points of win chance you added for your team</span>
-      </div>
-      <div class="sw-parts">{% for x in sw.me.parts %}<div class="sw-part" data-tip="{{ x.name }}&#10;{{ {'fights': 'kills, assists and deaths', 'objectives': 'dragons, Baron, Elder, heralds, voidgrubs, Atakhan', 'structures': 'towers and inhibitors', 'economy': 'gold and XP earned between fights, and the final push'}[x.key] }}"><span>{{ x.name }}</span><b class="{{ 'up' if x.value > 0 else 'down' if x.value < 0 }}">{{ '%+.1f'|format(x.value) }}</b></div>{% endfor %}</div>
-    </div>
-    <div class="sw-plays">
-      <div>
-        <h5>Your biggest plays</h5>
-        {% for m in sw.me.best %}<div class="sw-play up"><span class="clock">{{ m.clock }}</span><span class="t">{{ m.text }}{% if m.how %} <small class="how">{{ m.how }}</small>{% endif %}</span><b>{{ '%+.1f'|format(m.amount) }}</b></div>
-        {% else %}<p class="muted small">No single play of yours moved the game much.</p>{% endfor %}
-      </div>
-      <div>
-        <h5>Your costliest moments</h5>
-        {% for m in sw.me.worst %}<div class="sw-play down"><span class="clock">{{ m.clock }}</span><span class="t">{{ m.text }}{% if m.how %} <small class="how">{{ m.how }}</small>{% endif %}</span><b>{{ '%+.1f'|format(m.amount) }}</b></div>
-        {% else %}<p class="muted small">Nothing you did cost your team much.</p>{% endfor %}
-      </div>
-    </div>
-    {% endif %}
-    <div class="sw-grid">
-      <div class="sw-teams">
-        {% for t in sw.teams %}
-        <div class="sw-team">
-          <div class="sw-team-head {{ 'win' if t.win else 'loss' }}"><span>{{ t.label }} &middot; {{ 'Victory' if t.win else 'Defeat' }}</span><b data-tip="Team Swing&#10;every game starts at 50%, so the winners' Swing adds up to +50 and the losers' to -50">{{ '+50' if t.win else '-50' }}</b></div>
-          {% for p in t.players %}
-          <div class="sw-row{{ ' me' if p.me }}" data-tip="{{ p.name }} &middot; {{ p.champion }}&#10;{% for x in p.parts %}{{ x.name }} {{ '%+.1f'|format(x.value) }}{{ ', ' if not loop.last }}{% endfor %}">
-            <img src="{{ p.icon }}" alt="" loading="lazy">
-            <span class="nm">{{ p.champion }}<small>{{ p.name }}{% if p.position %} &middot; {{ p.position }}{% endif %}</small></span>
-            <span class="sw-bar"><i class="{{ 'up' if p.total >= 0 else 'down' }}" style="width:{{ p.bar }}%"></i></span>
-            <b class="{{ 'up' if p.total >= 0 else 'down' }}">{{ '%+.1f'|format(p.total) }}</b>
-          </div>
-          {% endfor %}
-        </div>
-        {% endfor %}
-      </div>
-      <div class="sw-moments">
-        <h5>Moments that moved the game most</h5>
-        <ol>
-          {% for m in sw.moments %}
-          <li class="t{{ m.team }}{{ ' good' if m.good == true }}{{ ' bad' if m.good == false }}" data-tip="Blue's chance {{ m.before|round|int }}% &rarr; {{ m.after|round|int }}%">
-            <span class="n">{{ m.n }}</span><span class="clock">{{ m.clock }}</span>
-            <span class="t">{{ m.text }}</span>
-            <b>{{ m.swing }} pts</b>
-          </li>
-          {% endfor %}
-        </ol>
-      </div>
-    </div>
-  </div>
-  {% endif %}
+  {% if d.swing %}{% include "_swing_pane.html" %}{% endif %}
   {% if d.gold_chart %}
   <div class="d-pane" data-pane="gold">
     <h4 style="margin:0 0 8px;font-size:13px;color:var(--text-2)">Team gold lead &middot; blue above the line, red below &middot; hover for exact gold</h4>

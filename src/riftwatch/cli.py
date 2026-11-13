@@ -199,31 +199,43 @@ def cmd_ml_train(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def cmd_winprob_train(settings: Settings, args: argparse.Namespace) -> int:
-    """Train the win-probability network that Swing is built on."""
-    from riftwatch.winprob import model as wp
-
+    """Train the win-probability network that Swing is built on: three versions (game state;
+    + items and composition; + champions) on the same games, keeping the best."""
+    import joblib
     import numpy as np
 
-    cache = Path(settings.models_dir).parent / "winprob_dataset.npz"
-    if args.reuse and cache.exists() and not args.limit:
+    from riftwatch.web.gamedata import shared
+    from riftwatch.winprob import model as wp
+
+    cache = Path(settings.models_dir).parent / "winprob_dataset_v2.npz"
+    catalog_file = cache.with_suffix(".catalog.joblib")
+    if args.reuse and cache.exists() and catalog_file.exists() and not args.limit:
         print(f"reusing the games read last time ({cache})")
         with np.load(cache) as f:
-            X, y, games, minutes = f["X"], f["y"], f["games"], f["minutes"]
+            data = {k: f[k] for k in f.files}
+        catalog = joblib.load(catalog_file)
     else:
         with connect(settings.database_url) as conn:
+            print("reading items and champions...")
+            catalog = wp.build_catalog(conn, shared())
+            print(f"  {len(catalog.items):,} finished items, {len(catalog.champions):,} champions")
             print("reading games...")
-            X, y, games, minutes = wp.load_dataset(conn, limit=args.limit)
+            data = wp.load_dataset(conn, catalog, limit=args.limit)
         if not args.limit:
             cache.parent.mkdir(parents=True, exist_ok=True)
-            np.savez_compressed(cache, X=X, y=y, games=games, minutes=minutes)
-    print(f"{len(set(games.tolist())):,} games, {len(y):,} minute snapshots (both sides)")
+            np.savez_compressed(cache, **data)
+            joblib.dump(catalog, catalog_file)
+    print(f"{len(set(data['games'].tolist())):,} games, {len(data['y']):,} minute snapshots (both sides)")
     layers = tuple(int(n) for n in args.layers.split(",")) if args.layers else wp.LAYERS
-    trained, metrics = wp.train(X, y, games, minutes, layers=layers)
+    variants = [v for v in wp.VARIANTS if not args.only or v[0] in args.only.split(",")]
+    trained, metrics = wp.train(data, catalog, layers=layers, variants=variants)
     out = wp.save(trained, metrics, settings.models_dir)
-    n, b = metrics["network"], metrics["baseline"]
-    print(f"{'':<10} {'log loss':>9} {'brier':>7} {'AUC':>6} {'calib. err':>10}")
-    print(f"{'network':<10} {n['log_loss']:>9.4f} {n['brier']:>7.4f} {n['auc']:>6.3f} {n['ece']:>10.4f}")
-    print(f"{'baseline':<10} {b['log_loss']:>9.4f} {b['brier']:>7.4f} {b['auc']:>6.3f} {b['ece']:>10.4f}  (gold lead and minute only)")
+    print(f"{'':<12} {'log loss':>9} {'brier':>7} {'AUC':>6} {'calib. err':>10}")
+    for v in metrics["variants"]:
+        mark = " <- kept" if v["name"] == metrics["chosen"] else ""
+        print(f"{v['name']:<12} {v['log_loss']:>9.4f} {v['brier']:>7.4f} {v['auc']:>6.3f} {v['ece']:>10.4f}{mark}")
+    b = metrics["baseline"]
+    print(f"{'baseline':<12} {b['log_loss']:>9.4f} {b['brier']:>7.4f} {b['auc']:>6.3f} {b['ece']:>10.4f}  (gold lead and minute only)")
     for span, v in metrics["auc_by_minute"].items():
         print(f"  minutes {span:<6} AUC network {v['network']:.3f}  baseline {v['baseline']:.3f}  ({v['rows']:,} rows)")
     print(f"saved to {out} (tested on {metrics['test_games']:,} games it never saw)")
@@ -267,6 +279,30 @@ def cmd_winprob_backfill(settings: Settings, args: argparse.Namespace) -> int:
             if n % 10 == 0 or n == len(chunks):
                 print(f"  {min(50 * n, len(todo)):,} / {len(todo):,}", flush=True)
     print(f"{done:,} games now have Swing")
+    if not args.limit:
+        _winprob_tables(settings, model)
+    return 0
+
+
+def _winprob_tables(settings: Settings, model) -> None:
+    from riftwatch.winprob import choices, swing
+
+    with connect(settings.database_url) as conn:
+        print("typical swing of each kind of moment...")
+        swing.build_norms(conn, model, settings.models_dir)
+        print("what each choice did beyond the game state...")
+        choices.build(conn, model, settings.models_dir)
+
+
+def cmd_winprob_choices(settings: Settings, args: argparse.Namespace) -> int:
+    """Rebuild the choice values and moment norms from the stored Swing."""
+    from riftwatch.winprob import model as wp
+
+    model = wp.load(settings.models_dir)
+    if model is None:
+        print("no win-probability model yet: run `riftwatch winprob train` first")
+        return 1
+    _winprob_tables(settings, model)
     return 0
 
 
@@ -1103,10 +1139,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, help="only this many games (a quick trial)")
     p.add_argument("--reuse", action="store_true", help="reuse the games read last time instead of the database")
     p.add_argument("--layers", help="hidden layer sizes, e.g. 128,64 (default 64,32)")
+    p.add_argument("--only", help="train only these versions, e.g. state,items (default all three)")
     p.set_defaults(func=cmd_winprob_train)
     p = wpcmd.add_parser("backfill", help="work out Swing for every stored game that doesn't have it")
     p.add_argument("--limit", type=int, help="only this many games")
     p.set_defaults(func=cmd_winprob_backfill)
+    p = wpcmd.add_parser("choices", help="rebuild what each item, skill, rune and spell choice did beyond the game state")
+    p.set_defaults(func=cmd_winprob_choices)
 
     p = sub.add_parser("record", help="record games second by second from the game client")
     p.add_argument("--interval", type=float, default=1.0, help="seconds between samples")

@@ -527,6 +527,10 @@ def test_swing_on_match_history_the_game_and_its_page(web, tmp_path):
     assert "win-chart" in detail and "Moments that moved the game most" in detail
     assert 'class="sw-cell' in detail                                  # the scoreboard column
     assert ">+50<" in detail and ">-50<" in detail
+    # Why each play cost what it did: the split of the jump, and a death's details.
+    assert "Your biggest plays" in detail and 'class="sw-why"' in detail and "a player down" in detail
+    assert "died at level" in detail and "out for" in detail
+    assert "Where your Swing comes from" in page
     from psycopg import connect
 
     with connect(TEST_DB) as conn:                                     # worked out once, then stored
@@ -550,6 +554,15 @@ def test_swing_on_match_history_the_game_and_its_page(web, tmp_path):
         got = swing.champion_swing(conn, model, champion, position)
     assert got is not None and got["games"] >= 15 and isinstance(got["avg"], float)
     assert "Biggest Swing" in client.get("/players/na/Me-NA1?tab=champions").text
+    # The tables built from every game: choice values, moment norms and role habits.
+    from riftwatch.winprob import choices
+
+    with connect(TEST_DB, autocommit=True) as conn:
+        summary = choices.build(conn, model, tmp_path / "models", log=lambda *_: None)
+        norms = swing.build_norms(conn, model, tmp_path / "models")
+        stored = conn.execute("SELECT count(*), count(DISTINCT kind) FROM choice_values").fetchone()
+    assert summary["choices"] > 0 and stored[0] > 0 and stored[1] >= 1
+    assert norms["norms"].get("kills") and norms["habits"]
 
 
 def test_swing_needs_a_trained_network(web):

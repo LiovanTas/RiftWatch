@@ -144,6 +144,41 @@
         <div class="rp-foot"></div>
       </div>
       {% endif %}
+      {% if swing_profile %}{% set sp = swing_profile %}
+      <div class="panel swing-profile">
+        <div class="panel-head"><span>Where your Swing comes from</span><span class="muted small">last {{ sp.games }} games{% if sp.role %} &middot; against {{ sp.role }} players{% endif %} &middot; <a href="/swing">what is Swing?</a></span></div>
+        <div class="panel-body">
+          <p class="sp-lead">You add <b class="{{ 'up' if sp.avg >= 0 else 'down' }}">{{ '%+.1f'|format(sp.avg) }}</b> points of win chance a game{% if sp.typical is not none %}; {{ sp.role or 'players' }} players average <b>{{ '%+.1f'|format(sp.typical) }}</b>{% endif %}.{% if sp.worst %} The biggest gap is <b>{{ sp.worst.name|lower }}</b>: {{ '%+.1f'|format(sp.worst.mine) }} a game against {{ '%+.1f'|format(sp.worst.typical) }} ({{ sp.worst.tip }}).{% endif %}{% if sp.best %} You're ahead on <b>{{ sp.best.name|lower }}</b> ({{ '%+.1f'|format(sp.best.mine) }} against {{ '%+.1f'|format(sp.best.typical) }}).{% endif %}</p>
+          {% if sp.trend %}
+          <div class="sp-trend" aria-label="Swing in each of the last {{ sp.trend|length }} games, oldest first">{% for t in sp.trend %}<a href="/games/{{ t.match_id }}?as={{ profile_base|replace('/players/', '') }}" class="{{ 'w' if t.win else 'l' }}" data-tip="{{ t.champion }} &middot; {{ 'Victory' if t.win else 'Defeat' }}&#10;Swing {{ '%+.1f'|format(t.total) }}"><i class="{{ 'up' if t.total >= 0 else 'down' }}" style="height:{{ [t.height, 2]|max }}%"></i></a>{% endfor %}</div>
+          {% endif %}
+          <div class="sp-bars">
+            {% for c in sp.parts %}
+            <div class="sp-row" data-tip="{{ c.name }}&#10;{{ c.tip }}: you {{ '%+.1f'|format(c.mine) }} a game{% if c.typical is not none %}, {{ sp.role or 'players' }} players {{ '%+.1f'|format(c.typical) }}{% endif %}">
+              <span class="lab">{{ c.name }}</span>
+              <span class="sp-track">
+                <i class="mine {{ 'up' if c.mine >= 0 else 'down' }}" style="width:{{ (50 * (c.mine|abs) / sp.peak)|round(1) }}%;{{ 'left' if c.mine >= 0 else 'right' }}:50%"></i>
+                {% if c.typical is not none %}<i class="typ" style="left:{{ (50 + 50 * c.typical / sp.peak)|round(1) }}%"></i>{% endif %}
+              </span>
+              <b class="{{ 'up' if c.mine >= 0 else 'down' }}">{{ '%+.1f'|format(c.mine) }}</b>
+              <small class="{{ 'up' if (c.gap or 0) >= 0 else 'down' }}">{% if c.gap is not none %}{{ '%+.1f'|format(c.gap) }}{% endif %}</small>
+            </div>
+            {% endfor %}
+            <div class="sp-key"><span><i class="mine up"></i>you</span><span><i class="typ"></i>typical {{ sp.role or 'player' }}</span><span>last column: you minus typical</span></div>
+          </div>
+          {% if sp.patterns %}
+          <h5 class="sw-h">Costly habits in your deaths</h5>
+          {% for p in sp.patterns %}
+          <div class="sp-pat">
+            <div class="top"><b>{{ p.title }}</b><span class="muted small">{{ p.share }}% of your deaths{% if p.typical_share is not none %} (typical {{ sp.role|lower or 'player' }}: {{ p.typical_share }}%){% endif %}, in {{ p.games }} of {{ sp.games }} games</span><span class="cost{{ ' fine' if p.excess is not none and p.excess <= 0 }}">-{{ p.per_game }} a game{% if p.typical is not none %}<small> vs -{{ p.typical }} typical</small>{% endif %}</span></div>
+            <p class="muted small">{{ p.detail[:1]|upper }}{{ p.detail[1:] }}. Costliest: {{ p.example.text }} at {{ p.example.clock }}, -{{ p.example.cost }} with what followed. <a href="/games/{{ p.example.match_id }}?as={{ profile_base|replace('/players/', '') }}">Open the game &rarr;</a></p>
+          </div>
+          {% endfor %}
+          <p class="muted small">Points are your team's chance to win: each death's own swing, plus anything the enemy took before you respawned.</p>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
       <div class="panel deathmap" data-deathmap="/api/players/{{ region }}/{{ profile_base.rsplit('/', 1)[1] }}/deathmap">
         <div class="panel-head"><span>Where you die</span>
           <nav class="seg" data-dm="filter"><button type="button" class="on" data-v="death">Deaths</button><button type="button" data-v="kill">Kills</button><button type="button" data-v="all">Both</button></nav>
