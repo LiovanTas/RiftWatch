@@ -108,8 +108,8 @@ def test_team_swing_adds_up_to_the_result():
         blue = sum(d["players"][str(p)]["total"] for p in range(1, 6))
         red = sum(d["players"][str(p)]["total"] for p in range(6, 11))
         assert d["curve"][0] == 50.0                       # an even start is a coin flip
-        assert blue == pytest.approx(50 if blue_wins else -50, abs=0.2)
-        assert red == pytest.approx(-blue, abs=0.2)
+        assert blue == pytest.approx(50 if blue_wins else -50, abs=0.3)   # five totals rounded to 0.1
+        assert red == pytest.approx(-blue, abs=0.5)
         for v in d["players"].values():                    # the parts make up the total
             assert sum(v[k] for k in swing.PARTS) == pytest.approx(v["total"], abs=0.3)
             assert v["line"][-1] == pytest.approx(v["total"], abs=0.3)   # and the running line ends there
@@ -271,3 +271,79 @@ def test_habits_count_costly_deaths_and_role_norms():
     assert mid["cost"] == pytest.approx(sum(c for _, c, _ in found), abs=0.01)
     assert set(mid) >= {key for key, *_ in habits.HABITS}
     assert swing.group_name("item:armor") == "armor (vs an average item)" and swing.group_name("alive") == "a player down"
+
+
+def test_shares_add_up_exactly_and_are_zero_sum():
+    # Efficiency and zero-sum hold exactly (before rounding), under every set of rules.
+    frames, events = game()
+    positions = {1: "TOP", 2: "JUNGLE", 3: "MIDDLE", 4: "BOTTOM", 5: "UTILITY",
+                 6: "TOP", 7: "JUNGLE", 8: "MIDDLE", 9: "BOTTOM", 10: "UTILITY"}
+    data = swing.evaluate(LeadModel(), frames, events, NAMES, positions=positions)
+    for rules in (swing.RULES, swing.FIXED_RULES, swing.Rules(team_share=0.9, dead_share=0.1)):
+        credit, _, gains = swing.credit_of(data["facts"], rules)
+        blue = sum(sum(credit[p].values()) for p in range(1, 6))
+        red = sum(sum(credit[p].values()) for p in range(6, 11))
+        assert blue == pytest.approx(0.5, abs=1e-9) and red == pytest.approx(-0.5, abs=1e-9)
+        for p in range(1, 11):                             # the running line ends at the total
+            assert sum(gains[p]) == pytest.approx(sum(credit[p].values()), abs=1e-9)
+
+
+def test_kills_are_shared_by_damage_and_economy_by_the_lane():
+    frames, events = game()
+    first = next(e for e in events if e.get("type") == "CHAMPION_KILL")
+    # The assister (1) did most of the damage, the killer (2) the last hit.
+    first["victimDamageReceived"] = [{"participantId": 1, "physicalDamage": 900}, {"participantId": 2, "physicalDamage": 100}]
+    positions = {1: "TOP", 2: "JUNGLE", 3: "MIDDLE", 4: "BOTTOM", 5: "UTILITY",
+                 6: "TOP", 7: "JUNGLE", 8: "MIDDLE", 9: "BOTTOM", 10: "UTILITY"}
+    data = swing.evaluate(LeadModel(), frames, events, NAMES, positions=positions)
+    i = next(n for n, f in enumerate(data["facts"]["events"]) if f["kind"] == "kills")
+    measured, _, _ = swing.credit_of({**data["facts"], "events": [data["facts"]["events"][i]]}, swing.RULES)
+    fixed, _, _ = swing.credit_of({**data["facts"], "events": [data["facts"]["events"][i]]}, swing.FIXED_RULES)
+    # half by damage (0.9 / 0.1), half equally: 0.7 / 0.3 of the kill; fixed rules: 0.5 / 0.5
+    assert measured[1]["kills"] / measured[2]["kills"] == pytest.approx(0.7 / 0.3, rel=1e-6)
+    assert fixed[1]["kills"] == pytest.approx(fixed[2]["kills"])
+    assert data["facts"]["opponent"]["1"] == 6 and data["facts"]["opponent"]["9"] == 4
+
+
+def test_the_rating_shrinks_towards_the_role_by_the_measured_spread():
+    from riftwatch.winprob import validate
+
+    model = {"tau": 2.0, "sigma": 14.0}                    # k = 49 games
+    few, many = validate.rating(10.0, 5, model), validate.rating(10.0, 500, model)
+    assert few["value"] == pytest.approx(10 * 5 / 54, abs=0.05) and many["value"] == pytest.approx(10 * 500 / 549, abs=0.05)
+    assert few["sd"] > many["sd"] and few["raw"] == 10.0
+
+
+def test_reliability_finds_real_differences_and_not_noise():
+    import random
+    from datetime import datetime, timedelta
+
+    from riftwatch.winprob import validate
+
+    rng = random.Random(4)
+    rows = []
+    for p in range(120):
+        level = rng.gauss(0, 3)                            # true differences between players
+        for j in range(30):
+            rows.append({"puuid": f"p{p}", "t": datetime(2026, 1, 1) + timedelta(hours=j), "role": "MIDDLE",
+                         "swing": level + rng.gauss(0, 10), "noise": rng.gauss(0, 10), "win": float(rng.random() < 0.5)})
+    validate._role_adjust_one(rows, "swing")
+    validate._role_adjust_one(rows, "noise")
+    for r in rows:
+        r["win_adj"] = r["win"]
+    out = validate.reliability_and_prediction(rows, (("swing", "Swing"), ("noise", "Noise"), ("win", "Win")))
+    by = {m["key"]: m for m in out["metrics"]}
+    # Spearman-Brown on 30 games: 30 * 9 / (30 * 9 + 100) = 0.73 for the real signal
+    assert by["swing"]["reliability"] > 0.55 and abs(by["noise"]["reliability"]) < 0.3
+    assert out["players"] == 120 and "prediction_ceiling" in out
+    fit = validate.rating_model(rows)
+    assert 1.5 < fit["tau"] < 4.5 and 9 < fit["sigma"] < 11
+
+
+def test_points_never_come_out_as_negative_zero():
+    # Postgres stores -0.0 as 0, so a fresh result must say +0.0 too, or cached coaching
+    # (keyed by its evidence text) misses on the second request.
+    import math
+
+    assert str(swing._pts(-0.0004)) == "0.0" and math.copysign(1, swing._pts(-0.0004)) == 1
+    assert swing._pts(0.01234) == 1.2 and swing._pts(-0.01234) == -1.2

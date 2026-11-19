@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from dataclasses import asdict, dataclass
 from itertools import combinations
 from math import factorial
 from typing import Any
@@ -44,7 +45,7 @@ import psycopg
 
 from riftwatch.winprob.state import ITEM_FLAG_NAMES, KEPT_EVENTS, Replay, compact, respawn_seconds, team_of
 
-VERSION = "sw4"
+VERSION = "sw5"
 PARTS = ("draft", "kills", "deaths", "objectives", "structures", "items", "economy")
 PART_NAMES = {"draft": "Draft", "kills": "Kills", "deaths": "Deaths", "objectives": "Objectives",
               "structures": "Structures", "items": "Items", "economy": "Economy"}
@@ -145,11 +146,35 @@ def _shapley(groups: list[str], value: dict[frozenset, float]) -> dict[str, floa
     return out
 
 
-def game_swing(model, frames: list[dict], events: list[dict], names: dict[int, str] | None = None,
-               champions: dict[int, int] | None = None,
-               purchases: dict[int, list[tuple[int, int]]] | None = None) -> dict[str, Any] | None:
-    """Swing for all ten players of one game, from its per-minute participant frames and
-    events (``compact`` of a timeline), each player's champion and purchases."""
+@dataclass(frozen=True)
+class Rules:
+    """How each change in the win chance is shared out. ``kill_split``: "damage" shares a
+    kill half by damage dealt to the victim (Riot's record of it) and half equally among the
+    players credited (crowd control, shields and heals aren't in the damage record); "half"
+    gives half to the killer and half to the assisters. ``economy_split``: "lane" shares an
+    unexplained gain among the team's players by how far each out-earned their lane opponent
+    that minute (gold and XP) and a loss by how far each fell behind theirs; "earned" shares
+    gains by gold and XP earned and losses evenly. ``even_economy`` of either is shared evenly
+    first."""
+    team_share: float = TEAM_SHARE
+    even_economy: float = EVEN_ECONOMY
+    dead_share: float = DEAD_SHARE
+    kill_split: str = "damage"
+    economy_split: str = "lane"
+
+
+RULES = Rules()
+FIXED_RULES = Rules(kill_split="half", economy_split="earned")   # the fixed shares before sw5
+
+
+def evaluate(model, frames: list[dict], events: list[dict], names: dict[int, str] | None = None,
+             champions: dict[int, int] | None = None, purchases: dict[int, list[tuple[int, int]]] | None = None,
+             positions: dict[int, str] | None = None) -> dict[str, Any] | None:
+    """Everything about one game that needs the model: the win chance each minute and at
+    every event, why each event moved it (Shapley), and the facts sharing needs (who took
+    part, damage to each victim, who was dead, each player's gold and XP each minute and who
+    they were laning against). Sharing it out (``share``) is cheap and separate, so other
+    rules can be tried on stored games without the model."""
     catalog = model.catalog if getattr(model, "reads_items", False) else None
     replay = Replay(frames, events, champions, purchases, catalog)
     if len(frames) < 2 or replay.winner not in (100, 200):
@@ -159,7 +184,6 @@ def game_swing(model, frames: list[dict], events: list[dict], names: dict[int, s
     last = len(frames) - 1
     times = [min(m * 60_000, end) for m in range(len(frames))]
 
-    # -- every state the model is asked about, then one batch prediction ----------------------
     pairs: list[tuple[dict, dict]] = [replay.pair(t) for t in times]
 
     def ask(state: tuple[dict, dict]) -> int:
@@ -205,97 +229,67 @@ def game_swing(model, frames: list[dict], events: list[dict], names: dict[int, s
     p = [float(x) for x in model.blue([a for a, _ in pairs], [b for _, b in pairs])]
     curve = p[: len(frames)]
 
-    # -- sharing it out -----------------------------------------------------------------------
-    credit = {pid: dict.fromkeys(PARTS, 0.0) for pid in range(1, 11)}
-    plays: dict[int, list[tuple[float, int]]] = {pid: [] for pid in range(1, 11)}
-    gains = [[0.0] * (last + 1) for _ in range(11)]          # per player, per minute
-
-    def give(pids, amount: float, part: str, t: float, moment: int | None = None) -> None:
-        pids = [x for x in pids if 1 <= x <= 10]
-        m = min(int(t // 60_000), last)
-        for x in pids:
-            credit[x][part] += amount / len(pids)
-            gains[x][m] += amount / len(pids)
-            if moment is not None:
-                plays[x].append((amount / len(pids), moment))
-
-    draft = curve[0] - 0.5
-    give(_team(100), draft, "draft", 0)
-    give(_team(200), -draft, "draft", 0)
-
-    moments, explained = [], [0.0] * len(frames)
+    moments, facts = [], []
     scored.sort(key=lambda s: s[1])
     for kind, t, payload, b, a, subsets, groups in scored:
         d = p[a] - p[b]                                       # change in blue's chance
-        explained[min(int(t // 60_000), last - 1)] += d
         values = {s: p[slot] for s, slot in subsets.items()}
         why = {g: round(100 * v, 2) for g, v in _shapley(groups, values).items()} if groups else {}
-        n = len(moments)
         m: dict[str, Any] = {"t": t, "clock": _clock(t), "swing": round(100 * abs(d), 1),
                              "before": round(100 * p[b], 1), "after": round(100 * p[a], 1),
                              "why": why, "by": None, "lost": [], "dead": []}
+        f: dict[str, Any] = {"t": t, "d": round(d, 6)}
         if kind == "item":
             pid, item, slot, alts = payload
             side = team_of(pid)
             gain = d if side == 100 else -d
-            give([pid], gain, "items", t, n)
-            give(_team(300 - side), -gain, "economy", t)
             alt_rows = [{"item": alt, "name": catalog.item_names.get(alt, str(alt)),
                          "swing": round(100 * ((p[s_] - p[b]) if side == 100 else (p[b] - p[s_])), 2)}
                         for alt, s_ in alts]
             m.update(part="items", team=side, players=[pid], by=pid, item=item, slot=slot,
                      text=f"{names.get(pid, 'A champion')} finished {catalog.item_names.get(item, 'an item')}",
                      gain=round(100 * gain, 2), alternatives=sorted(alt_rows, key=lambda r: -r["swing"]))
-            moments.append(m)
-            continue
-        e = replay.events[payload]
-        if e["type"] == "CHAMPION_KILL":
-            victim, killer = e.get("victimId", 0), e.get("killerId", 0)
-            side = 300 - team_of(victim)
-            gain = d if side == 100 else -d
-            helpers = [x for x in (e.get("assistingParticipantIds") or []) if team_of(x) == side]
-            if 1 <= killer <= 10 and team_of(killer) == side:
-                give([killer], gain * (0.5 if helpers else 1.0), "kills", t, n)
-                if helpers:
-                    give(helpers, gain * 0.5, "kills", t, n)
-                got = [killer, *helpers]
-                text = f"{names.get(killer, 'A champion')} killed {names.get(victim, 'a champion')}"
-            else:                                          # executed by a tower or minions
-                give(helpers or _team(side), gain, "kills", t, n)
-                got = helpers
-                text = f"{names.get(victim, 'A champion')} was executed"
-            give([victim], -gain, "deaths", t, n)
-            m.update(part="kills", team=side, players=sorted(set(got)), lost=[victim],
-                     by=killer if 1 <= killer <= 10 else None, text=text, death=_death(replay, e, payload))
+            f.update(kind="items", side=side, by=pid)
         else:
-            if e["type"] == "ELITE_MONSTER_KILL":
-                side, part = e.get("killerTeamId") or 100, "objectives"
-                name = MONSTER.get(e.get("monsterType"), "an objective")
-                if e.get("monsterType") == "DRAGON" and e.get("monsterSubType") in DRAGON:
-                    name = f"{DRAGON[e['monsterSubType']]} Dragon"
-                text = f"{'Blue' if side == 100 else 'Red'} took {name}"
+            e = replay.events[payload]
+            if e["type"] == "CHAMPION_KILL":
+                victim, killer = e.get("victimId", 0), e.get("killerId", 0)
+                side = 300 - team_of(victim)
+                helpers = [x for x in (e.get("assistingParticipantIds") or []) if team_of(x) == side]
+                credited = 1 <= killer <= 10 and team_of(killer) == side
+                got = [killer, *helpers] if credited else helpers
+                text = (f"{names.get(killer, 'A champion')} killed {names.get(victim, 'a champion')}" if credited
+                        else f"{names.get(victim, 'A champion')} was executed")
+                damage: Counter = Counter()
+                for dmg in e.get("victimDamageReceived") or []:
+                    source = dmg.get("participantId") or 0
+                    if source in got:
+                        damage[source] += ((dmg.get("physicalDamage") or 0) + (dmg.get("magicDamage") or 0)
+                                           + (dmg.get("trueDamage") or 0))
+                m.update(part="kills", team=side, players=sorted(set(got)), lost=[victim],
+                         by=killer if 1 <= killer <= 10 else None, text=text, death=_death(replay, e, payload))
+                f.update(kind="kills", side=side, killer=killer if credited else 0, helpers=helpers,
+                         victim=victim, damage={str(k): v for k, v in damage.items()})
             else:
-                side, part = 300 - (e.get("teamId") or 100), "structures"
-                what = "inhibitor" if e.get("buildingType") == "INHIBITOR_BUILDING" else "tower"
-                lane = LANE.get(e.get("laneType"))
-                text = f"{'Blue' if side == 100 else 'Red'} destroyed the {lane + ' ' if lane else ''}{what}"
-            gain = d if side == 100 else -d
-            got = [x for x in [e.get("killerId", 0), *(e.get("assistingParticipantIds") or [])]
-                   if 1 <= x <= 10 and team_of(x) == side]
-            if got:
-                give(got, gain * (1 - TEAM_SHARE), part, t, n)
-                give(_team(side), gain * TEAM_SHARE, part, t)          # not anyone's own play
-            else:
-                give(_team(side), gain, part, t)
-            dead = sorted(v for v in replay.dead_at(t, payload) if team_of(v) == 300 - side)
-            if dead:                                       # lost while players were dead
-                give(dead, -gain * DEAD_SHARE, "deaths", t, n)
-                give(_team(300 - side), -gain * (1 - DEAD_SHARE), part, t)
-            else:
-                give(_team(300 - side), -gain, part, t)
-            m.update(part=part, team=side, players=sorted(set(got)), dead=dead, text=text,
-                     by=e.get("killerId") if 1 <= (e.get("killerId") or 0) <= 10 else None)
+                if e["type"] == "ELITE_MONSTER_KILL":
+                    side, part = e.get("killerTeamId") or 100, "objectives"
+                    name = MONSTER.get(e.get("monsterType"), "an objective")
+                    if e.get("monsterType") == "DRAGON" and e.get("monsterSubType") in DRAGON:
+                        name = f"{DRAGON[e['monsterSubType']]} Dragon"
+                    text = f"{'Blue' if side == 100 else 'Red'} took {name}"
+                else:
+                    side, part = 300 - (e.get("teamId") or 100), "structures"
+                    what = "inhibitor" if e.get("buildingType") == "INHIBITOR_BUILDING" else "tower"
+                    lane = LANE.get(e.get("laneType"))
+                    text = f"{'Blue' if side == 100 else 'Red'} destroyed the {lane + ' ' if lane else ''}{what}"
+                got = [x for x in [e.get("killerId", 0), *(e.get("assistingParticipantIds") or [])]
+                       if 1 <= x <= 10 and team_of(x) == side]
+                dead = sorted(v for v in replay.dead_at(t, payload) if team_of(v) == 300 - side)
+                m.update(part=part, team=side, players=sorted(set(got)), dead=dead, text=text,
+                         by=e.get("killerId") if 1 <= (e.get("killerId") or 0) <= 10 else None)
+                f.update(kind=part, side=side, got=sorted(set(got)), dead=dead)
         moments.append(m)
+        facts.append(f)
 
     # What the enemy took while each dead player was down.
     for m in moments:
@@ -309,40 +303,19 @@ def game_swing(model, frames: list[dict], events: list[dict], names: dict[int, s
         death["while_dead"] = follow
         death["while_dead_cost"] = round(sum(moments[j]["swing"] for j in follow), 1)
 
-    # Economy: what moved between minutes that the events don't explain.
-    for m in range(last):
-        rest = (curve[m + 1] - curve[m]) - explained[m]
-        for side, amount in ((100, rest), (200, -rest)):
-            earned = {}
-            for pid in _team(side):
-                a, b = frames[m].get(str(pid)) or {}, frames[m + 1].get(str(pid)) or {}
-                earned[pid] = max(0.0, b.get("totalGold", 0) - a.get("totalGold", 0) + b.get("xp", 0) - a.get("xp", 0))
-            total = sum(earned.values())
-            if amount > 0 and total > 0:
-                for pid, v in earned.items():
-                    share = amount * (EVEN_ECONOMY / 5 + (1 - EVEN_ECONOMY) * v / total)
-                    credit[pid]["economy"] += share
-                    gains[pid][m + 1] += share
-            else:
-                give(_team(side), amount, "economy", (m + 1) * 60_000)
-    finish = (1.0 if replay.winner == 100 else 0.0) - curve[-1]
-    give(_team(100), finish, "economy", times[-1])
-    give(_team(200), -finish, "economy", times[-1])
-
-    players = {}                                           # keyed by str(pid), as JSON stores it
-    for pid, c in credit.items():
-        running, line = 0.0, []
-        for g in gains[pid]:
-            running += g
-            line.append(round(100 * running, 1))
-        players[str(pid)] = {**{k: round(100 * v, 1) for k, v in c.items()},
-                             "total": round(100 * sum(c.values()), 1),
-                             "best": [{"moment": i, "swing": round(100 * a, 1)}
-                                      for a, i in sorted(plays[pid], key=lambda x: -x[0])[:PLAYS] if a > 0.0005],
-                             "worst": [{"moment": i, "swing": round(100 * a, 1)}
-                                       for a, i in sorted(plays[pid], key=lambda x: x[0])[:PLAYS] if a < -0.0005],
-                             "line": line}
-    # The chart: each minute, and the jump at each event.
+    # Gold and XP each player earned each minute, and their lane opponent.
+    earned = {}
+    for pid in range(1, 11):
+        row = []
+        for m in range(last):
+            a, b = frames[m].get(str(pid)) or {}, frames[m + 1].get(str(pid)) or {}
+            row.append(round(max(0.0, b.get("totalGold", 0) - a.get("totalGold", 0) + b.get("xp", 0) - a.get("xp", 0))))
+        earned[str(pid)] = row
+    opponent = {}
+    for pid, pos in (positions or {}).items():
+        opp = next((q for q, qpos in (positions or {}).items() if qpos == pos and team_of(q) != team_of(pid)), None)
+        if opp:
+            opponent[str(pid)] = opp
     series = [(t, 100 * v) for t, v in zip(times, curve, strict=True)]
     for _, t, _, b, a, _, _ in scored:
         series += [(t, 100 * p[b]), (t + 1, 100 * p[a])]
@@ -351,7 +324,137 @@ def game_swing(model, frames: list[dict], events: list[dict], names: dict[int, s
             "start": round(100 * curve[0], 1), "reads_items": catalog is not None,
             "curve": [round(100 * x, 1) for x in curve],
             "series": [[round(t / 1000, 1), round(v, 1)] for t, v in series],
-            "players": players, "moments": moments}
+            "moments": moments,
+            "facts": {"winner": replay.winner, "times": times, "curve": [round(x, 6) for x in curve],
+                      "events": facts, "earned": earned, "opponent": opponent}}
+
+
+def _pts(p: float) -> float:
+    """A probability as percentage points to one decimal. Adding 0.0 turns -0.0 into 0.0:
+    Postgres stores both as 0, so a fresh result must match a stored one exactly (coaching
+    is cached by its evidence text, where "-0.0" and "+0.0" differ)."""
+    return round(100 * p, 1) + 0.0
+
+
+def share(facts: dict[str, Any], rules: Rules = RULES) -> dict[str, dict[str, Any]]:
+    """Share every change in the win chance among the ten players (see the module docstring):
+    per player, each part, the total, the biggest plays and costliest moments (by index into
+    the game's moments) and the running total each minute, in percentage points."""
+    credit, plays, gains = credit_of(facts, rules)
+    players = {}                                           # keyed by str(pid), as JSON stores it
+    for pid, c in credit.items():
+        running, line = 0.0, []
+        for g in gains[pid]:
+            running += g
+            line.append(_pts(running))
+        players[str(pid)] = {**{k: _pts(v) for k, v in c.items()},
+                             "total": _pts(sum(c.values())),
+                             "best": [{"moment": i, "swing": _pts(a)}
+                                      for a, i in sorted(plays[pid], key=lambda x: -x[0])[:PLAYS] if a > 0.0005],
+                             "worst": [{"moment": i, "swing": _pts(a)}
+                                       for a, i in sorted(plays[pid], key=lambda x: x[0])[:PLAYS] if a < -0.0005],
+                             "line": line}
+    return players
+
+
+def credit_of(facts: dict[str, Any], rules: Rules = RULES):
+    """The exact shares, as probabilities (not rounded): per player each part, their plays
+    (share, moment index) and what they gained each minute."""
+    curve, times, events = facts["curve"], facts["times"], facts["events"]
+    last = len(curve) - 1
+    credit = {pid: dict.fromkeys(PARTS, 0.0) for pid in range(1, 11)}
+    plays: dict[int, list[tuple[float, int]]] = {pid: [] for pid in range(1, 11)}
+    gains = [[0.0] * (last + 1) for _ in range(11)]
+
+    def give(pids, amount: float, part: str, t: float, moment: int | None = None, weights=None) -> None:
+        pids = [x for x in pids if 1 <= x <= 10]
+        if not pids:
+            return
+        if weights is None:
+            weights = {x: 1 / len(pids) for x in pids}
+        m = min(int(t // 60_000), last)
+        for x in pids:
+            share_ = amount * weights[x]
+            credit[x][part] += share_
+            gains[x][m] += share_
+            if moment is not None:
+                plays[x].append((share_, moment))
+
+    draft = curve[0] - 0.5
+    give(_team(100), draft, "draft", 0)
+    give(_team(200), -draft, "draft", 0)
+    explained = [0.0] * len(curve)
+    for n, f in enumerate(events):
+        d, t, side = f["d"], f["t"], f["side"]
+        explained[min(int(t // 60_000), max(0, last - 1))] += d
+        gain = d if side == 100 else -d
+        kind = f["kind"]
+        if kind == "items":
+            give([f["by"]], gain, "items", t, n)
+            give(_team(300 - side), -gain, "economy", t)
+        elif kind == "kills":
+            killer, helpers = f["killer"], f["helpers"]
+            if killer:
+                got = [killer, *helpers]
+                if rules.kill_split == "half" or len(got) == 1:
+                    weights = {killer: 0.5 if helpers else 1.0, **{h: 0.5 / len(helpers) for h in helpers}}
+                else:
+                    damage = {x: float(f["damage"].get(str(x), 0)) for x in got}
+                    total = sum(damage.values())
+                    weights = {x: 0.5 * (damage[x] / total if total else 1 / len(got)) + 0.5 / len(got) for x in got}
+                give(got, gain, "kills", t, n, weights)
+            else:                                          # executed by a tower or minions
+                give(helpers or _team(side), gain, "kills", t, n)
+            give([f["victim"]], -gain, "deaths", t, n)
+        else:
+            got, dead = f["got"], f["dead"]
+            if got:
+                give(got, gain * (1 - rules.team_share), kind, t, n)
+                give(_team(side), gain * rules.team_share, kind, t)       # not anyone's own play
+            else:
+                give(_team(side), gain, kind, t)
+            if dead:                                       # lost while players were dead
+                give(dead, -gain * rules.dead_share, "deaths", t, n)
+                give(_team(300 - side), -gain * (1 - rules.dead_share), kind, t)
+            else:
+                give(_team(300 - side), -gain, kind, t)
+
+    # Economy: what moved between minutes that the events don't explain.
+    earned, opponent = facts["earned"], facts.get("opponent") or {}
+    for m in range(last):
+        rest = (curve[m + 1] - curve[m]) - explained[m]
+        for side, amount in ((100, rest), (200, -rest)):
+            team = _team(side)
+            got = {pid: float(earned[str(pid)][m]) for pid in team}
+            if rules.economy_split == "lane":
+                gap = {pid: got[pid] - float(earned[str(opponent[str(pid)])][m]) if str(pid) in opponent else 0.0
+                       for pid in team}
+                # A gain goes to whoever out-earned their opponent, a loss to whoever fell behind.
+                stake = {pid: max(0.0, gap[pid] if amount > 0 else -gap[pid]) for pid in team}
+            else:
+                stake = got if amount > 0 else dict.fromkeys(team, 0.0)
+            total = sum(stake.values())
+            weights = {pid: rules.even_economy / 5 + (1 - rules.even_economy) * stake[pid] / total if total > 0
+                       else 1 / 5 for pid in team}
+            give(team, amount, "economy", (m + 1) * 60_000, weights=weights)
+    finish = (1.0 if facts["winner"] == 100 else 0.0) - curve[-1]
+    give(_team(100), finish, "economy", times[-1])
+    give(_team(200), -finish, "economy", times[-1])
+    return credit, plays, gains
+
+
+def game_swing(model, frames: list[dict], events: list[dict], names: dict[int, str] | None = None,
+               champions: dict[int, int] | None = None,
+               purchases: dict[int, list[tuple[int, int]]] | None = None,
+               positions: dict[int, str] | None = None, rules: Rules = RULES) -> dict[str, Any] | None:
+    """Swing for all ten players of one game, from its per-minute participant frames and
+    events (``compact`` of a timeline), each player's champion, purchases and position."""
+    data = evaluate(model, frames, events, names, champions, purchases, positions)
+    if data is None:
+        return None
+    data["players"] = share(data["facts"], rules)
+    data["rules"] = asdict(rules)
+    return data
 
 
 def _death(replay: Replay, e: dict, index: int) -> dict:
@@ -460,7 +563,7 @@ def for_matches(conn: psycopg.Connection, model, match_ids: list[str], champion_
                 compute_missing: bool = True) -> dict[str, dict]:
     """Swing for each game: from the table, computing (and storing) any game with a timeline
     that isn't there yet. Only the parts of each timeline Swing reads are fetched."""
-    from riftwatch.winprob.model import GAME_SQL, players
+    from riftwatch.winprob.model import GAME_SQL, players, positions
 
     if model is None or not match_ids:
         return {}
@@ -472,7 +575,7 @@ def for_matches(conn: psycopg.Connection, model, match_ids: list[str], champion_
                                                            (missing,)).fetchall():
             champions, purchases = players(rows)
             try:
-                data = game_swing(model, frames, events, names.get(match_id), champions, purchases)
+                data = game_swing(model, frames, events, names.get(match_id), champions, purchases, positions(rows))
             except Exception:                              # a malformed timeline shouldn't break a page
                 data = None
             if data is not None:
@@ -494,9 +597,10 @@ def for_timeline(conn: psycopg.Connection, model, match_id: str, timeline: dict 
         purchases = {r["participant_id"]: list(zip(r.get("purchase_s") or [], r.get("purchases") or [], strict=False))
                      for r in rows}
         names = {pid: champion_name(c) for pid, c in champions.items()}
+        places = {r["participant_id"]: r["position"] for r in rows if r.get("position")}
         try:
             found = game_swing(model, frames, [e for e in events if e.get("type") in KEPT_EVENTS], names,
-                               champions, purchases)
+                               champions, purchases, places)
         except Exception:
             found = None
         if found is not None:

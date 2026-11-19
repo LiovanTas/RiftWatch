@@ -229,12 +229,29 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             champ_stats.tier_list(conn, None, "all", patch_changes(), item_changes(), fresh=True)
         if win_model is not None:
             swing_tables("", fresh=True)
+            swing_ladder(fresh=True)
             from riftwatch.web import swingview
 
             with pool.connection() as conn:
                 swingview.role_parts(conn, win_model, fresh=True)
 
     app.state.warm_tiers = warm_tiers
+
+    from riftwatch.web import draft as draft_assistant
+
+    draft_assistant.register(app, pool=pool, game_data=game_data, render=render, win_model=win_model,
+                             models_dir=services.settings.models_dir)
+
+    @app.get("/swing/method", response_class=HTMLResponse)
+    def swing_method() -> HTMLResponse:
+        """The method behind Swing, with the numbers from the model and its validation."""
+        from riftwatch.winprob import choices as choice_values
+        from riftwatch.winprob import model as winprob
+        from riftwatch.winprob import validate
+
+        models_dir = services.settings.models_dir
+        return render("swing_method.html", nav="swing", m=winprob.metrics(models_dir),
+                      v=validate.load(models_dir), c=choice_values.summary(models_dir))
 
     @app.get("/swing", response_class=HTMLResponse)
     def swing_page(role: str = "") -> HTMLResponse:
@@ -244,17 +261,35 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
 
         position = role.upper() if role.upper() in gamedata.POSITIONS else ""
         data = winprob.metrics(services.settings.models_dir)
-        champions, games, stored, by_role = [], [], 0, []
+        champions, games, stored, by_role, players = [], [], 0, [], None
         if win_model is not None:
             champions, games, stored, by_role = swing_tables(position)
+            players = swing_ladder()
         from riftwatch.web import swingview
         from riftwatch.winprob import choices as choice_values
 
         return render("swing.html", nav="swing", m=data, live=win_model is not None, by_role=by_role,
+                      ladder=players, rating=(validate_load() or {}).get("rating"),
                       choice_summary=choice_values.summary(services.settings.models_dir),
                       context=swingview.context_view((data or {}).get("context_weights")),
                       champions=champions, games=games, stored=stored, role=position,
                       roles=list(gamedata.POSITIONS.items()))
+
+    def validate_load():
+        from riftwatch.winprob import validate
+
+        return validate.load(services.settings.models_dir)
+
+    def swing_ladder(fresh: bool = False):
+        """Players with the highest Swing rating per role, over every stored game (cached ten
+        minutes, rebuilt in the background)."""
+        from riftwatch.web import swingview
+        from riftwatch.winprob import swing as swing_calc
+
+        def build():
+            with pool.connection() as conn:
+                return swingview.ladder(conn, win_model, game_data(), validate_load())
+        return champ_stats.cached(("swing_ladder", swing_calc.version(win_model)), build, fresh)
 
     def swing_tables(position: str, fresh: bool = False) -> tuple:
         """The /swing page's tables: half a second each over every stored player-game, so
@@ -607,6 +642,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                     from riftwatch.web import swingview
 
                     ctx["swing_profile"] = swingview.swing_profile(conn, gd, puuid, win_model, swing_norms())
+                    ctx["session"] = swingview.session_recap(conn, gd, puuid, win_model)
                     ctx["tilt"] = views.tilt(conn, puuid)
                     if ctx["summary"]:
                         ctx["focus"] = views.focus(rows, ctx["summary"]["patterns"], insights.baselines(conn),
@@ -614,8 +650,15 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                 else:                                   # the header's stat band and form
                     ctx["summary"] = views.summary(views.match_rows(conn, gd, puuid, region,
                                                                     win_model=win_model))
+                if win_model is not None:
+                    from riftwatch.web import swingview
+                    from riftwatch.winprob import validate
+
+                    ctx["swing_rating"] = swingview.player_rating(conn, win_model, puuid,
+                                                                  validate.load(services.settings.models_dir))
                 if tab == "champions":
                     ctx["season"] = views.champion_stats(conn, gd, puuid, cq)
+                    ctx["swing_champs"] = swingview.champion_table(conn, win_model, puuid) if win_model else {}
                     ctx["matchups"] = views.personal_matchups(conn, gd, puuid)
                     ctx["records"] = recap.records(conn, gd, puuid, region, riot_id, win_model)
                     tier_rows = champ_stats.tier_list(conn, None, "all", patch_changes(), item_changes())["rows"]

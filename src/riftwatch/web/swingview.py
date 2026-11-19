@@ -444,3 +444,149 @@ def context_view(weights: dict[str, float] | None) -> list[dict] | None:
     groups = [("Items", items), ("Items against the enemy team", matchups),
               ("Team classes", early), ("How classes scale", late)]
     return [{"title": t, "rows": [r for r in rows if r]} for t, rows in groups if any(rows)]
+
+
+# -- the Swing rating, the ladder, champions and sessions -----------------------------------
+
+def _role_means(validation: dict | None) -> dict[str, float]:
+    return (validation or {}).get("role_means") or {}
+
+
+def player_rating(conn, model, puuid: str, validation: dict | None) -> dict | None:
+    """A player's Swing rating (winprob.validate): their average against their role's,
+    pulled towards zero, with a margin; and their main role."""
+    from riftwatch.winprob import validate
+
+    if model is None or not validation or "rating" not in validation:
+        return None
+    means = _role_means(validation)
+    rows = conn.execute("""SELECT b.position, count(*), sum(ps.total)
+                             FROM player_swing ps JOIN participant_builds b USING (match_id, participant_id)
+                            WHERE b.puuid = %s AND ps.version = %s AND NOT b.remake AND b.position <> ''
+                            GROUP BY 1""", (puuid, swing_calc.version(model))).fetchall()
+    n = sum(r[1] for r in rows)
+    if n < 3:
+        return None
+    adjusted = sum(total - count * means.get(pos, 0.0) for pos, count, total in rows) / n
+    main = max(rows, key=lambda r: r[1])[0]
+    return {**validate.rating(adjusted, n, validation["rating"]), "role": POSITIONS.get(main, "")}
+
+
+def ladder(conn, model, gd: GameData, validation: dict | None, min_games: int = 10, per_role: int = 15) -> dict | None:
+    """Players RiftWatch has seen with the highest Swing rating in their main role."""
+    from riftwatch.web.site import PLATFORM_REGION as platform_region
+    from riftwatch.web.views import path_id
+    from riftwatch.winprob import validate
+
+    if model is None or not validation or "rating" not in validation:
+        return None
+    means = _role_means(validation)
+    acc: dict[str, dict] = {}
+    for puuid, pos, count, total, champ, name, tag, match_id in conn.execute("""
+            SELECT b.puuid, b.position, count(*), sum(ps.total),
+                   mode() WITHIN GROUP (ORDER BY b.champion_id), max(b.riot_name), max(b.riot_tag), max(b.match_id)
+              FROM player_swing ps JOIN participant_builds b USING (match_id, participant_id)
+             WHERE ps.version = %s AND NOT b.remake AND b.position <> ''
+             GROUP BY 1, 2""", (swing_calc.version(model),)):
+        a = acc.setdefault(puuid, {"n": 0, "adj": 0.0, "roles": Counter(), "name": name, "tag": tag,
+                                   "match": match_id, "champs": Counter()})
+        a["n"] += count
+        a["adj"] += total - count * means.get(pos, 0.0)
+        a["roles"][pos] += count
+        a["champs"][champ] += count
+    boards: dict[str, list[dict]] = {}
+    for a in acc.values():
+        if a["n"] < min_games or not a["name"]:
+            continue
+        role = a["roles"].most_common(1)[0][0]
+        r = validate.rating(a["adj"] / a["n"], a["n"], validation["rating"])
+        region = platform_region.get((a["match"] or "").split("_")[0].lower(), "na")
+        champ = a["champs"].most_common(1)[0][0]
+        boards.setdefault(role, []).append({
+            **r, "name": a["name"] + "#" + (a["tag"] or ""), "url": f"/players/{region}/{path_id(a['name'], a['tag'] or '')}",
+            "region": region.upper(), "champion": gd.champion(champ).name, "icon": gd.champion_icon(champ)})
+    return {POSITIONS[role]: sorted(boards[role], key=lambda r: -r["value"])[:per_role]
+            for role in POSITIONS if role in boards}
+
+
+def champion_table(conn, model, puuid: str) -> dict[int, dict]:
+    """The player's average Swing on each champion, beside the average for everyone on that
+    champion in that role."""
+    if model is None:
+        return {}
+    ver = swing_calc.version(model)
+    mine = conn.execute("""SELECT b.champion_id, b.position, count(*), avg(ps.total)
+                             FROM player_swing ps JOIN participant_builds b USING (match_id, participant_id)
+                            WHERE b.puuid = %s AND ps.version = %s AND NOT b.remake GROUP BY 1, 2""",
+                        (puuid, ver)).fetchall()
+    if not mine:
+        return {}
+    typical = {(c, pos): (avg, n) for c, pos, avg, n in conn.execute("""
+        SELECT b.champion_id, b.position, avg(ps.total), count(*)
+          FROM player_swing ps JOIN participant_builds b USING (match_id, participant_id)
+         WHERE ps.version = %s AND NOT b.remake AND b.champion_id = ANY(%s) GROUP BY 1, 2""",
+        (ver, list({r[0] for r in mine})))}
+    out: dict[int, dict] = {}
+    for champ, pos, n, avg in mine:
+        t = out.setdefault(champ, {"games": 0, "sum": 0.0, "typical_sum": 0.0, "typical_n": 0})
+        t["games"] += n
+        t["sum"] += avg * n
+        ta, tn = typical.get((champ, pos), (None, 0))
+        if ta is not None and tn >= 20:
+            t["typical_sum"] += ta * n
+            t["typical_n"] += n
+    return {c: {"games": t["games"], "avg": round(t["sum"] / t["games"], 1),
+                "typical": round(t["typical_sum"] / t["typical_n"], 1) if t["typical_n"] else None}
+            for c, t in out.items()}
+
+
+def session_recap(conn, gd: GameData, puuid: str, model, gap_minutes: int = 60) -> dict | None:
+    """The player's latest session (games with less than an hour between them): record,
+    total Swing, the best play and costliest moment of it, and what their deaths cost."""
+    from datetime import timedelta
+
+    from riftwatch.web.views import ago
+    from riftwatch.winprob import habits
+
+    if model is None:
+        return None
+    recent = conn.execute("""SELECT match_id, participant_id, game_start, duration_s, win, champion_id
+                               FROM participant_builds WHERE puuid = %s AND NOT remake AND queue_id IN (420, 440)
+                              ORDER BY game_start DESC LIMIT 15""", (puuid,)).fetchall()
+    if not recent:
+        return None
+    session = [recent[0]]
+    for row in recent[1:]:
+        prev_end = row[2] + timedelta(seconds=row[3])
+        if (session[-1][2] - prev_end).total_seconds() > gap_minutes * 60:
+            break
+        session.append(row)
+    data = swing_calc.for_matches(conn, model, [r[0] for r in session], lambda c: gd.champion(c).name)
+    games, best, worst, deaths, cost, death_share = [], None, None, 0, 0.0, 0.0
+    for match_id, pid, _, _, win, champ in reversed(session):
+        d = data.get(match_id)
+        v = d["players"].get(str(pid)) if d else None
+        games.append({"match_id": match_id, "win": win, "champion": gd.champion(champ).name,
+                      "icon": gd.champion_icon(champ), "swing": v["total"] if v else None})
+        if not d or not v:
+            continue
+        death_share += v.get("deaths", 0.0)
+        for kind, items in (("best", v.get("best", [])), ("worst", v.get("worst", []))):
+            for b in items:
+                m = d["moments"][b["moment"]]
+                candidate = {"swing": b["swing"], "clock": m["clock"], "text": m["text"], "match_id": match_id,
+                             "champion": gd.champion(champ).name}
+                if kind == "best" and (best is None or b["swing"] > best["swing"]):
+                    best = candidate
+                if kind == "worst" and (worst is None or b["swing"] < worst["swing"]):
+                    worst = candidate
+        for _, c, _ in habits.deaths(d, pid):
+            deaths += 1
+            cost += c
+    swung = [g["swing"] for g in games if g["swing"] is not None]
+    wins = sum(1 for g in games if g["win"])
+    return {"games": games, "wins": wins, "losses": len(games) - wins, "when": ago(session[0][2]),
+            "total": round(sum(swung), 1) if swung else None, "avg": round(sum(swung) / len(swung), 1) if swung else None,
+            "best": best, "worst": worst, "deaths": deaths, "death_cost": round(cost, 1),
+            "death_cost_per_game": round(cost / max(1, len(swung)), 1),
+            "death_share": round(death_share / max(1, len(swung)), 1)}

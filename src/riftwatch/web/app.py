@@ -165,6 +165,9 @@ def create_app(
     from riftwatch.winprob import model as winprob
 
     win_model = winprob.load(settings.models_dir)         # None until `riftwatch winprob train`
+    from riftwatch.coach import swing_evidence
+
+    swing_evidence.use(win_model, settings.models_dir)    # Swing as coaching evidence
     brain = None
     if (Path(settings.models_dir) / "brain" / "CURRENT").exists():
         from riftwatch.brain import registry

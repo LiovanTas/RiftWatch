@@ -52,8 +52,10 @@
       {% if summary.champions %}{% set c = summary.champions[0] %}
       <div class="stat"><img class="sq" src="{{ c.icon }}" alt="" loading="lazy"><div><div class="k">Most played{% if summary.main_role %} &middot; {{ summary.main_role.name }}{% endif %}</div><div class="v">{{ c.name }}</div><div class="s">{{ c.games }} games &middot; {{ c.win_rate }}% won</div></div></div>
       {% endif %}
-      {% if summary.swing %}{% set s = summary.swing %}
-      <a class="stat swing-stat" href="/swing" data-tip="Swing&#10;percentage points of win chance added for the team per game, from RiftWatch's win-probability network{% if s.wins is not none %}&#10;in wins {{ '%+.1f'|format(s.wins) }}{% endif %}{% if s.losses is not none %}, in losses {{ '%+.1f'|format(s.losses) }}{% endif %}&#10;best: {{ '%+.1f'|format(s.best.swing) }} on {{ s.best.champion }}, {{ s.best.when }}"><div><div class="k">Average Swing</div><div class="v {{ 'up' if s.avg >= 0 else 'down' }}">{{ '%+.1f'|format(s.avg) }}</div><div class="s">positive in {{ s.positive }} of {{ s.games }} games</div></div></a>
+      {% if swing_rating %}{% set r = swing_rating %}
+      <a class="stat swing-stat" href="/swing/method#rating" data-tip="Swing rating&#10;percentage points of win chance you add per game against a typical {{ r.role or 'player' }}, from {{ r.games }} games. Your raw average is {{ '%+.1f'|format(r.raw) }}; it's pulled towards 0 until enough games say otherwise, and &plusmn; is one standard error."><div><div class="k">Swing rating</div><div class="v {{ 'up' if r.value >= 0 else 'down' }}">{{ '%+.1f'|format(r.value) }}<span class="muted small"> &plusmn;{{ r.sd }}</span></div><div class="s">vs a typical {{ r.role|lower or 'player' }} &middot; {{ r.games }} games</div></div></a>
+      {% elif summary.swing %}{% set s = summary.swing %}
+      <a class="stat swing-stat" href="/swing" data-tip="Swing&#10;percentage points of win chance added for the team per game"><div><div class="k">Average Swing</div><div class="v {{ 'up' if s.avg >= 0 else 'down' }}">{{ '%+.1f'|format(s.avg) }}</div><div class="s">positive in {{ s.positive }} of {{ s.games }} games</div></div></a>
       {% endif %}
       {% else %}
       <div class="stat"><div><div class="k">Recent games</div><div class="v muted">None yet</div><div class="s">press Update to download</div></div></div>
@@ -128,6 +130,22 @@
           {% for c in summary.champions %}
           <div class="tc"><img src="{{ c.icon }}" alt="" loading="lazy"><div><b>{{ c.name }}</b> {{ wr(c.win_rate) }} <span>{{ c.wins }}W {{ c.losses }}L &middot; {{ c.kda }} KDA</span></div></div>
           {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+      {% if session and session.total is not none %}{% set ss = session %}
+      <div class="panel session-card">
+        <div class="panel-head"><span>Last session <span class="muted small">{{ ss.when }}</span></span><span class="muted small">{{ ss.games|length }} game{{ 's' if ss.games|length != 1 }} &middot; <span class="win-text">{{ ss.wins }}W</span> <span class="loss-text">{{ ss.losses }}L</span></span></div>
+        <div class="panel-body">
+          <div class="ss-top">
+            <div class="ss-big {{ 'up' if ss.total >= 0 else 'down' }}"><span class="k">Swing this session</span><b>{{ '%+.1f'|format(ss.total) }}</b><span class="s">{{ '%+.1f'|format(ss.avg) }} a game{% if swing_rating %} &middot; your rating {{ '%+.1f'|format(swing_rating.value) }}{% endif %}</span></div>
+            <div class="ss-games">{% for g in ss.games %}<a href="/games/{{ g.match_id }}?as={{ profile_base|replace('/players/', '') }}" class="{{ 'w' if g.win else 'l' }}" data-tip="{{ g.champion }} &middot; {{ 'Victory' if g.win else 'Defeat' }}{% if g.swing is not none %}&#10;Swing {{ '%+.1f'|format(g.swing) }}{% endif %}"><img src="{{ g.icon }}" alt="" loading="lazy"><b class="{{ 'up' if (g.swing or 0) >= 0 else 'down' }}">{{ '%+.0f'|format(g.swing) if g.swing is not none else '-' }}</b></a>{% endfor %}</div>
+          </div>
+          <div class="ss-lines">
+            {% if ss.best %}<p><span class="tag up">Best play</span> {{ ss.best.text }} <span class="muted">({{ ss.best.champion }}, {{ ss.best.clock }})</span> <b class="up">{{ '%+.1f'|format(ss.best.swing) }}</b> <a href="/games/{{ ss.best.match_id }}?as={{ profile_base|replace('/players/', '') }}">open</a></p>{% endif %}
+            {% if ss.worst %}<p><span class="tag down">Costliest</span> {{ ss.worst.text }} <span class="muted">({{ ss.worst.champion }}, {{ ss.worst.clock }})</span> <b class="down">{{ '%+.1f'|format(ss.worst.swing) }}</b> <a href="/games/{{ ss.worst.match_id }}?as={{ profile_base|replace('/players/', '') }}">open</a></p>{% endif %}
+            {% if ss.deaths %}<p><span class="tag">Deaths</span> {{ ss.deaths }} death{{ 's' if ss.deaths != 1 }} cost your team {{ ss.death_cost }} points of win chance, counting what was lost while you were down. Your Swing from deaths: <b class="{{ 'up' if ss.death_share >= 0 else 'down' }}">{{ '%+.1f'|format(ss.death_share) }}</b> a game this session{% if swing_profile and swing_profile.parts %}{% set dp = swing_profile.parts|selectattr('key', 'equalto', 'deaths')|list %}{% if dp %}, against {{ '%+.1f'|format(dp[0].mine) }} over your last {{ swing_profile.games }} games{% endif %}{% endif %}.</p>{% endif %}
+          </div>
         </div>
       </div>
       {% endif %}
@@ -324,7 +342,7 @@
     {% if season %}
     <div class="scroll">
     <table class="data" data-renumber>
-      <thead><tr><th class="l">#</th><th class="l" data-sort>Champion</th><th data-sort>Games</th><th data-sort>Win rate</th><th data-sort>KDA</th><th data-sort>Kills</th><th data-sort>Deaths</th><th data-sort>Assists</th><th data-sort>P/Kill</th><th data-sort>CS/min</th><th data-sort>Damage/min</th><th data-sort>Gold/min</th><th data-sort>Vision</th><th data-sort>Multikills</th></tr></thead>
+      <thead><tr><th class="l">#</th><th class="l" data-sort>Champion</th><th data-sort>Games</th><th data-sort>Win rate</th>{% if swing_champs %}<th data-sort data-tip="Swing&#10;your average per game on this champion; hover a value for the average of everyone on it in that role">Swing</th>{% endif %}<th data-sort>KDA</th><th data-sort>Kills</th><th data-sort>Deaths</th><th data-sort>Assists</th><th data-sort>P/Kill</th><th data-sort>CS/min</th><th data-sort>Damage/min</th><th data-sort>Gold/min</th><th data-sort>Vision</th><th data-sort>Multikills</th></tr></thead>
       <tbody>
       {% for c in season %}
         <tr>
@@ -332,6 +350,7 @@
           <td class="l" data-v="{{ c.name }}"><a class="champ-cell" href="{{ profile_base }}/champions/{{ c.slug }}" title="Your {{ c.name }} in depth"><img src="{{ c.icon }}" alt="" loading="lazy"><b>{{ c.name }}</b></a></td>
           <td data-v="{{ c.games }}">{{ c.games }} <span class="muted small">{{ c.wins }}W {{ c.losses }}L</span></td>
           <td data-v="{{ c.win_rate }}"><div class="bar-cell">{{ wr(c.win_rate) }}<div class="bar"><i style="width:{{ c.win_rate }}%"></i></div></div></td>
+          {% if swing_champs %}{% set sc = swing_champs.get(c.id) %}<td data-v="{{ sc.avg if sc else -999 }}"{% if sc %} data-tip="Swing on {{ c.name }}&#10;you {{ '%+.1f'|format(sc.avg) }} a game over {{ sc.games }} games{% if sc.typical is not none %}; everyone on {{ c.name }} in your roles {{ '%+.1f'|format(sc.typical) }}{% endif %}"{% endif %}>{% if sc %}<b class="{{ 'up' if sc.avg >= 0 else 'down' }}">{{ '%+.1f'|format(sc.avg) }}</b>{% if sc.typical is not none %}<div class="muted small">{{ '%+.1f'|format(sc.avg - sc.typical) }} vs typical</div>{% endif %}{% else %}<span class="muted">-</span>{% endif %}</td>{% endif %}
           <td data-v="{{ c.kda_value }}"><b>{{ c.kda }}</b></td>
           <td>{{ c.kills }}</td><td>{{ c.deaths }}</td><td>{{ c.assists }}</td>
           <td data-v="{{ c.kp }}">{{ c.kp }}%</td><td>{{ c.cs_min }}</td><td>{{ '{:,}'.format(c.dmg_min) }}</td><td>{{ c.gold_min }}</td><td>{{ c.vision }}</td>

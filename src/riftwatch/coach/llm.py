@@ -39,6 +39,9 @@ from riftwatch.coach.grounding import (
 )
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+# Changes with the system prompt: part of each cached answer's key, so a new prompt writes
+# new coaching instead of serving answers written under the old one.
+PROMPT_VERSION = "p2"
 MAX_POINTS = 5  # the prompt asks for at most five; enforced here because "high" effort wrote six
 
 # USD per million tokens: input, output, cache read, cache write (5-minute TTL).
@@ -77,6 +80,16 @@ How to read the evidence:
   followed each choice in those games. They describe how high-elo games tended to go, not
   certainties: say "in similar high-elo situations, most players..." or "that choice was
   followed by...", never "you would have" or "you should have".
+- Swing items come from RiftWatch's win-probability model: Swing is how many percentage
+  points of win chance a player added for their team (the winning team's adds up to +50, the
+  losing team's to -50). A moment item gives the team's chance before and after, the player's
+  share, and how the jump splits among what changed ("a player down", "bounty gold", "the
+  dragon"); a death adds who did the damage, the death timer, unspent gold and what the enemy
+  took before the player respawned. Habit items compare what a kind of death costs this
+  player per game with a typical player in the same role. These are the most actionable
+  evidence: prefer a costly habit or a costly moment over a small stat gap, and say what
+  made it costly in the player's own terms (dying with an objective about to be taken,
+  holding gold, being caught by several enemies).
 - "Live recording" items come from the player's own health and gold sampled every second
   during the game. A large health loss in a short window is the player's side of a trade
   they lost; whether a recall or a death followed shows what it cost them.
@@ -191,7 +204,7 @@ class Coach:
     @property
     def label(self) -> str:
         """Identifies the configuration a cached answer came from."""
-        return f"{self.model}/{self.thinking}/{self.effort}"
+        return f"{self.model}/{self.thinking}/{self.effort}/{PROMPT_VERSION}"
 
     def _request(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
         return {

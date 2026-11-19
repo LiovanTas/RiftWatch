@@ -7,8 +7,9 @@ evidence fingerprint + model, so only the first view of a given game pays for th
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import logging
 import threading
+from dataclasses import dataclass, field
 from collections import OrderedDict
 from collections.abc import Iterator
 from typing import Any
@@ -32,11 +33,16 @@ from riftwatch.coach.evidence import (
 )
 from riftwatch.coach.grounding import CoachOutput, CoachPoint
 from riftwatch.coach.llm import Coach
+from riftwatch.coach.swing_evidence import active as active_win_model
+from riftwatch.coach.swing_evidence import add_game_swing, add_recent_swing
 from riftwatch.db import repo
 from riftwatch.features import store
 from riftwatch.features.extract import GameFeatures, ParticipantFeatures
 from riftwatch.features.metrics import LANE_LEAD_METRICS
 from riftwatch.riot.api import RANKED_FLEX, SUPPORTED_QUEUES
+
+
+log = logging.getLogger(__name__)
 
 
 class ReportError(LookupError):
@@ -301,6 +307,19 @@ def _video_evidence(conn, evidence: EvidenceSet, match_id: str, brain) -> None:
     add_video_evidence(evidence, mine, stats, judged)
 
 
+def _swing(add, conn, evidence: EvidenceSet, *args) -> None:
+    """Swing evidence (coach.swing_evidence), when the win-probability model is loaded. It
+    adds to coaching, so a failure here leaves the rest of the evidence as it was."""
+    if active_win_model() is None:
+        return
+    n = len(evidence.items)
+    try:
+        add(conn, evidence, *args)
+    except Exception as exc:                  # noqa: BLE001 -- logged, coaching goes on
+        del evidence.items[n:]
+        log.warning("swing evidence skipped: %s", exc)
+
+
 def _score(conn, game: GameFeatures, p: ParticipantFeatures, bucket: str, min_n: int) -> GameScore:
     opponent = game.participants.get(p.opponent_id) if p.opponent_id else None
     return score_participant(p, baselines_for(conn, bucket, p.role, p.champion_id, min_n),
@@ -339,6 +358,7 @@ def game_report(
             review = advisor.review(raw_match, raw_timeline, puuid)
     evidence = game_evidence(game, score, live=live, review=review)
     _video_evidence(conn, evidence, match_id, brain)
+    _swing(add_game_swing, conn, evidence, game, p)
     output, model, cached, dropped, usage, pending = _coach(
         conn, coach, puuid, "game", match_id, evidence, "this single game", refresh, p.role,
         generate)
@@ -374,6 +394,7 @@ def recent_report(
                                                        queue_id=queue_id))
     except ReportError:
         pass
+    _swing(add_recent_swing, conn, evidence, puuid, loaded[:games])
     output, model, cached, dropped, usage, pending = _coach(
         conn, coach, puuid, "recent", None, evidence, "their recent games", refresh,
         generate=generate)

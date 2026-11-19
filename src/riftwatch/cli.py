@@ -254,12 +254,19 @@ def cmd_winprob_backfill(settings: Settings, args: argparse.Namespace) -> int:
         print("no win-probability model yet: run `riftwatch winprob train` first")
         return 1
     gd = shared()
-    with connect(settings.database_url) as conn:
+    with connect(settings.database_url, timeout_s=30) as conn:     # shards start together
         todo = [r[0] for r in conn.execute(
             """SELECT t.match_id FROM match_timelines t JOIN matches m USING (match_id)
                 LEFT JOIN match_swing s ON s.match_id = t.match_id AND s.version = %s
                WHERE s.match_id IS NULL AND m.queue_id IN (420, 440) ORDER BY t.match_id""",
             (swing.version(model),))]
+        if args.shard:
+            # Several processes at once, each on its own share of the games: the Swing
+            # arithmetic is plain Python, so separate processes use separate CPU cores.
+            import hashlib
+
+            index, count = (int(x) for x in args.shard.split("/"))
+            todo = [m for m in todo if int(hashlib.md5(m.encode()).hexdigest(), 16) % count == index]
         if args.limit:
             todo = todo[: args.limit]
     print(f"{len(todo):,} games to work out")
@@ -267,8 +274,19 @@ def cmd_winprob_backfill(settings: Settings, args: argparse.Namespace) -> int:
 
     def chunk(ids: list[str]) -> int:
         # Each worker has its own connection: reading timelines waits on Postgres, so four
-        # at once keep the (single-threaded) Swing arithmetic busy.
-        with connect(settings.database_url) as conn:
+        # at once keep the (single-threaded) Swing arithmetic busy. Several shards starting
+        # together can make a connection wait past its timeout, so try a few times.
+        import time as clock
+
+        for attempt in range(5):
+            try:
+                conn = connect(settings.database_url, timeout_s=20)
+                break
+            except Exception:
+                if attempt == 4:
+                    raise
+                clock.sleep(3 * (attempt + 1))
+        with conn:
             return len(swing.for_matches(conn, model, ids, lambda c: gd.champion(c).name))
 
     done = 0
@@ -279,7 +297,7 @@ def cmd_winprob_backfill(settings: Settings, args: argparse.Namespace) -> int:
             if n % 10 == 0 or n == len(chunks):
                 print(f"  {min(50 * n, len(todo)):,} / {len(todo):,}", flush=True)
     print(f"{done:,} games now have Swing")
-    if not args.limit:
+    if not args.limit and not args.shard:
         _winprob_tables(settings, model)
     return 0
 
@@ -292,6 +310,24 @@ def _winprob_tables(settings: Settings, model) -> None:
         swing.build_norms(conn, model, settings.models_dir)
         print("what each choice did beyond the game state...")
         choices.build(conn, model, settings.models_dir)
+
+
+def cmd_winprob_validate(settings: Settings, args: argparse.Namespace) -> int:
+    """Check Swing is a real measure of a player: reliability, prediction, robustness."""
+    import joblib
+
+    from riftwatch.winprob import model as wp
+    from riftwatch.winprob import validate
+
+    model = wp.load(settings.models_dir)
+    if model is None:
+        print("no win-probability model yet: run `riftwatch winprob train` first")
+        return 1
+    backup = Path(settings.models_dir) / "winprob_wp1_backup" / wp.MODEL_FILE
+    other = joblib.load(backup) if backup.exists() else None
+    with connect(settings.database_url) as conn:
+        validate.build(conn, model, settings.models_dir, other_model=other)
+    return 0
 
 
 def cmd_winprob_choices(settings: Settings, args: argparse.Namespace) -> int:
@@ -477,6 +513,10 @@ def cmd_coach(settings: Settings, args: argparse.Namespace) -> int:
     if not args.offline and settings.anthropic_api_key:
         coach = Coach(settings.coach_model, api_key=settings.anthropic_api_key,
                       effort=settings.coach_effort, thinking=settings.coach_thinking)
+    from riftwatch.coach import swing_evidence
+    from riftwatch.winprob import model as winprob
+
+    swing_evidence.use(winprob.load(settings.models_dir), settings.models_dir)   # Swing as evidence
     with connect(settings.database_url) as conn:
         account = repo.find_account(conn, riot_id.game_name, riot_id.tag_line)
         if account is None or args.sync:
@@ -1143,7 +1183,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_winprob_train)
     p = wpcmd.add_parser("backfill", help="work out Swing for every stored game that doesn't have it")
     p.add_argument("--limit", type=int, help="only this many games")
+    p.add_argument("--shard", help="i/n: only this process's share of the games, to run n processes at once "
+                                   "(then run `winprob choices` once they're all done)")
     p.set_defaults(func=cmd_winprob_backfill)
+    p = wpcmd.add_parser("validate", help="check Swing repeats, predicts and doesn't hinge on arbitrary choices")
+    p.set_defaults(func=cmd_winprob_validate)
     p = wpcmd.add_parser("choices", help="rebuild what each item, skill, rune and spell choice did beyond the game state")
     p.set_defaults(func=cmd_winprob_choices)
 

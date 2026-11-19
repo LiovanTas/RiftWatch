@@ -342,7 +342,7 @@ def test_every_inline_script_is_allowed_by_the_policy(web):
 
     client, api, _, jobs = web
     sync(client, jobs)
-    for url in ("/", "/players/na/Me-NA1?tab=coach", f"/players/na/Me-NA1/matches/{api.ids[0]}"):
+    for url in ("/", "/draft", "/players/na/Me-NA1?tab=coach", f"/players/na/Me-NA1/matches/{api.ids[0]}"):
         r = client.get(url)
         assert r.status_code == 200
         csp = r.headers["content-security-policy"]
@@ -605,11 +605,24 @@ def test_swing_on_match_history_the_game_and_its_page(web, tmp_path):
         stored = conn.execute("SELECT count(*), count(DISTINCT kind) FROM choice_values").fetchone()
     assert summary["choices"] > 0 and stored[0] > 0 and stored[1] >= 1
     assert norms["norms"].get("kills") and norms["habits"]
+    # The checks behind Swing, the method page and the rating built on them.
+    from riftwatch.winprob import validate
+
+    with connect(TEST_DB, autocommit=True) as conn:
+        result = validate.build(conn, model, tmp_path / "models", log=lambda *_: None)
+    assert result["rating"]["k"] > 0 and result["rules"]["rule_sets"] and result["role_means"]
+    assert [r["key"] for r in result["rules"]["rule_sets"]] == ["fixed", "kills", "economy", "measured"]
+    method = client.get("/swing/method").text
+    assert "Proposition 1" in method and "Spearman" in method and "6.3 Do the sharing rules matter?" in method
+    profile = client.get("/players/na/Me-NA1").text
+    assert "Swing rating" in profile and "Last session" in profile
+    assert client.get("/players/na/Me-NA1?tab=champions").status_code == 200
 
 
 def test_swing_needs_a_trained_network(web):
     client, api, _, jobs = web
     sync(client, jobs)
     assert "hasn't been trained" in client.get("/swing").text
+    assert client.get("/swing/method").status_code == 200       # the method reads without numbers too
     detail = client.get(f"/fragments/players/na/Me-NA1/matches/{api.ids[0]}").text
     assert 'data-pane="swing"' not in detail and "badge swing" not in client.get("/players/na/Me-NA1").text

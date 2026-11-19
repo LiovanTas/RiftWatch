@@ -8,6 +8,7 @@
     <div class="eyebrow">RiftWatch metric</div>
     <h1>Swing</h1>
     <p>How much each player moved their team's chance of winning, in percentage points. A neural network reads the state of a game at any moment and gives each team's chance to win. Every change in that chance, from the draft to the end, is shared out among the players responsible, and each moment says why it moved the chance as much as it did. Counting the draft, the winners' Swing always adds up to +50 and the losers' to -50; a player's Swing is their part of it.</p>
+    <p><a class="btn" href="/swing/method">The method: definitions, proofs and validation &rarr;</a></p>
   </div>
 
   {% if not m %}
@@ -109,6 +110,19 @@
         <tbody>{% for r in by_role %}<tr><td>{{ r.name }}</td><td class="sw-cell {{ 'up' if r.avg >= 0 else 'down' }}">{{ '%+.1f'|format(r.avg) }}</td><td class="sw-cell up">{{ '%+.1f'|format(r.wins) }}</td><td class="sw-cell down">{{ '%+.1f'|format(r.losses) }}</td><td class="muted">{{ '%+.0f'|format(r.p10) }} to {{ '%+.0f'|format(r.p90) }}</td></tr>{% endfor %}</tbody>
       </table></div>
       <p class="muted small">Junglers take part in more kills and nearly every objective, so they average a little more; a support's vision and peel show up less in kills and gold, so they average a little less. Compare players in the same role. Typical range: the middle 80% of games.</p>
+    </div>
+  </div>
+  {% endif %}
+  {% if ladder %}
+  <div class="panel" style="margin-top:16px" id="ladder">
+    <div class="panel-head"><span>Swing ladder</span><span class="muted small">players with 10+ games, by Swing rating in their main role{% if rating %} &middot; pulled towards 0 as if {{ rating.k }} average games were added{% endif %} &middot; <a href="/swing/method">method</a></span></div>
+    <div class="panel-body ladder-grid">
+      {% for role, rows in ladder.items() %}
+      <div>
+        <h5 class="sw-h" style="margin-top:0">{{ role }}</h5>
+        {% for p in rows[:10] %}<a class="ladder-row" href="{{ p.url }}" data-tip="{{ p.name }} &middot; {{ p.region }}&#10;rating {{ '%+.1f'|format(p.value) }} &plusmn;{{ p.sd }} over {{ p.games }} games (raw average {{ '%+.1f'|format(p.raw) }} against the role); most played {{ p.champion }}"><span class="n">{{ loop.index }}</span><img src="{{ p.icon }}" alt="" width="22" height="22" loading="lazy"><span class="who">{{ p.name }}<small>{{ p.region }} &middot; {{ p.games }} games</small></span><b class="{{ 'up' if p.value >= 0 else 'down' }}">{{ '%+.1f'|format(p.value) }}</b><small class="muted">&plusmn;{{ p.sd }}</small></a>{% endfor %}
+      </div>
+      {% endfor %}
     </div>
   </div>
   {% endif %}

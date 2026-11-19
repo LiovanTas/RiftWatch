@@ -60,7 +60,7 @@ GAME_SQL = """
            jsonb_path_query_array(t.raw, '$.info.frames[*].events[*] ? (@.type == "CHAMPION_KILL"
                || @.type == "ELITE_MONSTER_KILL" || @.type == "BUILDING_KILL"
                || @.type == "DRAGON_SOUL_GIVEN" || @.type == "GAME_END")'),
-           (SELECT jsonb_agg(jsonb_build_array(b.participant_id, b.champion_id, b.purchases, b.purchase_s))
+           (SELECT jsonb_agg(jsonb_build_array(b.participant_id, b.champion_id, b.purchases, b.purchase_s, b.position))
               FROM participant_builds b WHERE b.match_id = t.match_id)
       FROM match_timelines t"""
 
@@ -68,10 +68,15 @@ GAME_SQL = """
 def players(rows) -> tuple[dict[int, int], dict[int, list[tuple[int, int]]]]:
     """(participant -> champion, participant -> [(second, item)]) from GAME_SQL's last column."""
     champions, purchases = {}, {}
-    for pid, champ, items, seconds in rows or []:
+    for pid, champ, items, seconds, *_ in rows or []:
         champions[int(pid)] = int(champ)
         purchases[int(pid)] = list(zip(seconds or [], items or [], strict=False))
     return champions, purchases
+
+
+def positions(rows) -> dict[int, str]:
+    """participant -> position (TOP ... UTILITY) from GAME_SQL's last column."""
+    return {int(r[0]): r[4] for r in rows or [] if len(r) > 4 and r[4]}
 
 
 def build_catalog(conn, gd, log=print) -> Catalog:
@@ -524,7 +529,7 @@ def _stack(state: WinModel, X_all, own, enemy, y, fit_m, val_m, catalog: Catalog
     for scale in CHAMPION_SCALES:
         z_fit, z_val = Z(fit_m, scale), Z(val_m, scale)
         for c in CONTEXT_C:
-            layer = LogisticRegression(C=c, max_iter=500, solver="lbfgs").fit(z_fit, y[fit_m])
+            layer = LogisticRegression(C=c, max_iter=3000, solver="lbfgs").fit(z_fit, y[fit_m])
             loss = float(log_loss(y[val_m], layer.predict_proba(z_val)[:, 1], labels=[0, 1]))
             log(f"    stacked: C {c:g}, champions x{scale:g} -> {loss:.4f} on validation games")
             tried.append((loss, c, scale, layer))

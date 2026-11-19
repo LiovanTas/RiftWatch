@@ -362,7 +362,7 @@ def champion_stats(conn: psycopg.Connection, gd: GameData, puuid: str,
     for r in rows:
         champ = gd.champion(r["champion_id"])
         out.append({
-            "name": champ.name, "slug": champ.slug, "icon": gd.champion_icon(r["champion_id"]),
+            "id": r["champion_id"], "name": champ.name, "slug": champ.slug, "icon": gd.champion_icon(r["champion_id"]),
             "games": r["games"], "wins": r["wins"], "losses": r["games"] - r["wins"],
             "win_rate": round(100 * r["wins"] / r["games"]),
             "kills": round(r["k"], 1), "deaths": round(r["d"], 1), "assists": round(r["a"], 1),

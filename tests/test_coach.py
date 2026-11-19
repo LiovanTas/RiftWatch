@@ -372,7 +372,7 @@ def test_stream_emits_only_grounded_points_then_final():
     assert run.attempts == 2 and run.output == GOOD
 
 
-def test_stream_endpoint_streams_then_caches(conn):
+def test_stream_endpoint_streams_then_caches(conn, tmp_path):
     from fastapi.testclient import TestClient
     from psycopg_pool import ConnectionPool
 
@@ -398,8 +398,10 @@ def test_stream_endpoint_streams_then_caches(conn):
     ok = CoachOutput(headline="Review.", points=[point(evidence_ids=["E1"], explanation="A game.")])
     coach, messages = fake_coach(ok)
     pool = ConnectionPool(TEST_DB, min_size=1, max_size=3, open=True, kwargs={"autocommit": True})
-    app = create_app(Settings.from_env({"RIFTWATCH_DATABASE_URL": TEST_DB}), api=None, coach=coach,
-                     pool=pool, jobs=JobQueue(pool))
+    # An empty models folder: the test mustn't depend on whatever models are trained locally.
+    app = create_app(Settings.from_env({"RIFTWATCH_DATABASE_URL": TEST_DB,
+                                        "RIFTWATCH_MODELS_DIR": str(tmp_path / "models")}),
+                     api=None, coach=coach, pool=pool, jobs=JobQueue(pool))
     with TestClient(app) as client:
         r = client.post("/api/players/na/Me-NA1/matches/NA1_5000/coach/stream")
         assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")

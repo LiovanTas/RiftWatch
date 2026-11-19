@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Draft Assistant: What to Pick in Champ Select | RiftWatch{% endblock %}
+{% block description %}Which champion to pick in champ select, given the bans, both teams' picks, your role, your champion pool and your playstyle, from stored ranked games.{% endblock %}
+{% block content %}
+<div class="container draft" id="draft" data-champs="{{ champs_json }}" data-role="{{ role }}">
+  <div class="page-title">
+    <div class="eyebrow">Champ select</div>
+    <h1>Draft assistant</h1>
+    <p>Enter the bans and picks as they happen. RiftWatch ranks champions for your role by expected win chance, built from stored ranked games: the champion's strength at your rank, the lane matchup, how it has done with your team's picks and against theirs, what it does to your team's damage mix and frontline, and, with your Riot ID, your comfort on it and the kind of champion you win on.</p>
+    <p class="muted small">Riot's public API doesn't show champ select, so picks are typed in by hand; RiftWatch never reads the game client.</p>
+  </div>
+
+  <form class="panel draft-form" id="draft-form" autocomplete="off">
+    <div class="draft-top">
+      <div class="draft-field">
+        <span class="draft-label">Your role</span>
+        <nav class="seg" id="draft-role" aria-label="Your role">{% for key, name in positions %}<button type="button" data-role="{{ key }}" class="{{ 'on' if role == key }}">{{ name }}</button>{% endfor %}</nav>
+      </div>
+      <div class="draft-field">
+        <label class="draft-label" for="draft-me">Your Riot ID <span class="muted">(optional: your pool and playstyle)</span></label>
+        <input id="draft-me" value="{{ me }}" placeholder="Name#TAG" spellcheck="false" maxlength="40">
+      </div>
+      <button class="btn" type="button" id="draft-clear">Clear</button>
+    </div>
+    <div class="draft-teams">
+      <fieldset class="draft-team ally">
+        <legend>Your team</legend>
+        {% for i in range(4) %}<div class="draft-slot"><img alt="" hidden><input list="draft-champs" data-side="ally" placeholder="Ally {{ i + 1 }}" aria-label="Ally pick {{ i + 1 }}"><select data-side="ally" aria-label="Ally {{ i + 1 }} role"><option value="">role?</option>{% for key, name in positions %}<option value="{{ key }}">{{ name }}</option>{% endfor %}</select></div>{% endfor %}
+      </fieldset>
+      <fieldset class="draft-team enemy">
+        <legend>Enemy team</legend>
+        {% for i in range(5) %}<div class="draft-slot"><img alt="" hidden><input list="draft-champs" data-side="enemy" placeholder="Enemy {{ i + 1 }}" aria-label="Enemy pick {{ i + 1 }}"><select data-side="enemy" aria-label="Enemy {{ i + 1 }} role"><option value="">role?</option>{% for key, name in positions %}<option value="{{ key }}">{{ name }}</option>{% endfor %}</select></div>{% endfor %}
+      </fieldset>
+    </div>
+    <fieldset class="draft-bans">
+      <legend>Bans</legend>
+      {% for i in range(10) %}<div class="draft-slot ban"><img alt="" hidden><input list="draft-champs" data-side="ban" placeholder="Ban {{ i + 1 }}" aria-label="Ban {{ i + 1 }}"></div>{% endfor %}
+    </fieldset>
+    <datalist id="draft-champs"></datalist>
+  </form>
+
+  <div id="draft-out" aria-live="polite">
+    <div class="panel empty"><h3>Pick your role to start</h3><p class="muted">Suggestions update as you add bans and picks.</p></div>
+  </div>
+  <p class="muted small draft-foot">How the score works: each part is measured from stored ranked games and pulled towards "no effect" when the games are few, then the parts are added on the log-odds scale. Team-comp parts are small on purpose: RiftWatch's win-probability model finds that a draft alone barely predicts a solo-queue game, and the damage-mix and frontline effects come from how teams with each mix have actually done. Your comfort and playstyle need your Riot ID and stored games (search yourself first).</p>
+</div>
+{% endblock %}
+{% block scripts %}<script src="/static/draft.js?v={{ asset_version }}" defer></script>{% endblock %}

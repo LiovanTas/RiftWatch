@@ -82,6 +82,7 @@ riftwatch coach "Name#TAG" --last --html last-game.html
 | `winprob train` | Trains four versions of the win-probability model behind Swing, keeps the best on held-out games and compares them with a gold-only baseline; `--reuse` skips re-reading the games |
 | `winprob backfill` | Works out Swing for every stored game that doesn't have it yet, then the choice values and norms |
 | `winprob choices` | Rebuilds what each item, skill, rune and spell choice did beyond the game state, and the moment norms |
+| `winprob validate` | Checks Swing repeats, predicts and doesn't hinge on its sharing rules or the model; fits the Swing rating (`validation.json`) |
 | `serve` | Runs the website and JSON API on http://127.0.0.1:8000 |
 | `doctor`, `db migrate`, `db status` | Setup checks and schema migrations |
 
@@ -306,6 +307,10 @@ with RiftWatch's coaching built in.
     grounded explanation of a key moment (`web/moments.py`, stored in `moment_notes`)
   - a link to RiftWatch's minute-by-minute analysis and AI coaching, and to the game's own
     shareable page (`/games/<match id>`, from that player's side with `?as=<region>/<id>`).
+- **Last session:** the latest run of games (less than an hour apart): record, total Swing, the
+  session's best play and costliest moment (linked to the game), and what deaths cost against
+  the player's usual. The stat band shows the player's **Swing rating** with its margin, and the
+  Champions tab a Swing column (per champion, against everyone on it in the same roles).
 - **Where your Swing comes from:** the profile's last 20 games, each part of Swing against
   the average for the player's role, a game-by-game Swing strip, and the costly habits in
   their deaths (losing an objective before respawning, caught by three or more, dying with
@@ -676,62 +681,79 @@ staircase, and a small change in the state (a finished item) that lands on a fla
 the chance by exactly nothing, which Swing can't afford. The version kept is the best on every
 game none of them trained on, each half calibrated on the other half.
 
-Measured on 2,014 games none of them trained on (13,425 ranked games, 755,410 moments seen
+Measured on 2,578 games none of them trained on (17,182 ranked games, 979,172 moments seen
 from both sides; the last column is each version's log loss improvement over the game-state
-network on all 4,028 held-out games, with a 95% interval from resampling games):
+network on all 5,156 held-out games, with a 95% interval from resampling games):
 
 | Version | Log loss | Brier | AUC | Calibration error | vs the game-state network |
 |---|---|---|---|---|---|
-| Game-state network | 0.5200 | 0.1753 | 0.814 | 0.0043 | |
-| + items and composition in the network | 0.5222 | 0.1765 | 0.812 | 0.0055 | -0.0009 (-0.0039 to +0.0022) |
-| + champions in the network | 0.5515 | 0.1883 | 0.785 | 0.0308 | -0.0212 (-0.0286 to -0.0148) |
-| **Stacked (used)** | **0.5183** | **0.1746** | **0.816** | 0.0091 | **+0.0070 (+0.0029 to +0.0106)** |
-| Gold lead and minute only | 0.5302 | 0.1799 | 0.805 | 0.0073 | |
+| Game-state network | 0.5169 | 0.1752 | 0.814 | 0.0065 | |
+| + items and composition in the network | 0.5130 | 0.1735 | 0.818 | 0.0053 | +0.0026 (-0.0006 to +0.0053) |
+| + champions in the network | 0.5311 | 0.1809 | 0.802 | 0.0163 | -0.0199 (-0.0269 to -0.0133) |
+| **Stacked (used)** | **0.5033** | **0.1699** | **0.826** | **0.0040** | **+0.0119 (+0.0081 to +0.0154)** |
+| Gold lead and minute only | 0.5335 | 0.1812 | 0.801 | 0.0063 | |
 
 | Minutes | 0-10 | 10-15 | 15-20 | 20-25 | 25-30 | 30+ |
 |---|---|---|---|---|---|---|
-| AUC, stacked | 0.676 | 0.806 | 0.864 | 0.896 | 0.902 | 0.860 |
-| AUC, gold only | 0.674 | 0.790 | 0.849 | 0.883 | 0.893 | 0.849 |
+| AUC, stacked | 0.682 | 0.804 | 0.858 | 0.897 | 0.920 | 0.910 |
+| AUC, gold only | 0.663 | 0.781 | 0.835 | 0.872 | 0.898 | 0.881 |
 
-The champion terms are penalised harder than the rest (their columns scaled by 0.1 before the
-layer's L2 penalty, chosen with the penalty on validation games): at full weight they overfit
-the draft and the stacked version lost to the plain network on the test games. Penalised, the
-draft barely predicts a solo-queue game (AUC 0.507 in the first two minutes), so the draft
-share of Swing is small, which is the honest answer from 13,000 games. The edge over the
-game-state network is small but held across data sizes: +0.0098 on the first 9,156 games,
-+0.0070 on 13,425. Numbers aren't comparable between runs: the test games differ, and the
-4,340 games crawled in November 2026 (1,945 Iron to Diamond, 2,395 Master+) changed the mix.
+The champion terms are penalised harder than the rest (their columns scaled down before the
+layer's L2 penalty, the scale and penalty chosen together on validation games; 0.3 here): at
+full weight they overfit the draft. The stacked version's edge over the game-state network
+grew with the data (+0.0098 on 9,156 games, +0.0070 on 13,425, +0.0119 on 17,182, the last
+clearly outside noise), and it reads the draft a little (AUC 0.549 in the first two minutes,
+against 0.529), which is what the draft share of Swing rests on. Numbers aren't comparable
+between runs: the test games differ, and each crawl changed the mix of ranks.
 
-What the logistic layer learned reads like the game: a resistance item is worth more the more
-of the enemy's damage it blocks (+0.31 log-odds for armor against an all-physical team, +0.37
-for magic resist against all-magic, against -0.14 and -0.19 for either against the wrong
-damage), anti-heal is worth little on its own (-0.14) but +0.08 for every enemy lifesteal
-item, crit items are the best damage items (+0.08), marksmen start behind (-0.12) and they,
-mages and supports grow with the game (+0.10, +0.07, +0.12 per 30 minutes) while assassins,
-fighters and tanks fall off (-0.18, -0.08, -0.04). These are associations on top of the game
-state (defensive items are often bought by the team that's behind), listed on `/swing`.
+What the logistic layer learned reads like the game: armor is worth more the more of the
+enemy's damage is physical (+0.21 log-odds against an all-physical team), anti-heal is worth
+nothing on its own (-0.08) but pays against lifesteal (+0.04 per enemy lifesteal item), crit
+items are the best damage items (+0.06), marksmen start behind (-0.13) and scale hardest
+(+0.12 for every 30 minutes), supports and mages grow (+0.08, +0.02) while assassins, tanks
+and fighters fall off (-0.13, -0.05, -0.05). These are associations on top of the game state
+(defensive items are often bought by the team that's behind), listed on `/swing`.
 
-### Sharing it out
+### The decomposition and sharing it out
 
-`winprob/swing.py` (about 90 ms a game; all 13,655 games in about half an hour on four threads):
+The full method, with definitions, proofs and the validation numbers read live from the
+model, is on the site at **`/swing/method`**. In short (`winprob/swing.py`):
 
-- **draft:** the game can start above or below 50%; the difference is shared by each team
-- **kills:** half the jump to the killer, half to the assisters (all to the killer alone)
-- **deaths:** the player who died takes the other team's gain, and half of whatever their
-  team loses before they respawn (the other half is shared by the team)
-- **objectives:** dragons, Baron, Elder, heralds, voidgrubs, Atakhan: half the gain to the
-  players who took part, half to the whole team; the other team shares the loss
-- **structures:** towers and inhibitors, the same way
-- **items:** finishing an item moves the chance by what it gives against this enemy team;
-  the buyer gets it, and the other team's loss counts as falling behind in economy
-- **economy:** whatever moved between minutes that no event explains (farming, plates,
-  trading, pressure) goes to the team it favoured, half evenly and half by gold and XP
-  earned; the other team shares the loss evenly; the final step to the result is shared too
+Take every whole minute and every kill, objective, structure and finished item. Each event
+makes a jump in blue's chance (the state just after it minus just before it), and whatever
+moved within a minute that no event explains is drift (gold, XP and pressure between fights).
+A telescoping sum splits the result exactly:
 
-Counting the draft, a winning team's Swing adds up to +50 and a losing team's to -50. The two
-"half" rules keep the rules from favouring a role: giving all of an objective to whoever took
-part and all of the economy by gold earned left junglers at +6.9 a game and supports at -4.3;
-the half split narrows that to +4.7 and -2.5. `/swing` shows each role's average.
+    Y - 1/2 = (p0 - 1/2) + sum of event jumps + sum of drift + (Y - pT)
+              draft        events                economy         last step
+
+Each term goes to blue with its sign and to red with the opposite one, and is shared among a
+team's five players by weights that add up to one, so **a winning team's Swing is always +50
+and a losing team's -50** (exact; tested to 1e-9 under every set of rules). If the model's
+chances are right they form a martingale, so every term after the draft averages zero given
+what came before: Swing credits only what wasn't already expected, the property that makes
+win probability added work in baseball.
+
+Swing is computed in two steps. `evaluate` asks the model about every moment once and keeps
+the facts sharing needs (stored with each game). `share` applies the rules, so other rules
+can be tried on every stored game without the model. The rules, measured where the data
+allows:
+
+- **draft:** shared by each team
+- **kills:** half by damage dealt to the victim (Riot's `victimDamageReceived`), half equally
+  among the players credited (crowd control, shields and heals aren't in the damage record);
+  the player who died takes the loss
+- **objectives and structures:** half to the players who took part, half to the team; a
+  loss lands half on players dead at that moment
+- **items:** the buyer
+- **drift:** half evenly, half by how far each player out-earned their lane opponent that
+  minute (a loss: by how far each fell behind theirs). Measuring against the same role means
+  a support isn't judged against a carry's income
+- **last step:** evenly
+
+Until November 2026 kills were split half to the killer and half to the assisters, and drift
+by gold earned (losses evenly). `riftwatch winprob validate` compares those fixed shares with
+the measured ones on every stored game (section 6.3 of the method page).
 
 **Why a moment cost what it did.** Each jump is split exactly among what changed (a player
 down, the bounty gold, the kill score, the dragon, an item's armor) by Shapley values: the
@@ -742,6 +764,50 @@ gold the player was holding, how many teammates were already dead, and what the 
 before they respawned. A moment's **leverage** is its swing against the typical moment of its
 kind in the same ten minutes of a game (`norms.json`). For each finished item the model is
 also asked about the champion's other common items at that same moment.
+
+### Is Swing a real measure? Validation and the rating
+
+`riftwatch winprob validate` (`winprob/validate.py`, results in `validation.json` and on
+`/swing/method`) checks what a statistic about players should do. Every stat is measured
+against its role's average first, so none looks stable just because players keep to a role.
+On 171,940 player-games (1,033 players with 20+ games):
+
+| Stat | Reliability (split-half, Spearman-Brown) | Predicts later win rate (r) |
+|---|---|---|
+| **Swing** | 0.51 | +0.089 |
+| RiftWatch score (KDA, kill share, damage, gold, farm, vision) | 0.53 | +0.120 |
+| KDA | 0.50 | +0.028 |
+| Kill participation | 0.59 | +0.045 |
+| Damage per minute | 0.71 | +0.090 |
+| Gold per minute | 0.75 | +0.076 |
+| Win rate | 0.06 | +0.005 |
+
+- **Prediction against its ceiling.** A later half's win rate is mostly luck: no stat could
+  correlate with it beyond 0.30 (the square root of its reliability). With past win rate
+  known, past Swing still adds a partial correlation of +0.103 (95% CI 0.042 to 0.163).
+- **The sharing rules.** Every stored game was shared again under rule sets fixed in advance:
+  the old fixed shares (reliability 0.48, prediction 0.085), damage-shared kills only (0.47,
+  0.082), lane-relative economy only (0.51, 0.092) and both (0.51, 0.089, used). Measuring
+  economy against the lane opponent is what made Swing more repeatable; damage-shared kills
+  are the principled split but change little. Moving each remaining choice far either side
+  (a quarter or three quarters instead of half) moves a player-game's Swing by 0.3 to 1.3
+  points on average (correlation 0.996 to 0.9996 with the rules used).
+- **The model.** The same games scored with the first network instead: correlation 0.950.
+
+Swing repeats as well as KDA and the site's own score, and predicts as well as damage and
+gold, though not as well as the composite score: like win probability added in baseball, it
+credits context (the same kill is worth more at 35 minutes with Baron up), which is what makes
+it explain a game and also what makes it noisier as a skill measure.
+
+**The Swing rating** is a player's level from many games. With x = Swing minus the role
+average in one game, x = theta + noise, Var(theta) = tau^2, Var(noise) = sigma^2: the best
+estimate from n games is the average times n tau^2 / (n tau^2 + sigma^2), with a margin of
+sqrt(tau^2 sigma^2 / (n tau^2 + sigma^2)). tau^2 is the covariance of players' averages over two
+halves of their games (the noise in each is independent), sigma^2 the average spread of a
+player's own games: tau = 3.19, sigma = 16.61, so a rating is pulled towards average as if 27
+average games were added. A test checks the estimators on simulated players with known levels.
+It's on the profile ("Swing rating +x +- y"), and `/swing` has a **Swing ladder** of the players
+RiftWatch has seen with 10+ games, by rating in their main role.
 
 ### Choices: items, skills, runes, spells
 
@@ -754,20 +820,20 @@ Bayes (the spread of true values is estimated from how much the averages vary be
 their sample sizes explain), items are measured against the enemy team too (mostly magic,
 mostly physical, two or more tanks), and a split-half check says how much is signal:
 
-Over 715,558 choices in 13,655 games:
+Over 918,202 choices in 17,536 games:
 
 | Choice | True spread | Split-half reliability | Choices in both halves |
 |---|---|---|---|
-| Items | ±0.4 pts | 0.05 | 1039 |
-| First ability maxed | ±0.4 pts | 0.2 | 213 |
-| Keystone | ±2.5 pts | 0.09 | 341 |
-| Summoner spells | ±0.4 pts | 0.07 | 358 |
+| Items | ±1.6 pts | 0.11 | 1237 |
+| First ability maxed | ±1.2 pts | 0.05 | 226 |
+| Keystone | ±2.7 pts | 0.06 | 378 |
+| Summoner spells | ±1.5 pts | 0.05 | 402 |
 
 The honest result: with the game state taken out, which item, keystone or spell a player picks
 on a champion barely changes the result beyond chance at this sample size (a split-half
 reliability of 0 is noise, 1 fully repeatable). Aurelion Sol players who finished Rylai's
-second won 58% where the game state gave 51% (+6.8 over 267 games), but sampling noise there
-is about ±3 points and true differences between items are around ±0.4, so it's pulled to +0.2.
+second won 58% where the game state gave 50% (+7.4 over 312 games), but sampling noise there
+is about ±3 points and true differences between items are around ±1.6, so it's pulled to +2.5.
 The item signal that does hold up comes from pooling every champion: the logistic layer's
 armor-against-physical and anti-heal-against-lifesteal terms above, which is what the Win
 chance tab's per-item read uses. The pages show these numbers with their uncertainty and
@@ -1048,6 +1114,51 @@ next to your trades from the video and the library's stats.
 
 Trees and a small network suit a library of tens of games. A sequence model (a transformer
 over the raw four-a-second readings) becomes worth adding with a few hundred.
+
+## Draft assistant
+
+`/draft` (`web/draft.py`, linked as **Draft** in the header) ranks champions for your role during
+champ select. Riot's public API doesn't show champ select, so you type the bans and picks as
+they happen (RiftWatch never reads the game client); results update as you type and the draft
+survives a reload. With your Riot ID it also uses your pool and playstyle.
+
+Each candidate (banned and picked champions left out) gets an expected win chance built by
+adding effects in log-odds, each measured from stored ranked games and pulled towards "no
+effect" when the games are few:
+
+1. **strength:** the champion's win rate in the role at your rank (all ranks under 2,000 games)
+2. **lane:** its record against the enemy laner, relative to its own overall rate so strength
+   isn't counted twice (the enemy's role is taken from what you enter, or guessed)
+3. **with your team, against theirs:** per-pick records, pulled hard to zero and capped
+4. **team composition:** what it does to your damage mix and frontline, from how real teams
+   have done (teams under 25% magic damage won 43.7%, balanced ones 50-51%; 0, 1 and 2 tanks
+   49.4%, 50.4% and 51.3%), scaled by how much of the comp is known. The draft predicts little
+   in solo queue (the win-probability model's draft AUC is about 0.51), and the page says so
+5. **comfort:** the measured experience curve (49.7% on a first game, 52.5% from the tenth)
+   plus your Swing on the champion against everyone else's on it
+6. **playstyle:** your record on the champion's class against your own average
+
+Picking the best of about 90 candidates rewards lucky small samples, so shrinkage is strong and
+a champion needs 30 games in the role to be ranked: top picks land around 58-64%, not 70%.
+Each suggestion shows its breakdown in points with the records behind it ("40-25 against
+Ahri", "188 games on it; Swing +5.1 a game vs +1.4 typical"), alongside what the teams need
+("the enemy is 71% magic damage so far: magic resist will matter"), your pool and the worst
+matchups to avoid. `GET /api/draft/suggest` returns the same as JSON.
+
+## Swing in the AI coach
+
+When the win-probability model is loaded, coaching gets Swing evidence
+(`coach/swing_evidence.py`), under the same grounding check as everything else:
+
+- **one game:** the player's Swing by part and rank in the game, and their costliest moments and
+  biggest plays: the team's chance before and after, the player's share, the Shapley split of
+  the jump, its leverage, and for a death the damage sources, timer, gold held and what the
+  enemy took before they respawned
+- **recent games:** the Swing rating with its margin, each part against the role average, and
+  the costliest death habits against the role's typical cost per game
+
+Without the model, coaching is exactly as before. The prompt version is part of the cache key,
+so cached coaching was regenerated.
 
 ## Live-game scouting
 

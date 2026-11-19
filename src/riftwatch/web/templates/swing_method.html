@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}Swing: Method | RiftWatch{% endblock %}
+{% block description %}How RiftWatch's Swing metric is defined, estimated and validated: a win-probability model, an exact decomposition of each game's result among the ten players, and the evidence that it measures something real.{% endblock %}
+{% macro f3(x) %}{{ '%.3f'|format(x) if x is not none else '-' }}{% endmacro %}
+{% macro sb(pair) %}{% if pair and pair[0] == pair[0] %}{{ '%.2f'|format(2 * pair[0] / (1 + pair[0])) }} to {{ '%.2f'|format(2 * pair[1] / (1 + pair[1])) }}{% endif %}{% endmacro %}
+{% macro ci(pair) %}{% if pair and pair[0] == pair[0] %}{{ '%.2f'|format(pair[0]) }} to {{ '%.2f'|format(pair[1]) }}{% endif %}{% endmacro %}
+{% block content %}
+<div class="container">
+  <article class="method">
+    <div class="page-title">
+      <div class="eyebrow">RiftWatch metric &middot; method</div>
+      <h1>Swing: who moved the game, and by how much</h1>
+      <p>Swing answers one question about a League of Legends game: <em>how much did each player change their team's chance of winning?</em> It's built from a win-probability model trained on {{ '{:,}'.format(m.games) if m else 'stored' }} ranked games, an exact decomposition of each game's result among the ten players, and a set of checks that it measures something real. This page sets out the definitions, the properties that follow from them, the choices that had to be made, and the evidence.</p>
+      <p class="muted small">Sections: 1 the quantity &middot; 2 estimating it &middot; 3 the decomposition &middot; 4 sharing &middot; 5 the rating &middot; 6 validation &middot; 7 what it's for &middot; 8 limits &middot; references. <a href="/swing">Back to Swing</a></p>
+    </div>
+
+    <section>
+      <h2>1. The quantity</h2>
+      <p>Let <var>Y</var> = 1 if the blue team wins and 0 if it loses, and let <var>F</var><sub>t</sub> be everything recorded about the game up to time <var>t</var>. The <b>win probability</b> is</p>
+      <div class="eq"><var>P</var><sub>t</sub> = Pr(<var>Y</var> = 1 | <var>F</var><sub>t</sub>).</div>
+      <p>Before the game <var>P</var><sub>0</sub> reflects only the draft; at the end <var>P</var><sub>T</sub> = <var>Y</var>. Over a game, <var>P</var> moves from about 50% to 0 or 100%. Every movement has causes (a kill, a dragon, a lane falling behind), and every cause has players behind it. A player's <b>Swing</b> is the part of that movement they're responsible for, in percentage points. This is the idea behind win probability added in baseball (Mills &amp; Mills, 1970) and its later forms; the work here is making it precise for a game with ten players, continuous economy and simultaneous events.</p>
+    </section>
+
+    <section>
+      <h2>2. Estimating the win probability</h2>
+      <p><b>The state.</b> At any second, the game is summarised from the timeline as a vector <var>s</var><sub>t</sub> seen from one team's side: the minute; gold, XP, CS and level differences; kills; towers; inhibitors currently down; dragons and soul; Baron and Elder taken and whether their buffs are active; heralds, voidgrubs, Atakhan; how many players on each side are alive (from respawn timers); each team's finished items by what they give; each team's classes and magic-damage share; and which champions are playing.</p>
+      <p><b>Symmetry.</b> A model <var>f</var>(<var>s</var>) gives the chance that the team whose side <var>s</var> is seen from wins. Blue's chance is taken from both sides and averaged:</p>
+      <div class="eq"><var>p&#770;</var>(<var>s</var><sub>t</sub>) = &frac12; [ <var>f</var>(<var>s</var><sub>t</sub><sup>blue</sup>) + 1 &minus; <var>f</var>(<var>s</var><sub>t</sub><sup>red</sup>) ].</div>
+      <p>So the two teams' chances always add to one, swapping the teams gives 1 &minus; <var>p&#770;</var>, and a perfectly even state is exactly 50%.</p>
+      <p><b>Fitting.</b> The model minimises log loss, &minus;&Sigma; [<var>y</var> log <var>f</var> + (1 &minus; <var>y</var>) log(1 &minus; <var>f</var>)], over every minute of every training game from both sides. Log loss is a <em>proper scoring rule</em>: its expectation is minimised only by the true conditional probability (Gneiting &amp; Raftery, 2007). A model fitted this way estimates <var>P</var><sub>t</sub> itself, rather than just ranking games, which is what a decomposition of probabilities needs.</p>
+      <p><b>The model used.</b> A neural network <var>g</var> (two hidden layers, {{ m.network.layers|join(' and ') if m else '64 and 32' }} units) reads the game state. A regularised logistic layer adds what items, composition and champions contribute:</p>
+      <div class="eq"><var>f</var>(<var>s</var>) = &sigma;( &beta;<sub>0</sub> &middot; logit <var>g</var>(<var>s</var><sub>state</sub>) + &beta;<sup>T</sup> <var>z</var>(<var>s</var>) ),</div>
+      <p>where <var>z</var> holds item differences, item-against-team matchups (armor &times; the enemy's physical share, and so on), class differences and their change with the minute, and each champion's own and minute-scaled terms, with an L2 penalty on &beta; (the champion terms penalised hardest). A network fed those inputs directly memorises games by their line-up (they don't change during a game), which a linear layer can't do. Platt scaling, <var>c</var>(<var>p</var>) = &sigma;(<var>a</var> logit <var>p</var> + <var>b</var>), calibrates it on separate games. Unlike isotonic calibration it's smooth, so small changes in the state can't fall on a flat step and count for nothing.</p>
+      <p><b>Honest evaluation.</b> Games, not moments, are split 70 / 15 / 15 into training, calibration and test, so no minute of a test game is ever seen in training. Networks are stopped on held-out training games, and the version used is chosen on games none of the versions trained on.</p>
+      {% if m and m.variants %}
+      <div class="scroll"><table class="sw-metrics">
+        <thead><tr><th>Version ({{ '{:,}'.format(m.test_games) }} test games)</th><th>Log loss</th><th>Brier</th><th>AUC</th><th>Calib. error</th><th>vs game-state network, 95% CI</th></tr></thead>
+        <tbody>
+          {% for x in m.variants %}<tr class="{{ 'net' if x.name == m.chosen else 'base' }}"><td>{{ x.label }}{% if x.name == m.chosen %} <span class="badge mvp">used</span>{% endif %}</td><td>{{ f3(x.log_loss) }}</td><td>{{ f3(x.brier) }}</td><td>{{ f3(x.auc) }}</td><td>{{ f3(x.ece) }}</td><td>{% if x.vs_state %}{{ '%+.4f'|format(x.vs_state.improvement) }} ({{ '%+.4f'|format(x.vs_state.low) }} to {{ '%+.4f'|format(x.vs_state.high) }}){% endif %}</td></tr>{% endfor %}
+          <tr class="base"><td>Gold lead and minute only (logistic regression)</td><td>{{ f3(m.baseline.log_loss) }}</td><td>{{ f3(m.baseline.brier) }}</td><td>{{ f3(m.baseline.auc) }}</td><td>{{ f3(m.baseline.ece) }}</td><td></td></tr>
+        </tbody>
+      </table></div>
+      <p class="muted small">Brier: mean squared gap between the chance and the result. AUC: how often the eventual winner had the higher chance. Calibration error: the average gap between a predicted chance and how often it happened.</p>
+      {% endif %}
+    </section>
+
+    <section>
+      <h2>3. The decomposition</h2>
+      <p>Take the moments 0 = &tau;<sub>0</sub> &lt; &tau;<sub>1</sub> &lt; &hellip; &lt; &tau;<sub>K</sub> = <var>T</var>: every whole minute, plus every kill, objective, structure and finished item. At an event <var>e</var>, the state just before it and just after it (the same instant, with the event counted, and a kill's bounty added) give a <b>jump</b></p>
+      <div class="eq">&Delta;<sub>e</sub> = <var>p&#770;</var>(<var>s</var><sub>e</sub><sup>+</sup>) &minus; <var>p&#770;</var>(<var>s</var><sub>e</sub><sup>&minus;</sup>).</div>
+      <p>Within each minute, whatever moved that no event explains is the <b>drift</b>: gold, XP and pressure built up between fights,</p>
+      <div class="eq"><var>r</var><sub>m</sub> = [ <var>p&#770;</var><sub>m+1</sub> &minus; <var>p&#770;</var><sub>m</sub> ] &minus; &Sigma;<sub>e in minute m</sub> &Delta;<sub>e</sub>.</div>
+      <p>Because a telescoping sum cancels everything in between, the game's result splits exactly into</p>
+      <div class="eq">&nbsp;<var>Y</var> &minus; &frac12; = (<var>p&#770;</var><sub>0</sub> &minus; &frac12;) + &Sigma;<sub>e</sub> &Delta;<sub>e</sub> + &Sigma;<sub>m</sub> <var>r</var><sub>m</sub> + (<var>Y</var> &minus; <var>p&#770;</var><sub>T</sub>)&nbsp;&nbsp;&nbsp;(1)</div>
+      <p>draft + events + drift + the last step to the result. Each term goes to blue with its sign and to red with the opposite sign, and is shared among a team's five players by weights <var>w</var><sub>i</sub> &ge; 0 with &Sigma; <var>w</var><sub>i</sub> = 1 (section 4). Swing is reported in percentage points (&times;100).</p>
+
+      <div class="thm"><b>Proposition 1 (exact and zero-sum).</b> In every game, the winning team's Swing adds up to +50 and the losing team's to &minus;50.
+        <p class="proof"><i>Proof.</i> By (1) the terms add up to <var>Y</var> &minus; &frac12; = &plusmn;&frac12; for blue, and each is shared out in full because the weights add to one. Red receives the negative of every term. &#8718; (Checked to 10<sup>&minus;9</sup> in the test suite, under every set of sharing rules.)</p></div>
+
+      <div class="thm"><b>Proposition 2 (only the unexpected counts).</b> If <var>p&#770;</var> = <var>P</var>, every term after the draft has expected value zero given what was known before it.
+        <p class="proof"><i>Proof.</i> <var>P</var><sub>t</sub> = E[<var>Y</var> | <var>F</var><sub>t</sub>] is a martingale: for <var>t</var>&prime; &gt; <var>t</var>, E[<var>P</var><sub>t&prime;</sub> | <var>F</var><sub>t</sub>] = E[ E[<var>Y</var> | <var>F</var><sub>t&prime;</sub>] | <var>F</var><sub>t</sub> ] = <var>P</var><sub>t</sub>, by the law of iterated expectations. So each increment of (1) averages zero given the past. &#8718;</p>
+        <p>In practice: a team that was expected to win gets no credit for winning as expected, only for doing better than expected. Steady farming that the model already prices in earns nothing; outfarming what was expected does. The draft term <var>p&#770;</var><sub>0</sub> &minus; &frac12; is the one expected part, and it's reported on its own.</p></div>
+
+      <div class="thm"><b>Proposition 3 (why a moment moved the chance).</b> Let an event change the groups of inputs <var>G</var> = {<var>g</var><sub>1</sub>, &hellip;, <var>g</var><sub>k</sub>}: a player down, the bounty gold, the kill score, the dragon, an item's armor. Let <var>v</var>(<var>S</var>) be the model's chance with only the groups in <var>S</var> changed. The split</p>
+        <div class="eq">&phi;<sub>g</sub> = &Sigma;<sub>S &sube; G &#8726; {g}</sub> |<var>S</var>|! (<var>k</var> &minus; |<var>S</var>| &minus; 1)! / <var>k</var>! &middot; [ <var>v</var>(<var>S</var> &cup; {<var>g</var>}) &minus; <var>v</var>(<var>S</var>) ]</div>
+        <p>is the only one that is <em>efficient</em> (the parts add up to &Delta;<sub>e</sub>), <em>symmetric</em> (changes that act alike get the same), gives nothing to a change that never matters, and is additive (Shapley, 1953). With <var>k</var> &le; 6, every one of the 2<sup>k</sup> states is put to the model, so the split is exact, not sampled.</p></div>
+    </section>
+
+    <section>
+      <h2>4. Sharing: the rules</h2>
+      <p>Section 3 is fixed by the model. How a term is shared among five teammates is not: the timeline doesn't say who made a dragon possible. These rules are the only choices in Swing that aren't learned from data. Where the data measures a contribution, the rule uses it; where it doesn't, an equal share stands in for what can't be seen.</p>
+      <div class="scroll"><table class="sw-metrics rules-table">
+        <thead><tr><th>Term</th><th>Who gains</th><th>Who loses</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td>Draft <var>p&#770;</var><sub>0</sub> &minus; &frac12;</td><td colspan="2">each team's five players equally</td><td>the draft is a team decision</td></tr>
+          <tr><td>Kill</td><td>players credited with it: &frac12; by damage dealt to the victim (<var>d</var><sub>i</sub> / &Sigma;<var>d</var>, from Riot's damage record) + &frac12; equally</td><td>the player who died</td><td>damage is measured; crowd control, shields and heals aren't, so an equal half stands in for them</td></tr>
+          <tr><td>Objective, structure</td><td>&frac12; to those who took part, &frac12; to the whole team</td><td>&frac12; to players dead at that moment, the rest evenly</td><td>the team made it possible; a loss while dead is partly the death's</td></tr>
+          <tr><td>Finished item</td><td>the buyer</td><td>the other team, evenly (falling behind)</td><td>one player's purchase</td></tr>
+          <tr><td>Drift <var>r</var><sub>m</sub></td><td>&frac12; evenly + &frac12; by how far each out-earned their lane opponent that minute (gold + XP)</td><td>&frac12; evenly + &frac12; by how far each fell behind theirs</td><td>measured against the same role, so a support isn't judged against a carry's income</td></tr>
+          <tr><td>Last step <var>Y</var> &minus; <var>p&#770;</var><sub>T</sub></td><td colspan="2">evenly</td><td>the final push is the team's</td></tr>
+        </tbody>
+      </table></div>
+      <p>Section 6.3 measures how much these choices matter: very little.</p>
+    </section>
+
+    <section id="rating">
+      <h2>5. The Swing rating</h2>
+      <p>One game's Swing is noisy. A player's level is estimated from many, under a simple model. Let <var>x</var><sub>ij</sub> be player <var>i</var>'s Swing in game <var>j</var> minus the average for their role:</p>
+      <div class="eq"><var>x</var><sub>ij</sub> = &theta;<sub>i</sub> + &epsilon;<sub>ij</sub>, &nbsp; Var(&theta;<sub>i</sub>) = &tau;<sup>2</sup>, &nbsp; Var(&epsilon;<sub>ij</sub>) = &sigma;<sup>2</sup>, &nbsp; &epsilon; independent across games.</div>
+      <p>The best linear estimate of &theta;<sub>i</sub> from <var>n</var> games with mean <var>x&#772;</var><sub>i</sub>, and its uncertainty, are (Efron &amp; Morris, 1975)</p>
+      <div class="eq">&theta;&#770;<sub>i</sub> = <var>x&#772;</var><sub>i</sub> &middot; <var>n</var>&tau;<sup>2</sup> / (<var>n</var>&tau;<sup>2</sup> + &sigma;<sup>2</sup>), &nbsp;&nbsp; sd = &radic;( &tau;<sup>2</sup>&sigma;<sup>2</sup> / (<var>n</var>&tau;<sup>2</sup> + &sigma;<sup>2</sup>) ).</div>
+      <p>Both variances come from the data, and the estimators are checked in the test suite on simulated players with known true levels, where they recover the true spread and give pure noise a reliability near zero. Here &tau;<sup>2</sup> is the covariance between players' averages over two halves of their games: the noise in disjoint games is independent, so only the true level is shared. &sigma;<sup>2</sup> is the average spread of a player's own games.
+      {% if v and v.rating %}Here &tau; = {{ v.rating.tau }} points and &sigma; = {{ v.rating.sigma }}, so a rating is pulled towards the role average as if <b>{{ v.rating.k }}</b> average games were added: 20 games move it {{ (100 * 20 / (20 + v.rating.k))|round|int }}% of the way to the player's own average.{% endif %}</p>
+    </section>
+
+    <section>
+      <h2>6. Validation</h2>
+      {% if not v %}<p class="muted">The checks haven't been run on this server yet: <code>riftwatch winprob validate</code>.</p>{% else %}
+      <p>A statistic about players should do three things: <b>repeat</b> (a player's level should show in any half of their games), <b>predict</b> (it should say something about results to come), and <b>not hinge on arbitrary choices</b>. Every stat below is measured against its role's average first, so none looks stable merely because players keep to one role. Players with {{ v.min_games }}+ games: {{ '{:,}'.format(v.players) }}.</p>
+
+      <h3>6.1 Does it repeat?</h3>
+      <p>Each player's games are split alternately into two halves, and the two halves' averages are correlated across players. The Spearman&ndash;Brown formula, &rho; = 2<var>r</var> / (1 + <var>r</var>), gives the reliability of the average over all their games.</p>
+      <div class="scroll"><table class="sw-metrics">
+        <thead><tr><th>Stat</th><th>Reliability</th><th>95% CI</th><th>Predicts later win rate (r)</th><th>95% CI</th></tr></thead>
+        <tbody>{% for x in v.metrics %}<tr class="{{ 'net' if x.key == 'swing' else 'base' }}"><td>{{ x.name }}</td><td>{{ '%.2f'|format(x.reliability) }}</td><td>{{ sb(x.reliability_ci) }}</td><td>{{ '%+.3f'|format(x.predicts_later_wins) }}</td><td>{{ ci(x.predicts_ci) }}</td></tr>{% endfor %}</tbody>
+      </table></div>
+
+      <h3>6.2 Does it predict?</h3>
+      <p>Each player's games are split in time order. The stat over the earlier half is correlated with the win rate over the later half (the right-hand columns above). Solo-queue results are mostly luck over a handful of games: the later half's win rate repeats so little that <em>no</em> stat could correlate with it beyond <b>{{ v.prediction_ceiling if v.prediction_ceiling is defined else '-' }}</b> (the square root of its reliability). Correlations should be read against that ceiling, not against 1.
+      {% if v.swing_beyond_win_rate %} Once a player's past win rate is known, their past Swing still adds a partial correlation of <b>{{ '%+.3f'|format(v.swing_beyond_win_rate.partial_r) }}</b> (95% CI {{ ci(v.swing_beyond_win_rate.ci) }}).{% endif %}</p>
+
+      {% if v.rules and v.rules.rule_sets %}
+      <h3>6.3 Do the sharing rules matter?</h3>
+      <p>Every stored game is shared out again, from facts stored with it, under rule sets fixed in advance: the fixed shares Swing started with, each measured share on its own, and both. Each set goes through the same two checks.</p>
+      <div class="scroll"><table class="sw-metrics">
+        <thead><tr><th>Rules</th><th>Reliability</th><th>Predicts later win rate</th><th>95% CI</th></tr></thead>
+        <tbody>{% for x in v.rules.rule_sets %}<tr class="{{ 'net' if x.key == 'measured' else 'base' }}"><td>{{ x.label }}</td><td>{{ '%.2f'|format(x.reliability) }}</td><td>{{ '%+.3f'|format(x.predicts_later_wins) }}</td><td>{{ ci(x.predicts_ci) }}</td></tr>{% endfor %}</tbody>
+      </table></div>
+      <p>Then each remaining choice is moved a long way either side of the value used. The correlation of every player-game's Swing with the rules used:</p>
+      <div class="scroll"><table class="sw-metrics">
+        <thead><tr><th>Changed</th><th>Correlation with Swing as used</th><th>Average change, points</th></tr></thead>
+        <tbody>{% for x in v.rules.sensitivity %}<tr><td>{{ x.rule }}</td><td>{{ '%.3f'|format(x.r) }}</td><td>{{ x.moved }}</td></tr>{% endfor %}
+        {% if v.rules.measured_vs_fixed %}<tr><td>the measured shares against the fixed ones</td><td>{{ '%.3f'|format(v.rules.measured_vs_fixed.r) }}</td><td>{{ v.rules.measured_vs_fixed.moved }}</td></tr>{% endif %}</tbody>
+      </table></div>
+      {% endif %}
+
+      {% if v.other_model %}
+      <h3>6.4 Does it depend on the model?</h3>
+      <p>The same {{ v.other_model.games }} games scored with {{ v.other_model.label }} instead of the model used: every player-game's Swing correlates <b>{{ '%.3f'|format(v.other_model.r) }}</b> between the two (average difference {{ v.other_model.moved }} points). Two independently built models tell the same story.</p>
+      {% endif %}
+
+      {% if c %}
+      <h3>6.5 Choices beyond the game state</h3>
+      <p>Item, skill, keystone and spell choices are compared with the chance the model gave the player's team when each choice was made, and pulled towards zero by empirical Bayes. How well they repeat between two halves of the games: {% for k, x in c.kinds.items() %}{{ x.name|lower }} {{ x.reliability }}{{ ', ' if not loop.last }}{% endfor %}. With the game state taken out, which item a player picks on a champion barely matters next to the state of the game when they buy it, and the pages say so.</p>
+      {% endif %}
+      {% endif %}
+    </section>
+
+    <section>
+      <h2>7. What it's for</h2>
+      <ul>
+        <li><b>Reading a game.</b> Swing turns a game into its turning points: which moments moved the chance most, and (Proposition 3) why. That one death cost 4.5 points because a player was down for 39 seconds with Baron up and a shutdown handed over, not because deaths are bad in general.</li>
+        <li><b>Coaching.</b> Deaths are the most repeatable part of Swing for a player, and the profile splits them into habits (an objective lost before respawning, caught by three, dying with a back's gold) measured against everyone in the same role. That points at the habit costing the most.</li>
+        <li><b>Judging a player.</b> The rating (section 5) says how much win chance a player adds per game against their role, with a margin, pulled towards average until enough games say otherwise.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>8. Limits</h2>
+      <ul>
+        <li><b>Value, not causation.</b> The model says what states like this have led to, not what would have happened otherwise. A kill's worth is what kills like it have been followed by.</li>
+        <li><b>What the timeline sees.</b> Positions come once a minute; vision, crowd control, peel and threat that changes the enemy's plans show up only through their results (a kill, a lead that grows). The equal shares in section 4 are where that unseen work is credited, roughly.</li>
+        <li><b>Team terms.</b> The draft, half of every objective, the economy's even half and the last step are shared evenly. They carry little about any one player, and the validation shows it.</li>
+        <li><b>Like win probability added in baseball, a "what happened" stat.</b> The same kill is worth more at 35 minutes with Baron up than at 6. That is the point of Swing, but it means one game says little about skill on its own. The rating, with its margin, is the skill estimate.</li>
+      </ul>
+    </section>
+
+    <section class="refs">
+      <h2>References</h2>
+      <ol class="small">
+        <li>Mills, E. G., &amp; Mills, H. D. (1970). <i>Player Win Averages: A Complete Guide to Winning Baseball Players.</i></li>
+        <li>Shapley, L. S. (1953). A value for n-person games. In <i>Contributions to the Theory of Games II</i>, 307&ndash;317.</li>
+        <li>Brier, G. W. (1950). Verification of forecasts expressed in terms of probability. <i>Monthly Weather Review</i>, 78(1), 1&ndash;3.</li>
+        <li>Platt, J. (1999). Probabilistic outputs for support vector machines and comparisons to regularized likelihood methods. <i>Advances in Large Margin Classifiers.</i></li>
+        <li>Gneiting, T., &amp; Raftery, A. E. (2007). Strictly proper scoring rules, prediction, and estimation. <i>Journal of the American Statistical Association</i>, 102(477), 359&ndash;378.</li>
+        <li>Efron, B., &amp; Morris, C. (1975). Data analysis using Stein's estimator and its generalizations. <i>Journal of the American Statistical Association</i>, 70(350), 311&ndash;319.</li>
+        <li>Spearman, C. (1910); Brown, W. (1910). Correlation of sums of measures. <i>British Journal of Psychology</i>, 3.</li>
+      </ol>
+    </section>
+  </article>
+</div>
+{% endblock %}
