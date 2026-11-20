@@ -85,6 +85,24 @@ def test_dead_players_come_back_after_their_timer():
     assert respawn_seconds(18, 40) > respawn_seconds(18, 10) > respawn_seconds(1, 10)
 
 
+def test_the_richer_state_reads_towers_plates_timers_and_objectives():
+    frames, events = game()
+    r = Replay(frames, events)
+    # Blue's 2 kills red's 6 at 3:05: red has one player out, for the rest of the death timer.
+    blue, red = r.pair(186_000)
+    assert red["dead_time_own"] == pytest.approx(blue["dead_time_enemy"]) and 0 < red["dead_time_own"] < 0.3
+    # Blue takes the mid outer tower at 13:20 and a bot plate at 10:00.
+    later = r.pair(14 * 60_000)[0]
+    assert later["towers_outer_own"] == 1 and later["towers_inner_own"] == 0 and later["plates_own"] == 1
+    # Dragon is taken at 9:20: down at 10:00, back up five minutes after the kill.
+    assert r.pair(10 * 60_000)[0]["dragon_up"] == 0 and r.pair(14 * 60_000 + 21_000)[0]["dragon_up"] == 1
+    # Baron spawns at 20:00, is taken at 20:00 and is back six minutes later.
+    assert r.pair(19 * 60_000)[0]["baron_up"] == 0 and r.pair(21 * 60_000)[0]["baron_up"] == 0
+    assert r.pair(26 * 60_000 + 1_000)[0]["baron_up"] == 1
+    assert later["lvl6_own"] == 5 and r.pair(4 * 60_000)[0]["lvl6_own"] == 0
+    assert later["held_gold_own"] > 0
+
+
 def test_items_and_composition_are_read_from_purchases():
     frames, events = game()
     champions = {p: p for p in range(1, 11)}
@@ -244,7 +262,8 @@ def test_the_network_trains_saves_and_reads_both_sides(tmp_path):
 
 def test_all_three_versions_train_and_the_best_is_kept(tmp_path):
     model, metrics = tiny_model(tmp_path, full=True)
-    assert [v["name"] for v in metrics["variants"]] == ["state", "items", "champions", "stacked"]
+    assert [v["name"] for v in metrics["variants"]] == ["state", "state_plus", "items", "champions", "stacked",
+                                                        "stacked_plus"]
     chosen = next(v for v in metrics["variants"] if v["name"] == metrics["chosen"])
     assert chosen["selection_log_loss"] == min(v["selection_log_loss"] for v in metrics["variants"])
     with_champs = next(v for v in metrics["variants"] if v["name"] == "champions")

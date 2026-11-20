@@ -71,10 +71,17 @@ GROUP = {"alive_own": "alive", "alive_enemy": "alive", "gold_diff": "gold", "kil
          "baron_enemy": "baron", "barons_own": "baron", "barons_enemy": "baron", "heralds_own": "herald",
          "heralds_enemy": "herald", "grubs_own": "grubs", "grubs_enemy": "grubs", "atakhan_own": "atakhan",
          "atakhan_enemy": "atakhan", "towers_own": "towers", "towers_enemy": "towers",
-         "inhibs_down_own": "inhibitors", "inhibs_down_enemy": "inhibitors"}
+         "inhibs_down_own": "inhibitors", "inhibs_down_enemy": "inhibitors",
+         # the richer state: a death's timer is part of "a player down", a tower's tier part
+         # of the tower, and taking an objective also takes it off the map until it respawns
+         "dead_time_own": "alive", "dead_time_enemy": "alive", "plates_own": "plates", "plates_enemy": "plates",
+         "dragon_up": "dragons", "elder_up": "elder", "baron_up": "baron",
+         **{f"towers_{tier}_{side}": "towers" for tier in ("outer", "inner", "base", "nexus")
+            for side in ("own", "enemy")}}
 GROUP_NAMES = {"alive": "a player down", "gold": "bounty gold", "kills": "the kill score", "dragons": "the dragon",
                "soul": "dragon soul", "elder": "the Elder buff", "baron": "the Baron buff", "herald": "the herald",
-               "grubs": "the voidgrubs", "atakhan": "Atakhan", "towers": "the tower", "inhibitors": "the open inhibitor"}
+               "grubs": "the voidgrubs", "atakhan": "Atakhan", "towers": "the tower", "inhibitors": "the open inhibitor",
+               "plates": "turret plates"}
 ZONE_NAMES = {"own_jungle": "their own jungle", "enemy_jungle": "the enemy jungle", "river": "the river",
               "top_lane": "top lane", "mid_lane": "mid lane", "bot_lane": "bot lane", "own_base": "their base",
               "enemy_base": "the enemy base"}

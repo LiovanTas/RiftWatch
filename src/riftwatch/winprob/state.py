@@ -39,6 +39,19 @@ BASE_FEATURES = (
     "alive_own", "alive_enemy",
 )
 FEATURES = BASE_FEATURES                       # what the first model (wp1) reads
+# A richer reading of the same game state: which towers are down (an open base isn't two lost
+# outer towers), plates, power spikes (players at 6, 11 and 16), gold not yet spent, how long
+# the dead are still out (a death at 35 minutes isn't one at 6), and which objectives are up
+# right now (a fight beside a live Baron matters more). Spawn times measured from stored
+# games: dragon 5:00 and 5:00 after each, Baron 20:00 and 6:00 after, Elder 6:00 after a soul.
+TOWER_TIERS = (("OUTER_TURRET", "outer"), ("INNER_TURRET", "inner"), ("BASE_TURRET", "base"),
+               ("NEXUS_TURRET", "nexus"))
+EXTRA_FEATURES = (tuple(f"towers_{name}_{side}" for _, name in TOWER_TIERS for side in ("own", "enemy"))
+                  + ("plates_own", "plates_enemy", "lvl6_own", "lvl6_enemy", "lvl11_own", "lvl11_enemy",
+                     "lvl16_own", "lvl16_enemy", "held_gold_own", "held_gold_enemy",
+                     "dead_time_own", "dead_time_enemy", "dragon_up", "elder_up", "baron_up"))
+RICH_FEATURES = BASE_FEATURES + EXTRA_FEATURES
+DRAGON_SPAWN_S, DRAGON_RESPAWN_S, BARON_SPAWN_S, BARON_RESPAWN_S, ELDER_RESPAWN_S = 300, 300, 1200, 360, 360
 # What a finished item can give, as the model counts it per team.
 ITEM_FLAGS = ("items", "armor", "mr", "health", "ad", "ap", "crit", "attack_speed",
               "armor_pen", "magic_pen", "sustain", "anti_heal")
@@ -50,7 +63,7 @@ CLASSES = ("Tank", "Fighter", "Mage", "Marksman", "Assassin", "Support")
 ITEM_FEATURES = tuple(f"{f}_{side}" for f in ITEM_FLAGS for side in ("own", "enemy"))
 COMP_FEATURES = (tuple(f"{c.lower()}s_{side}" for c in CLASSES for side in ("own", "enemy"))
                  + ("magic_share_own", "magic_share_enemy"))
-FULL_FEATURES = BASE_FEATURES + ITEM_FEATURES + COMP_FEATURES
+FULL_FEATURES = RICH_FEATURES + ITEM_FEATURES + COMP_FEATURES
 KEPT_EVENTS = ("CHAMPION_KILL", "ELITE_MONSTER_KILL", "BUILDING_KILL", "DRAGON_SOUL_GIVEN",
                "TURRET_PLATE_DESTROYED", "GAME_END")
 BARON_BUFF_S, ELDER_BUFF_S, INHIB_RESPAWN_S = 180, 150, 300
@@ -147,8 +160,15 @@ class Replay:
         self._totals = {(key, team): [total(f, team, *parts) for f in frames]
                         for key, parts in (("gold", ("totalGold",)), ("xp", ("xp",)),
                                            ("cs", ("minionsKilled", "jungleMinionsKilled")),
-                                           ("level", ("level",)))
+                                           ("level", ("level",)), ("held", ("currentGold",)))
                         for team in (100, 200)}
+
+        def at_least(frame: dict, team: int, level: int) -> float:
+            pids = range(1, 6) if team == 100 else range(6, 11)
+            return float(sum(1 for p in pids if (frame.get(str(p)) or {}).get("level", 0) >= level))
+        for level in (6, 11, 16):
+            for team in (100, 200):
+                self._totals[(f"lvl{level}", team)] = [at_least(f, team, level) for f in frames]
 
         # Running counts after each event (index k = after the first k events), by team, and
         # the events whose effect wears off: inhibitors, Baron and Elder buffs, deaths.
@@ -170,16 +190,27 @@ class Replay:
                     self._timed.append((i, "inhib", lost, ts + INHIB_RESPAWN_S * 1000))
                 else:
                     counts[("towers_lost", lost)] = counts.get(("towers_lost", lost), 0) + 1
+                    tier = dict(TOWER_TIERS).get(e.get("towerType"))
+                    if tier:
+                        counts[(f"towers_{tier}_lost", lost)] = counts.get((f"towers_{tier}_lost", lost), 0) + 1
+            elif kind == "TURRET_PLATE_DESTROYED":
+                lost = _side(e.get("teamId"))
+                counts[("plates_lost", lost)] = counts.get(("plates_lost", lost), 0) + 1
             elif kind == "ELITE_MONSTER_KILL":
                 taker, monster = _side(e.get("killerTeamId")), e.get("monsterType")
                 if monster in MONSTERS:
                     counts[(MONSTERS[monster], taker)] = counts.get((MONSTERS[monster], taker), 0) + 1
                 if monster == "ELDER_DRAGON":
                     self._timed.append((i, "elder", taker, ts + ELDER_BUFF_S * 1000))
+                    counts[("last", "elder")] = ts
                 elif monster == "BARON_NASHOR":
                     self._timed.append((i, "baron", taker, ts + BARON_BUFF_S * 1000))
+                    counts[("last", "baron")] = ts
+                elif monster == "DRAGON":
+                    counts[("last", "dragon")] = ts
             elif kind == "DRAGON_SOUL_GIVEN":
                 counts[("soul", _side(e.get("teamId")))] = 1
+                counts[("last", "soul")] = ts
             self._prefix.append(dict(counts))
 
         # Finished items, in the order they were bought: (ms, participant, item id).
@@ -257,8 +288,20 @@ class Replay:
             if i < upto and t < until:
                 active[(kind, team)] += 1
         dead = {100: set(), 200: set()}
-        for v in self.dead_at(t, upto):
-            dead[team_of(v)].add(v)
+        dead_time = {100: 0.0, 200: 0.0}                       # minutes the dead are still out
+        for i, v, back in self.deaths:
+            if i < upto and back > t and 1 <= v <= 10:
+                dead[team_of(v)].add(v)
+                dead_time[team_of(v)] += (back - t) / 60_000
+        # Which objectives are up right now (from spawn and respawn timers).
+        last = {k: c.get(("last", k)) for k in ("dragon", "elder", "baron", "soul")}
+        soul_taken = last["soul"] is not None
+        dragon_up = float(not soul_taken and t >= DRAGON_SPAWN_S * 1000
+                          and (last["dragon"] is None or t - last["dragon"] >= DRAGON_RESPAWN_S * 1000))
+        since = max(x for x in (last["soul"], last["elder"], last["dragon"]) if x is not None) if soul_taken else None
+        elder_up = float(soul_taken and t - since >= ELDER_RESPAWN_S * 1000)
+        baron_up = float(t >= BARON_SPAWN_S * 1000
+                         and (last["baron"] is None or t - last["baron"] >= BARON_RESPAWN_S * 1000))
         items = None
         if self.catalog is not None:
             items = self.item_counts(t if item_time is None else item_time)
@@ -290,6 +333,19 @@ class Replay:
                 f[f"{buff}_enemy"] = float(active[(buff, enemy)] > 0 or active[(buff, OTHER)] > 0)
             f["alive_own"] = float(5 - len(dead[own]))
             f["alive_enemy"] = float(5 - len(dead[enemy]))
+            for _, tier in TOWER_TIERS:
+                f[f"towers_{tier}_own"] = n(f"towers_{tier}_lost", enemy)
+                f[f"towers_{tier}_enemy"] = n(f"towers_{tier}_lost", own) + n(f"towers_{tier}_lost", OTHER)
+            f["plates_own"] = n("plates_lost", enemy)
+            f["plates_enemy"] = n("plates_lost", own) + n("plates_lost", OTHER)
+            for spike in (6, 11, 16):
+                f[f"lvl{spike}_own"] = self._total(f"lvl{spike}", own, t, False)
+                f[f"lvl{spike}_enemy"] = self._total(f"lvl{spike}", enemy, t, False)
+            f["held_gold_own"] = self._total("held", own, t, False) / 1000
+            f["held_gold_enemy"] = self._total("held", enemy, t, False) / 1000
+            f["dead_time_own"] = dead_time[own]
+            f["dead_time_enemy"] = dead_time[enemy]
+            f["dragon_up"], f["elder_up"], f["baron_up"] = dragon_up, elder_up, baron_up
             if items is not None:
                 for flag in ITEM_FLAGS:
                     f[f"{flag}_own"] = float(items[own].get(flag, 0))

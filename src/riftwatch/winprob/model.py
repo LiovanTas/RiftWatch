@@ -41,7 +41,7 @@ from typing import Any
 
 import numpy as np
 
-from riftwatch.winprob.state import BASE_FEATURES, CLASSES, FULL_FEATURES, ITEM_FLAGS, Catalog, Replay
+from riftwatch.winprob.state import BASE_FEATURES, CLASSES, FULL_FEATURES, ITEM_FLAGS, RICH_FEATURES, Catalog, Replay
 
 DIRNAME = "winprob"
 MODEL_FILE = "model.joblib"
@@ -59,7 +59,7 @@ GAME_SQL = """
            jsonb_path_query_array(t.raw, '$.info.frames[*].participantFrames'),
            jsonb_path_query_array(t.raw, '$.info.frames[*].events[*] ? (@.type == "CHAMPION_KILL"
                || @.type == "ELITE_MONSTER_KILL" || @.type == "BUILDING_KILL"
-               || @.type == "DRAGON_SOUL_GIVEN" || @.type == "GAME_END")'),
+               || @.type == "DRAGON_SOUL_GIVEN" || @.type == "TURRET_PLATE_DESTROYED" || @.type == "GAME_END")'),
            (SELECT jsonb_agg(jsonb_build_array(b.participant_id, b.champion_id, b.purchases, b.purchase_s, b.position))
               FROM participant_builds b WHERE b.match_id = t.match_id)
       FROM match_timelines t"""
@@ -138,7 +138,7 @@ def load_dataset(conn, catalog: Catalog, limit: int | None = None, log=print) ->
             "own": np.asarray(own, dtype=np.int16), "enemy": np.asarray(enemy, dtype=np.int16)}
 
 
-def _fit(design_train, y_train, design_val, y_val, layers, alpha, log=print):
+def _fit(design_train, y_train, design_val, y_val, layers, alpha, log=print, seed: int = 7):
     """Train a network one epoch at a time and keep the epoch with the lowest log loss on
     validation *games*. scikit-learn's own early stopping holds out random rows, which come
     from the same games as the training rows: a network that memorises each game's outcome
@@ -149,7 +149,7 @@ def _fit(design_train, y_train, design_val, y_val, layers, alpha, log=print):
     from sklearn.neural_network import MLPClassifier
 
     net = MLPClassifier(hidden_layer_sizes=layers, activation="relu", alpha=alpha, batch_size=1024,
-                        learning_rate_init=1e-3, random_state=7)
+                        learning_rate_init=1e-3, random_state=seed)
     best, best_loss, bad, epochs = None, float("inf"), 0, 0
     for epoch in range(MAX_EPOCHS):
         net.partial_fit(design_train, y_train, classes=np.array([0.0, 1.0]))
@@ -310,6 +310,23 @@ def _logit(p: np.ndarray) -> np.ndarray:
     return np.log(p / (1 - p))
 
 
+class EnsembleNet:
+    """Several networks trained alike from different random starts, their chances averaged.
+    Each one alone is stopped after an epoch or two (later epochs start memorising games), so
+    their individual quirks differ; the average is smoother and a little better calibrated,
+    which matters for Swing, built as it is from small differences between states."""
+
+    def __init__(self, members: list) -> None:
+        self.members = members
+
+    def predict_proba(self, X) -> np.ndarray:
+        return np.mean([m.predict_proba(X) for m in self.members], axis=0)
+
+    @property
+    def n_iter_(self) -> int:
+        return max(getattr(m, "n_iter_", 0) for m in self.members)
+
+
 class WinModel:
     """The fitted network with its scaler, calibration, the inputs it reads and (for the
     item- and champion-aware versions) the catalog it reads them with."""
@@ -343,7 +360,7 @@ class WinModel:
         if layer is None:
             return self.network.predict_proba(self.design(X, own, enemy))[:, 1]
         # The game-state network on its own inputs, then the context layer on top.
-        base = [self.features.index(f) for f in BASE_FEATURES]
+        base = [self.features.index(f) for f in getattr(self, "state_features", BASE_FEATURES)]
         p = self.network.predict_proba(self.scaler.transform(X[:, base]))[:, 1]
         Z = context_matrix(X, own, enemy, self.features, self.catalog.index, _logit(p),
                            getattr(self, "champion_scale", 1.0))
@@ -368,12 +385,18 @@ class WinModel:
         return (self.predict(*self._arrays(blue_states)) + 1 - self.predict(*self._arrays(red_states))) / 2
 
 
-VARIANTS = (("state", BASE_FEATURES, False), ("items", FULL_FEATURES, False), ("champions", FULL_FEATURES, True),
-            ("stacked", FULL_FEATURES, True))
+VARIANTS = (("state", BASE_FEATURES, False), ("state_plus", RICH_FEATURES, False),
+            ("items", FULL_FEATURES, False), ("champions", FULL_FEATURES, True),
+            ("stacked", FULL_FEATURES, True), ("stacked_plus", FULL_FEATURES, True))
 VARIANT_NAMES = {"state": "Game state (gold, kills, objectives, who's alive)",
+                 "state_plus": "Richer game state (tower tiers, plates, power spikes, unspent gold, death timers, "
+                               "objectives up), 5 networks averaged",
                  "items": "+ items and team composition, in the network",
                  "champions": "+ which champions are playing, in the network",
-                 "stacked": "Game state network + a logistic layer for items, composition and champions"}
+                 "stacked": "Game state network + a logistic layer for items, composition and champions",
+                 "stacked_plus": "Richer game state networks + the logistic layer"}
+STACK_ON = {"stacked": "state", "stacked_plus": "state_plus"}
+ENSEMBLE = {"state_plus": 5}            # networks averaged for these versions
 
 
 def train(data: dict[str, np.ndarray], catalog: Catalog | None = None, log=print,
@@ -411,11 +434,11 @@ def train(data: dict[str, np.ndarray], catalog: Catalog | None = None, log=print
     for name, feats, identity in variants:
         if (feats is not BASE_FEATURES and not full) or (identity and (catalog is None or own is None)):
             continue
-        if name == "stacked":
-            if "state" not in models:
+        if name in STACK_ON:
+            if STACK_ON[name] not in models:
                 continue
             started = time.monotonic()
-            model, layer_c, val_loss = _stack(models["state"][0], X_all, own, enemy, y, fit_m, val_m, catalog, log)
+            model, layer_c, val_loss = _stack(models[STACK_ON[name]][0], X_all, own, enemy, y, fit_m, val_m, catalog, log)
             raw_cal = model.raw(X_all[cal_m], own[cal_m], enemy[cal_m])
             model.calibrator = Platt().fit(raw_cal, y[cal_m])
             held[name] = _held_out_losses(model.raw(X_all[held_m], own[held_m], enemy[held_m]), y[held_m], games[held_m])
@@ -423,17 +446,17 @@ def train(data: dict[str, np.ndarray], catalog: Catalog | None = None, log=print
             p_test = model.predict(X_all[test_m], own[test_m], enemy[test_m])
             fit_s = time.monotonic() - started
             res = {"name": name, "label": VARIANT_NAMES[name],
-                   "inputs": len(BASE_FEATURES) + model.context.coef_.shape[1] - 1,
+                   "inputs": len(model.state_features) + model.context.coef_.shape[1] - 1,
                    **scores(p_test), "ece": round(_ece(p_test, yt), 4),
                    "calibration_games_log_loss": round(float(log_loss(y[cal_m], p_cal, labels=[0, 1])), 4),
-                   "epochs": models["state"][2], "alpha": layer_c, "validation_games_log_loss": round(val_loss, 4),
+                   "epochs": models[STACK_ON[name]][2], "alpha": layer_c, "validation_games_log_loss": round(val_loss, 4),
                    "selection_log_loss": round(float(held[name][0].sum() / held[name][1].sum()), 4),
                    "fit_seconds": round(fit_s, 1),
                    "by_minute": {f"{lo}-{hi if hi < 99 else ''}": scores(p_test, span_mask(lo, hi))["auc"]
                                  for lo, hi in spans if span_mask(lo, hi).sum() > 200}}
             log(f"  {name:<10} log loss {res['log_loss']:.4f}  AUC {res['auc']:.3f}  ({fit_s:.0f}s, {layer_c})")
             results.append(res)
-            models[name] = (model, p_test, models["state"][2])
+            models[name] = (model, p_test, models[STACK_ON[name]][2])
             continue
         X = X_all[:, [FULL_FEATURES.index(f) for f in feats]] if full else X_all
         scaler = StandardScaler().fit(X[fit_m])
@@ -449,6 +472,14 @@ def train(data: dict[str, np.ndarray], catalog: Catalog | None = None, log=print
             tried.append((val_loss, alpha, epochs, net))
             log(f"    {name}: penalty {alpha:g} -> {val_loss:.4f} on validation games ({epochs} epochs)")
         val_loss, alpha, epochs, network = min(tried, key=lambda t: t[0])
+        if ENSEMBLE.get(name, 1) > 1:                 # more networks at the chosen penalty, averaged
+            members = [network] + [_fit(d_fit, y[fit_m], d_val, y[val_m], layers, alpha, seed=seed)[0]
+                                   for seed in range(8, 7 + ENSEMBLE[name])]
+            network = EnsembleNet(members)
+            from sklearn.metrics import log_loss as _ll
+
+            val_loss = float(_ll(y[val_m], network.predict_proba(d_val)[:, 1], labels=[0, 1]))
+            log(f"    {name}: {len(members)} networks averaged -> {val_loss:.4f} on validation games")
         model.network = network
         fit_s = time.monotonic() - started
         raw_cal = model.raw(*sub(cal_m))
@@ -480,6 +511,8 @@ def train(data: dict[str, np.ndarray], catalog: Catalog | None = None, log=print
         for r in results:
             if r["name"] != "state":
                 r["vs_state"] = _paired(held["state"], held[r["name"]])
+    if "stacked" in held and "stacked_plus" in held:      # what the richer state added
+        next(r for r in results if r["name"] == "stacked_plus")["vs_stacked"] = _paired(held["stacked"], held["stacked_plus"])
     best = min(results, key=lambda r: r["selection_log_loss"])
     model, p_net, _ = models[best["name"]]
     if getattr(model, "context", None) is not None:
@@ -516,7 +549,7 @@ def _stack(state: WinModel, X_all, own, enemy, y, fit_m, val_m, catalog: Catalog
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import log_loss
 
-    base = [FULL_FEATURES.index(f) for f in BASE_FEATURES]
+    base = [FULL_FEATURES.index(f) for f in state.features]
 
     logits = {}
 
@@ -536,6 +569,7 @@ def _stack(state: WinModel, X_all, own, enemy, y, fit_m, val_m, catalog: Catalog
     loss, c, scale, layer = min(tried, key=lambda t: t[0])
     model = copy.copy(state)
     model.features, model.catalog, model.identity, model.context = FULL_FEATURES, catalog, False, layer
+    model.state_features = tuple(state.features)
     model.champion_scale = scale
     return model, f"C {c:g}, champions x{scale:g}", loss
 
