@@ -1,0 +1,44 @@
+{% if plan %}{% set pl = plan %}
+<div class="panel plan-card" id="plan">
+  <div class="panel-head"><span>Your plan</span><span class="muted small">from Swing over your last {{ pl.games }} games &middot; <a href="/swing/method">how</a></span></div>
+  <div class="panel-body">
+    {% if pl.focus %}{% set f = pl.focus %}
+    <div class="plan-focus">
+      <span class="k">Work on</span>
+      <b>{{ f.name }}</b>
+      <p class="why">{% if f.kind == 'habit' %}{{ f.detail[:1]|upper }}{{ f.detail[1:] }}. These deaths cost your team <b class="down">{{ '%.1f'|format(f.mine) }}</b> points of win chance a game; a typical player in the same role loses <b>{{ '%.1f'|format(f.typical) }}</b>{% if f.count is defined and f.count is not none %} ({{ '%.1f'|format(f.count) }} such deaths a game{% if f.typical_count is not none %}, typical {{ '%.1f'|format(f.typical_count) }}{% endif %}){% endif %}.{% else %}Your Swing from {{ f.name|lower }} is <b class="{{ 'up' if -f.mine >= 0 else 'down' }}">{{ '%+.1f'|format(-f.mine) }}</b> a game; a typical player in the same role gets <b>{{ '%+.1f'|format(-f.typical) }}</b>.{% endif %} {% if f.picked %}You chose this one; <a href="?#plan">back to the biggest gap</a>.{% else %}That's the biggest gap to your role in your recent games.{% endif %}</p>
+    </div>
+    <div class="plan-target">
+      <span class="tag">Target</span>
+      {% if f.kind == 'habit' %}
+      cost no more than <b>{{ '%.1f'|format(f.target.cost) }}</b> a game{% if f.target.count is defined and f.target.count is not none %}: about <b>{{ '%.1f'|format(f.target.count) }}</b> such deaths a game, down from {{ '%.1f'|format(f.count) }}{% endif %}{% if f.target.halfway %} (halfway to typical: a step at a time){% else %} (the typical level for your role){% endif %}.
+      {% else %}
+      reach <b>{{ '%+.1f'|format(-f.target.cost) }}</b> a game from {{ f.name|lower }}{% if f.target.halfway %} (halfway to typical){% else %} (typical for your role){% endif %}.
+      {% endif %}
+    </div>
+    {% if f.chart %}
+    <div class="plan-chart-wrap" data-tip="{{ f.name }}, points of win chance lost per game&#10;blocks of 5 games, oldest on the left; dashed: typical for your role; dotted: your target">{{ f.chart|safe }}</div>
+    <div class="plan-key"><span><i class="mine"></i>you, per 5 games</span><span><i class="typical"></i>typical</span><span><i class="goal"></i>target</span><span class="muted">lower is better</span></div>
+    {% endif %}
+    <p class="plan-trend {{ f.trend.verdict }}">
+      {% if f.trend.verdict == 'early' %}Not enough games to call a trend yet ({{ f.trend.games }} of 20).
+      {% elif f.trend.verdict == 'better' %}&#9650; Getting better: {{ '%.1f'|format(f.trend.last) }} a game over your last {{ f.trend.n_last }} games, from {{ '%.1f'|format(f.trend.before) }} in the {{ f.trend.n_before }} before (a change bigger than the &plusmn;{{ '%.1f'|format(f.trend.margin) }} games vary by).
+      {% elif f.trend.verdict == 'worse' %}&#9660; Getting worse: {{ '%.1f'|format(f.trend.last) }} a game over your last {{ f.trend.n_last }} games, from {{ '%.1f'|format(f.trend.before) }} in the {{ f.trend.n_before }} before.
+      {% else %}No clear change yet: {{ '%.1f'|format(f.trend.last) }} a game over your last {{ f.trend.n_last }} games against {{ '%.1f'|format(f.trend.before) }} before, within the &plusmn;{{ '%.1f'|format(f.trend.margin) }} games vary by.{% endif %}
+    </p>
+    {% if f.tip %}<p class="plan-tip"><span class="tag">Try</span> {{ f.tip }}</p>{% endif %}
+    {% if f.examples %}
+    <h5 class="sw-h">Where it cost the most recently</h5>
+    <div class="plan-examples">
+      {% for e in f.examples %}<a href="{{ e.url }}" class="plan-ex"><span class="muted small">{{ e.when }}{% if e.clock %} &middot; {{ e.clock }}{% endif %}</span><span class="t">{{ e.text }} <span class="muted">({{ e.champion }})</span></span><b class="down">-{{ '%.1f'|format(e.cost) }}</b></a>{% endfor %}
+    </div>
+    {% endif %}
+    {% if pl.options|length > 1 %}
+    <p class="plan-options muted small">Other things costing you more than typical: {% for o in pl.options if o.key != f.key %}<a href="?plan={{ o.key }}#plan">{{ o.name|lower }}</a> ({{ '%+.1f'|format(-o.excess) }} a game){{ ', ' if not loop.last }}{% endfor %}</p>
+    {% endif %}
+    {% elif pl.clean %}
+    <p>Nothing in your recent games costs you more than it costs a typical player in the same role: every death habit and part of Swing is at or better than your role's level. Keep it up.</p>
+    {% endif %}
+  </div>
+</div>
+{% endif %}

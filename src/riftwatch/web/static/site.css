@@ -1467,3 +1467,55 @@ details.sw-play[open], .sw-item[open] { background: var(--panel-2); }
   .draft-pick .parts, .draft-pick .reasons { grid-column: 1 / -1; }
 }
 .draft-slot img[hidden], .draft-mini img[hidden], .draft-pick img[hidden] { display: none; }   /* site styles give img display: block, which beats [hidden] */
+
+/* -- improvement plan -- */
+.plan-focus { padding: 8px 12px; border-left: 3px solid var(--accent); background: var(--panel-2); border-radius: 0 8px 8px 0; }
+.plan-focus .k { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.plan-focus > b { font-size: 17px; }
+.plan-focus .why { margin: 4px 0 0; font-size: 13px; color: var(--text-2); line-height: 1.5; }
+.plan-focus .why b { font-family: var(--mono); color: var(--text); } .plan-focus .why b.down { color: var(--loss); } .plan-focus .why b.up { color: var(--green); }
+.plan-target, .plan-tip, .plan-trend { margin: 10px 0 0; font-size: 13px; line-height: 1.5; }
+.plan-target b { font-family: var(--mono); color: var(--accent); }
+.plan-card .tag { display: inline-block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px; border-radius: 4px; background: var(--panel-3); color: var(--text-2); margin-right: 4px; }
+.plan-chart-wrap { margin-top: 10px; }
+.plan-chart { width: 100%; height: auto; display: block; }
+.plan-chart .mine { fill: none; stroke: var(--loss); stroke-width: 2; }
+.plan-chart circle { fill: var(--loss); }
+.plan-chart .typical { fill: none; stroke: var(--text-2); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.plan-chart .goal { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 2 4; }
+.plan-chart .tick { fill: var(--muted); font-size: 10.5px; font-family: var(--mono); }
+.plan-key { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11px; color: var(--muted); margin-top: 4px; }
+.plan-key i { display: inline-block; width: 16px; height: 0; vertical-align: middle; margin-right: 4px; border-top: 2px solid var(--loss); }
+.plan-key i.typical { border-top: 2px dashed var(--text-2); } .plan-key i.goal { border-top: 2px dotted var(--accent); }
+.plan-trend.better { color: var(--green); } .plan-trend.worse { color: var(--loss); } .plan-trend.steady, .plan-trend.early { color: var(--text-2); }
+.plan-examples { display: grid; gap: 4px; }
+.plan-ex { display: grid; grid-template-columns: 110px 1fr auto; gap: 8px; align-items: center; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: inherit; text-decoration: none; font-size: 13px; }
+.plan-ex:hover { background: var(--panel-2); }
+.plan-ex b { font-family: var(--mono); } .plan-ex b.down { color: var(--loss); }
+.plan-options { margin: 10px 0 0; }
+@media (max-width: 860px) { .plan-ex { grid-template-columns: 1fr auto; } .plan-ex > span:first-child { grid-column: 1 / -1; } }
+/* -- pre-game prediction -- */
+.pregame { margin-bottom: 12px; }
+.pg-bar { display: flex; height: 30px; border-radius: 8px; overflow: hidden; font-size: 12.5px; }
+.pg-bar i { display: flex; align-items: center; gap: 6px; padding: 0 10px; font-style: normal; white-space: nowrap; min-width: 0; overflow: hidden; }
+.pg-bar i.blue { background: var(--win-soft); color: var(--win); box-shadow: inset 0 -3px 0 var(--win); }
+.pg-bar i.red { background: var(--loss-soft); color: var(--loss); justify-content: flex-end; box-shadow: inset 0 -3px 0 var(--loss); }
+.pg-bar b { font-family: var(--mono); }
+.pg-bar small { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; opacity: .8; }
+.pg-range { margin: 6px 0 10px; }
+.pg-lobby { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; font-size: 13px; color: var(--text-2); }
+.pg-lobby b { font-family: var(--mono); font-size: 26px; } .pg-lobby b.up { color: var(--green); } .pg-lobby b.down { color: var(--loss); }
+.pg-parts { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.pg-parts > div { display: grid; gap: 2px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); }
+.pg-parts span { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.pg-parts b { font-family: var(--mono); font-size: 18px; } .pg-parts b.up { color: var(--green); } .pg-parts b.down { color: var(--loss); }
+.pg-parts small { font-size: 11px; color: var(--muted); }
+.pg-players { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 4px 12px; margin-bottom: 8px; }
+.pg-p { display: grid; grid-template-columns: 22px 1fr auto auto; gap: 8px; align-items: center; padding: 4px 6px; border-left: 3px solid var(--win); font-size: 12.5px; }
+.pg-p.t200 { border-left-color: var(--loss); }
+.pg-p img { border-radius: 4px; }
+.pg-p:not(:has(img)) { grid-template-columns: 1fr auto auto; }
+.pg-p .nm { display: grid; min-width: 0; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pg-p .nm small { color: var(--muted); font-size: 10.5px; }
+.pg-p b { font-family: var(--mono); } .pg-p b.up { color: var(--green); } .pg-p b.down { color: var(--loss); }
+.pg-p small.muted { font-family: var(--mono); font-size: 10.5px; }

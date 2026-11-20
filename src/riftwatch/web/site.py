@@ -643,6 +643,10 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
 
                     ctx["swing_profile"] = swingview.swing_profile(conn, gd, puuid, win_model, swing_norms())
                     ctx["session"] = swingview.session_recap(conn, gd, puuid, win_model)
+                    from riftwatch.web import plan as improvement_plan
+
+                    ctx["plan"] = improvement_plan.build(conn, gd, puuid, win_model, swing_norms(),
+                                                         f"{region}/{riot_id}", request.query_params.get("plan"))
                     ctx["tilt"] = views.tilt(conn, puuid)
                     if ctx["summary"]:
                         ctx["focus"] = views.focus(rows, ctx["summary"]["patterns"], insights.baselines(conn),
@@ -699,7 +703,22 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             return {"live": None, "live_error": found.error}
         if found.status != "done":
             return {"live": None, "live_error": "Still scouting -- refresh in a moment."}
-        return {"live": _live_view(found.result, region)}
+        return {"live": _live_view(found.result, region), **_pregame_live(found.result)}
+
+    def _pregame_live(report: dict) -> dict[str, Any]:
+        """Each team's chance before the game (web.pregame); nothing when it can't be worked out."""
+        from riftwatch.web import pregame
+
+        if win_model is None:
+            return {}
+        try:
+            with pool.connection() as conn:
+                pred = pregame.live(conn, game_data(), report, win_model, services.settings.models_dir,
+                                    me=report.get("me"))
+        except Exception as exc:                          # noqa: BLE001 -- the scouting still shows
+            log.warning("pre-game prediction failed: %s", exc)
+            return {}
+        return {"pregame": pred, "pregame_check": pregame.load_backtest(services.settings.models_dir)}
 
     def _live_view(report: dict, region: str) -> dict:
         gd = game_data()
@@ -1126,6 +1145,13 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
         ids = views.parse_lobby(q)
         with pool.connection() as conn:
             cards = [views.multi_card(conn, gd_, n, t, PLATFORM_REGION) for n, t in ids]
+            from riftwatch.web import pregame
+
+            try:                                  # the lobby's players against an average team
+                lobby_pred = pregame.lobby(conn, gd_, ids, win_model, services.settings.models_dir)
+            except Exception as exc:              # noqa: BLE001 -- the cards still show
+                log.warning("lobby prediction failed: %s", exc)
+                lobby_pred = None
         # The lobby at a glance: average rank and recent form of the players found.
         ranked = [c for c in cards if c.get("rank")]
         summary = None
@@ -1140,7 +1166,8 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                        "hot": [c["name"] for c in recent if c["streak"].endswith("W") and int(c["streak"][:-1]) >= 3],
                        "cold": [c["name"] for c in recent if c["streak"].endswith("L") and int(c["streak"][:-1]) >= 3]}
         return render("multi.html", nav="multi", q=q, cards=cards, summary=summary,
-                      unparsed=bool(q.strip()) and not ids)
+                      unparsed=bool(q.strip()) and not ids, pregame=lobby_pred,
+                      pregame_check=pregame.load_backtest(services.settings.models_dir))
 
     # -- leaderboard ------------------------------------------------------------------------
 

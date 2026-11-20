@@ -23,6 +23,7 @@
     <div><span>On a streak</span><b>{% if summary.hot %}<span class="win-text">{{ summary.hot|join(', ') }} hot</span>{% endif %}{% if summary.hot and summary.cold %} &middot; {% endif %}{% if summary.cold %}<span class="loss-text">{{ summary.cold|join(', ') }} cold</span>{% endif %}{% if not summary.hot and not summary.cold %}<span class="muted">nobody 3+ in a row</span>{% endif %}</b></div>
   </div>
   {% endif %}
+  {% include "_pregame.html" %}
   {% if cards %}
   <div class="lobby">
     {% for c in cards %}

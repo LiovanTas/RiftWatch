@@ -1,0 +1,35 @@
+{% if pregame %}{% set pg = pregame %}
+<div class="panel pregame">
+  <div class="panel-head">
+    <span>{{ 'Pre-game prediction' if pg.kind == 'live' else 'Your lobby against an average team' }}</span>
+    <span class="muted small">{{ pg.known }} of {{ pg.of }} players rated &middot; {{ pg.sure }}</span>
+  </div>
+  <div class="panel-body">
+    {% if pg.kind == 'live' %}
+    <div class="pg-bar" role="img" aria-label="Blue {{ pg.blue }}%, red {{ pg.red }}%">
+      <i class="blue" style="width:{{ pg.blue }}%"><b>Blue {{ '%.0f'|format(pg.blue) }}%</b>{% if pg.my_team == 100 %} <small>you</small>{% endif %}</i>
+      <i class="red" style="width:{{ pg.red }}%"><b>Red {{ '%.0f'|format(pg.red) }}%</b>{% if pg.my_team == 200 %} <small>you</small>{% endif %}</i>
+    </div>
+    <p class="pg-range muted small">Blue between {{ '%.0f'|format(pg.low) }}% and {{ '%.0f'|format(pg.high) }}% with one standard error on the ratings.</p>
+    {% else %}
+    <div class="pg-lobby"><b class="{{ 'up' if pg.blue >= 50 else 'down' }}">{{ '%.0f'|format(pg.blue) }}%</b><span>chance against a team of average players, from your lobby's Swing ratings (between {{ '%.0f'|format(pg.low) }}% and {{ '%.0f'|format(pg.high) }}%)</span></div>
+    {% endif %}
+    <div class="pg-parts">
+      {% if pg.kind == 'live' %}
+      <div data-tip="Draft&#10;the model's chance for these two line-ups before anything happens{% if pg.draft_auc %}; drafts barely decide solo-queue games (AUC {{ '%.2f'|format(pg.draft_auc) }} in the first two minutes){% endif %}"><span>Draft</span><b class="{{ 'up' if pg.parts.draft > 0 else 'down' if pg.parts.draft < 0 else '' }}">{{ '%+.1f'|format(pg.parts.draft) }}</b><small>points for blue</small></div>
+      {% endif %}
+      <div data-tip="Players&#10;Swing ratings: percentage points of win chance each player adds per game against their role; {{ 'blue minus red' if pg.kind == 'live' else 'the lobby' }} adds up to {{ '%+.1f'|format(pg.rating_diff) }}, &plusmn;{{ pg.sd }}"><span>Players</span><b class="{{ 'up' if pg.parts.players > 0 else 'down' if pg.parts.players < 0 else '' }}">{{ '%+.1f'|format(pg.parts.players) }}</b><small>points{% if pg.kind == 'live' %} for blue{% endif %}</small></div>
+      {% if pg.kind == 'live' %}
+      <div data-tip="Comfort&#10;experience on their champion against the average, from stored players' first, second, tenth... game on a champion; half counts, as the rating already holds part of it"><span>Comfort</span><b class="{{ 'up' if pg.parts.comfort > 0 else 'down' if pg.parts.comfort < 0 else '' }}">{{ '%+.1f'|format(pg.parts.comfort) }}</b><small>points for blue</small></div>
+      {% endif %}
+    </div>
+    {% if pg.best or pg.worst %}
+    <div class="pg-players">
+      {% for p in pg.best %}<div class="pg-p t{{ p.team }}" data-tip="{{ p.name }}&#10;Swing rating {{ '%+.1f'|format(p.rating.value) }} &plusmn;{{ p.rating.sd }} over {{ p.rating.games }} games{% if p.rating.role %} as {{ p.rating.role }}{% endif %}">{% if p.icon %}<img src="{{ p.icon }}" alt="" width="22" height="22" loading="lazy">{% endif %}<span class="nm">{{ p.name }}{% if p.champion %}<small>{{ p.champion }}</small>{% endif %}</span><b class="{{ 'up' if p.rating.value >= 0 else 'down' }}">{{ '%+.1f'|format(p.rating.value) }}</b><small class="muted">&plusmn;{{ p.rating.sd }}</small></div>{% endfor %}
+      {% for p in pg.worst %}<div class="pg-p t{{ p.team }}" data-tip="{{ p.name }}&#10;Swing rating {{ '%+.1f'|format(p.rating.value) }} &plusmn;{{ p.rating.sd }} over {{ p.rating.games }} games{% if p.rating.role %} as {{ p.rating.role }}{% endif %}">{% if p.icon %}<img src="{{ p.icon }}" alt="" width="22" height="22" loading="lazy">{% endif %}<span class="nm">{{ p.name }}{% if p.champion %}<small>{{ p.champion }}</small>{% endif %}</span><b class="{{ 'up' if p.rating.value >= 0 else 'down' }}">{{ '%+.1f'|format(p.rating.value) }}</b><small class="muted">&plusmn;{{ p.rating.sd }}</small></div>{% endfor %}
+    </div>
+    {% endif %}
+    <p class="muted small">Players RiftWatch hasn't seen count as average{% if pg.tau %}, with a margin of &plusmn;{{ pg.tau }}{% endif %}. {% if pregame_check and pregame_check.enough %}Backtested on {{ '{:,}'.format(pregame_check.games) }} stored games, each predicted only from earlier games: log loss {{ '%.3f'|format(pregame_check.players.log_loss) }} against {{ '%.3f'|format(pregame_check.coin_flip) }} for a coin flip, AUC {{ '%.3f'|format(pregame_check.players.auc) }}. Most of a solo-queue game is still decided in the game.{% else %}Solo-queue games are mostly decided in the game: treat this as a lean, not a forecast.{% endif %} <a href="/swing/method#rating">How ratings work</a></p>
+  </div>
+</div>
+{% endif %}

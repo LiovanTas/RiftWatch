@@ -149,6 +149,7 @@
         </div>
       </div>
       {% endif %}
+      {% include "_plan.html" %}
       {% if rank_json %}
       <div class="panel rankprog" data-rank="{{ rank_json }}">
         <div class="panel-head">
@@ -378,6 +379,7 @@
     {% if live %}
       <div class="panel" style="margin-bottom:12px"><div class="panel-head"><span><span class="n">LIVE</span>{{ live.queue }} &middot; {{ live.platform|upper }} &middot; {{ live.clock }} in when scouted</span>
         <button class="btn" data-scout="{{ scout_url }}" type="button">{{ icon('refresh') }} Refresh</button></div></div>
+      {% include "_pregame.html" %}
       {% for team in live.teams %}
       <div class="panel live-team">
         <div class="team-head {{ 'win' if team.id == 100 else 'loss' }}"><span class="res">{{ team.label }}</span>

@@ -714,6 +714,17 @@ items are the best damage items (+0.06), marksmen start behind (-0.13) and scale
 and fighters fall off (-0.13, -0.05, -0.05). These are associations on top of the game state
 (defensive items are often bought by the team that's behind), listed on `/swing`.
 
+**A richer game state (being measured).** Two more versions read 19 more inputs, all from
+the timeline: towers lost by tier (outer, inner, base, nexus), turret plates, how many players
+on each side have hit levels 6, 11 and 16, gold held but not spent, how many minutes the dead
+are still out, and whether dragon, Elder and Baron are up right now. Spawn and respawn times
+are measured from stored games: dragon at 5:00 and 5:00 after each kill, Baron at 20:00 and
+6:00 after, Elder 6:00 after a soul. **State plus** is five of the game-state networks trained
+from different random starts and averaged, which smooths the chance between nearby states;
+**stacked plus** puts the same logistic layer on top. Each is compared with the stacked
+version on the same held-out games, with the same resampled interval, and is only used if it
+does better.
+
 ### The decomposition and sharing it out
 
 The full method, with definitions, proofs and the validation numbers read live from the
@@ -1159,6 +1170,51 @@ When the win-probability model is loaded, coaching gets Swing evidence
 
 Without the model, coaching is exactly as before. The prompt version is part of the cache key,
 so cached coaching was regenerated.
+
+## Your plan
+
+The profile overview has a **Your plan** panel (`web/plan.py`) that picks one thing to work on.
+The candidates are the five costly death habits and the five parts of Swing, all measured the
+same way: points of win chance lost per game. Over the last 20 games, each game is compared
+with the typical player in that game's own role, so switching roles stays fair. The focus is
+the candidate costing the most beyond typical.
+
+- **Target:** the role's typical level when the gap is 2 points or less, otherwise halfway
+  there; for a habit also as deaths per game (using the player's own cost per death)
+- **Chart:** cost per game in blocks of 5 games against typical and the target
+- **Trend:** the last 10 games against the 20 before, with a rough 95% margin: "getting
+  better", "getting worse" or "no clear change yet" (nothing under 20 games)
+- **Examples:** the three recent moments where it cost most, linked to their games, and a tip
+
+Other candidates above typical are linked (`?plan=<key>`). The panel stays hidden until the
+player has 5 games with stored Swing from the current model.
+
+## Pre-game prediction
+
+The live-game tab and the multi-search lobby show each team's chance before the game
+(`web/pregame.py`). Three parts are added in log-odds:
+
+1. **draft:** the win-probability model at minute 0 for the two line-ups
+2. **players:** each player's Swing rating (empirical Bayes, against their role). A rating is
+   points of win chance added per game, so a rating gap of D is about 0.04 × D in log-odds
+   near 50%. Unknown players count as average, with the spread of true ratings as their margin
+3. **comfort:** the experience curve on the champion against the overall rate, halved because
+   the rating already holds part of it
+
+Backtest (`python -m riftwatch.web.pregame`, saved to `out/ml/models/winprob/pregame.json`):
+every stored game is predicted from ratings built only from each player's *earlier* games.
+On 11,236 games with at least one known player (4.2 a game on average):
+
+| Prediction | Log loss | AUC |
+|---|---|---|
+| Coin flip | 0.6931 | 0.500 |
+| Players' ratings | 0.6917 | 0.531 |
+| Players and draft | 0.6885 | 0.558 |
+
+When it leans 5 points or more (1,702 games), it says 57.3% on average and is right 55.3% of
+the time, so it's slightly overconfident. The page shows the backtest and says that most of
+a solo-queue game is still decided in the game. Matchmaking is built to make games close to a
+coin flip before they start, so a small edge is about what you'd expect.
 
 ## Live-game scouting
 
