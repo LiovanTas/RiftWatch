@@ -217,9 +217,12 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
 
         if win_model is None:
             return {}
+        from riftwatch.winprob import trades
+
         summary = choice_values.summary(services.settings.models_dir) or {}
         return {**swing_calc.norms(services.settings.models_dir),
-                "_choices": {k: v.get("reliability") for k, v in (summary.get("kinds") or {}).items()}}
+                "_choices": {k: v.get("reliability") for k, v in (summary.get("kinds") or {}).items()},
+                "_trades": trades.load(services.settings.models_dir)}
 
     def warm_tiers() -> None:
         """Rebuild the default tier board (the home page's and /champions') and the /swing

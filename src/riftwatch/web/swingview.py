@@ -100,7 +100,37 @@ def explain(m: dict, moments: list[dict], side: int, names: dict[int, str], norm
     if m.get("dead"):
         down = ", ".join("you" if mine is not None and p == mine else names.get(p, "?") for p in m["dead"])
         lines.append(f"Taken while {down} {'were' if len(m['dead']) > 1 or down == 'you' else 'was'} dead.")
-    return {"why": why, "lines": lines, "leverage": lev}
+    farm = farm_lines(m, names, mine)
+    return {"why": why, "lines": lines, "leverage": lev, "farm": farm}
+
+
+def farm_lines(m: dict, names: dict[int, str], mine: int | None = None) -> list[dict]:
+    """The farm each laner or jungler gave up to make this play (winprob.farm), the player's
+    own first: who, the CS, gold and XP, how long they were away and its worth."""
+    from riftwatch.winprob.farm import ROLE_NAMES
+
+    rows = []
+    for f in sorted(m.get("farm") or [], key=lambda f: (f["pid"] != mine, -abs(f["cost"]))):
+        if f["cs"] < 1 and abs(f["cost"]) < 0.05:
+            continue
+        you = mine is not None and f["pid"] == mine
+        who = "You" if you else names.get(f["pid"], "A champion")
+        dead = f["pid"] in (m.get("lost") or [])
+        what = "dying cost" if dead else "this play cost"
+        when = (f"the {f['window'][0]}-{f['window'][1]} window, shared by {f['plays']} plays" if f.get("plays", 1) > 1
+                else f"{f['window'][0]}-{f['window'][1]}")
+        worth = f.get("worth", f["cost"])
+        text = (f"{who}: {what} about {f['cs']:.0f} CS of farm ({f['gold']:,} gold, {f['xp']:,} XP; {when}), "
+                f"worth {worth:.1f} points of win chance.")
+        if "typical_cs" in f:
+            kind = "death" if dead else "play"
+            text += f" A typical {kind} like it costs {f['typical_cs']:.0f} CS, which the chance already expects, so "
+            text += (f"{abs(f['cost']):.1f} more is charged to it." if f["cost"] >= 0.05
+                     else f"it's credited {abs(f['cost']):.1f} for costing less." if f["cost"] <= -0.05
+                     else "it's about even.")
+        rows.append({"pid": f["pid"], "you": you, "cs": f["cs"], "gold": f["gold"], "xp": f["xp"],
+                     "cost": f["cost"], "worth": worth, "away": f["away"], "text": text})
+    return rows
 
 
 def swing_view(conn: psycopg.Connection, sw: dict, players: list[dict], gd: GameData, me: dict | None,
@@ -171,6 +201,7 @@ def swing_view(conn: psycopg.Connection, sw: dict, players: list[dict], gd: Game
                 "weakest": swing_calc.PART_NAMES[min(keys, key=lambda k: v.get(k, 0))],
                 "spark": spark(v.get("line") or []),
                 "deaths": _deaths_summary(moments, my_pid),
+                "farm": v.get("farm"),
                 "items": item_view(conn, model, gd, sw, me, players) if sw.get("reads_items") else [],
                 "choices": choice_view(conn, model, gd, me, players),
                 "reliability": norms.get("_choices") or {},
@@ -334,6 +365,9 @@ def swing_profile(conn: psycopg.Connection, gd: GameData, puuid: str, model, nor
     patterns = _patterns(rows, (norms.get("habits") or {}).get(role or "", {}))
     worst = min((c for c in compare if c["gap"] is not None), key=lambda c: c["gap"], default=None)
     best = max((c for c in compare if c["gap"] is not None), key=lambda c: c["gap"], default=None)
+    from riftwatch.winprob import trades
+
+    plays = trades.player([(r[1], r[2], d) for r, d in rows], norms.get("_trades"), model)
     trend = [{"total": d["players"][str(r[1])]["total"], "win": d["winner"] == r[3],
               "champion": gd.champion(r[4]).name, "match_id": r[0]} for r, d in reversed(rows)]
     top = max([abs(t["total"]) for t in trend] + [1])
@@ -343,7 +377,7 @@ def swing_profile(conn: psycopg.Connection, gd: GameData, puuid: str, model, nor
             "typical": round(typical["total"], 1) if typical else None, "parts": compare,
             "peak": max([abs(c["mine"]) for c in compare] + [abs(c["typical"] or 0) for c in compare] + [1]),
             "worst": worst if worst and worst["gap"] < -0.5 else None,
-            "best": best if best and best["gap"] > 0.5 else None, "patterns": patterns}
+            "best": best if best and best["gap"] > 0.5 else None, "patterns": patterns, "plays": plays}
 
 
 def _patterns(rows, typical: dict) -> list[dict]:

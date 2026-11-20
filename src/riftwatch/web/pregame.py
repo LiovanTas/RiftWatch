@@ -303,16 +303,16 @@ def load_backtest(models_dir) -> dict | None:
 
 
 if __name__ == "__main__":       # python -m riftwatch.web.pregame: run and save the backtest
-    import os
-
     from dotenv import load_dotenv
 
+    from riftwatch.config import Settings
     from riftwatch.winprob import model as wp
     from riftwatch.winprob import validate
 
     load_dotenv()
-    models_dir = os.environ.get("RIFTWATCH_MODELS_DIR", "out/ml/models")
-    with psycopg.connect(os.environ["RIFTWATCH_DATABASE_URL"], autocommit=True) as c:
+    settings = Settings.from_env()
+    models_dir = settings.models_dir
+    with psycopg.connect(settings.database_url, autocommit=True) as c:
         result = backtest(c, wp.load(models_dir), validate.load(models_dir))
     save_backtest(result, models_dir)
     print(json.dumps(result, indent=2))

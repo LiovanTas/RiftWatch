@@ -195,6 +195,24 @@
           {% endfor %}
           <p class="muted small">Points are your team's chance to win: each death's own swing, plus anything the enemy took before you respawned.</p>
           {% endif %}
+          {% if sp.plays %}{% set pt = sp.plays %}
+          <h5 class="sw-h" id="trades">Were your plays worth the farm?</h5>
+          <p class="sp-lead small">To make your plays you gave up about <b>{{ '{:,}'.format(pt.gold_per_game) }} gold</b> and <b>{{ '{:,}'.format(pt.xp_per_game) }} XP</b> of farm a game, worth <b class="down">{{ '%.1f'|format(pt.farm_per_game) }}</b> points of win chance.{% if pt.extra_per_game|abs >= 0.1 %} That's <b class="{{ 'down' if pt.extra_per_game > 0 else 'up' }}">{{ '%.1f'|format(pt.extra_per_game|abs) }}</b> a game {{ 'more' if pt.extra_per_game > 0 else 'less' }} than typical plays like them, which Swing {{ 'charges to' if pt.extra_per_game > 0 else 'credits to' }} those plays.{% endif %}{% if pt.best %} Your <b>{{ pt.best.name|lower }}</b> pay off best: {{ '%+.2f'|format(pt.best.net) }} a play after farm, against {{ '%+.2f'|format(pt.best.typical_net) }} for a typical {{ pt.role }}.{% endif %}{% if pt.worst %} Your <b>{{ pt.worst.name|lower }}</b> pay off least: {{ '%+.2f'|format(pt.worst.net) }} a play against {{ '%+.2f'|format(pt.worst.typical_net) }}.{% endif %}</p>
+          <div class="trades">
+            <div class="tr-row tr-head"><span>Play</span><span>a game</span><span>gained</span><span>extra farm</span><span>net a play</span><span>typical</span></div>
+            {% for k in pt.kinds %}
+            <div class="tr-row" data-tip="{{ k.name }}&#10;{{ k.tip }}; {{ k.plays }} plays in {{ pt.games }} games; each gave up about {{ k.gold }} gold and {{ k.xp }} XP of farm, worth {{ '%.2f'|format(k.worth) }}">
+              <span class="lab">{{ k.name }}</span>
+              <span>{{ k.per_game }}{% if k.typical_per_game is not none %}<small> / {{ k.typical_per_game }}</small>{% endif %}</span>
+              <span class="{{ 'up' if k.gained >= 0 else 'down' }}">{{ '%+.2f'|format(k.gained) }}</span>
+              <span class="{{ 'down' if k.farm > 0 else 'up' }}">{{ '%+.2f'|format(-k.farm) }}</span>
+              <b class="{{ 'up' if k.net >= 0 else 'down' }}">{{ '%+.2f'|format(k.net) }}</b>
+              <span class="muted">{% if k.typical_net is not none %}{{ '%+.2f'|format(k.typical_net) }}{% else %}&ndash;{% endif %}</span>
+            </div>
+            {% endfor %}
+          </div>
+          <p class="muted small">Points of win chance per play: your share of what the play moved; the farm it cost you beyond a typical play like it (CS you didn't take against your own pace while away or dead, valued by the model; the chance already expects a typical play's cost); and what was left, which is the play's Swing. Typical is the same for players in your role.</p>
+          {% endif %}
         </div>
       </div>
       {% endif %}

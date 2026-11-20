@@ -1519,3 +1519,19 @@ details.sw-play[open], .sw-item[open] { background: var(--panel-2); }
 .pg-p .nm small { color: var(--muted); font-size: 10.5px; }
 .pg-p b { font-family: var(--mono); } .pg-p b.up { color: var(--green); } .pg-p b.down { color: var(--loss); }
 .pg-p small.muted { font-family: var(--mono); font-size: 10.5px; }
+
+/* -- farm given up for a play -- */
+.sw-farm { margin-top: 6px; border-top: 1px dashed var(--line, var(--panel-3)); padding-top: 4px; }
+.sw-farm p.you { color: var(--text); }
+.sw-farm .tag { display: inline-block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px; border-radius: 4px; background: var(--panel-3); color: var(--gold, var(--text-2)); margin-right: 4px; }
+
+/* -- were your plays worth the farm -- */
+.trades { display: grid; gap: 2px; font-size: 12.5px; margin: 6px 0; }
+.tr-row { display: grid; grid-template-columns: minmax(110px, 1.6fr) repeat(5, minmax(48px, 1fr)); gap: 8px; align-items: baseline; padding: 4px 6px; border-radius: 6px; }
+.tr-row:not(.tr-head):hover { background: var(--panel-3); }
+.tr-row > :not(.lab) { font-family: var(--mono); text-align: right; }
+.tr-row small { color: var(--muted); }
+.tr-row .up { color: var(--green); } .tr-row .down { color: var(--loss); }
+.tr-head { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.tr-head > span { font-family: inherit !important; }
+@media (max-width: 560px) { .tr-row { grid-template-columns: minmax(90px, 1.4fr) repeat(5, minmax(38px, 1fr)); gap: 4px; font-size: 11.5px; } }

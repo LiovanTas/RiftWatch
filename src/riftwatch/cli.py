@@ -207,7 +207,7 @@ def cmd_winprob_train(settings: Settings, args: argparse.Namespace) -> int:
     from riftwatch.web.gamedata import shared
     from riftwatch.winprob import model as wp
 
-    cache = Path(settings.models_dir).parent / "winprob_dataset_v2.npz"
+    cache = Path(settings.models_dir).parent / "winprob_dataset_v3.npz"     # v3: lane gaps
     catalog_file = cache.with_suffix(".catalog.joblib")
     if args.reuse and cache.exists() and catalog_file.exists() and not args.limit:
         print(f"reusing the games read last time ({cache})")
@@ -303,13 +303,15 @@ def cmd_winprob_backfill(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def _winprob_tables(settings: Settings, model) -> None:
-    from riftwatch.winprob import choices, swing
+    from riftwatch.winprob import choices, swing, trades
 
     with connect(settings.database_url) as conn:
         print("typical swing of each kind of moment...")
         swing.build_norms(conn, model, settings.models_dir)
         print("what each choice did beyond the game state...")
         choices.build(conn, model, settings.models_dir)
+        print("what each kind of play gained against the farm it cost...")
+        trades.build(conn, model, settings.models_dir)
 
 
 def cmd_winprob_validate(settings: Settings, args: argparse.Namespace) -> int:

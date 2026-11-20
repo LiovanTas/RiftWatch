@@ -20,6 +20,13 @@ change in that chance over a game is handed to the players responsible:
     trading, map pressure) goes to the team it favoured, half evenly and half by each
     player's gold and XP earned that minute; the other team shares the loss evenly. The last
     step, from the final minute to the result, is shared evenly too.
+  * farm given up -- a laner or jungler who leaves their farm to make a play (or dies) takes
+    less CS than their pace (farm.py). The model values that gold, XP and CS at the end of
+    the window, and the same for what a typical window like it gives up (which the model
+    already expects at the play). The difference is charged to the play and handed back to
+    the player's economy, where the extra lost farm would otherwise show minutes later.
+    Totals don't change: a roam that cost more waves than usual is judged for it, one that
+    cost fewer (the wave shoved first) is credited, and the economy part isn't blamed.
 
 So a winning team's Swing adds up to +50 and a losing team's to -50.
 
@@ -43,9 +50,18 @@ from typing import Any
 
 import psycopg
 
-from riftwatch.winprob.state import ITEM_FLAG_NAMES, KEPT_EVENTS, Replay, compact, respawn_seconds, team_of
+from riftwatch.winprob import farm as farm_calc
+from riftwatch.winprob.state import (
+    ITEM_FLAG_NAMES,
+    KEPT_EVENTS,
+    LANE_FEATURES,
+    Replay,
+    compact,
+    respawn_seconds,
+    team_of,
+)
 
-VERSION = "sw5"
+VERSION = "sw6"
 PARTS = ("draft", "kills", "deaths", "objectives", "structures", "items", "economy")
 PART_NAMES = {"draft": "Draft", "kills": "Kills", "deaths": "Deaths", "objectives": "Objectives",
               "structures": "Structures", "items": "Items", "economy": "Economy"}
@@ -77,7 +93,9 @@ GROUP = {"alive_own": "alive", "alive_enemy": "alive", "gold_diff": "gold", "kil
          "dead_time_own": "alive", "dead_time_enemy": "alive", "plates_own": "plates", "plates_enemy": "plates",
          "dragon_up": "dragons", "elder_up": "elder", "baron_up": "baron",
          **{f"towers_{tier}_{side}": "towers" for tier in ("outer", "inner", "base", "nexus")
-            for side in ("own", "enemy")}}
+            for side in ("own", "enemy")},
+         # a lane's gap only moves at an event by the killer's bounty
+         **{key: "gold" for key in LANE_FEATURES}}
 GROUP_NAMES = {"alive": "a player down", "gold": "bounty gold", "kills": "the kill score", "dragons": "the dragon",
                "soul": "dragon soul", "elder": "the Elder buff", "baron": "the Baron buff", "herald": "the herald",
                "grubs": "the voidgrubs", "atakhan": "Atakhan", "towers": "the tower", "inhibitors": "the open inhibitor",
@@ -162,12 +180,16 @@ class Rules:
     unexplained gain among the team's players by how far each out-earned their lane opponent
     that minute (gold and XP) and a loss by how far each fell behind theirs; "earned" shares
     gains by gold and XP earned and losses evenly. ``even_economy`` of either is shared evenly
-    first."""
+    first. ``farm_cost``: charge each play the farm its players gave up to make it beyond what
+    a typical play like it gives up (farm.py), taken out of their economy, where it would
+    otherwise land minutes later; a player's total doesn't change, only which of their plays
+    it's put down to."""
     team_share: float = TEAM_SHARE
     even_economy: float = EVEN_ECONOMY
     dead_share: float = DEAD_SHARE
     kill_split: str = "damage"
     economy_split: str = "lane"
+    farm_cost: bool = True
 
 
 RULES = Rules()
@@ -183,7 +205,7 @@ def evaluate(model, frames: list[dict], events: list[dict], names: dict[int, str
     they were laning against). Sharing it out (``share``) is cheap and separate, so other
     rules can be tried on stored games without the model."""
     catalog = model.catalog if getattr(model, "reads_items", False) else None
-    replay = Replay(frames, events, champions, purchases, catalog)
+    replay = Replay(frames, events, champions, purchases, catalog, positions)
     if len(frames) < 2 or replay.winner not in (100, 200):
         return None
     names = names or {}
@@ -205,16 +227,21 @@ def evaluate(model, frames: list[dict], events: list[dict], names: dict[int, str
     for i, e in enumerate(replay.events):
         if e.get("type") not in SCORED:
             continue
+        if ((e["type"] == "ELITE_MONSTER_KILL" and e.get("killerTeamId") not in (100, 200))
+                or (e["type"] == "BUILDING_KILL" and e.get("teamId") not in (100, 200))):
+            continue                       # no team took it (a herald expiring is team 300)
         t = e.get("timestamp", 0)
-        bonus = {}
+        bonus, by_player = {}, {}
         if e["type"] == "CHAMPION_KILL":
-            bonus = {300 - team_of(e.get("victimId", 1)):
-                     float(e.get("bounty", 300)) + float(e.get("shutdownBounty", 0))}
+            amount = float(e.get("bounty", 300)) + float(e.get("shutdownBounty", 0))
+            bonus = {300 - team_of(e.get("victimId", 1)): amount}
+            if 1 <= (e.get("killerId") or 0) <= 10 and team_of(e["killerId"]) != team_of(e.get("victimId", 1)):
+                by_player = {e["killerId"]: amount}
         upto = i + 1
         while (upto < len(replay.events) and replay.events[upto].get("type") == "DRAGON_SOUL_GIVEN"
                and abs(replay.events[upto].get("timestamp", 0) - t) <= 2000):
             upto += 1                                       # the soul comes with the dragon
-        before, after = replay.pair(t, i), replay.pair(t, upto, bonus)
+        before, after = replay.pair(t, i), replay.pair(t, upto, bonus, player_bonus=by_player)
         groups = _changed(before, after)
         subsets = subsets_of(before, after, groups)
         scored.append(("event", t, i, subsets[frozenset()], subsets[frozenset(groups)], subsets, groups))
@@ -310,6 +337,36 @@ def evaluate(model, frames: list[dict], events: list[dict], names: dict[int, str
         death["while_dead"] = follow
         death["while_dead_cost"] = round(sum(moments[j]["swing"] for j in follow), 1)
 
+    # Farm given up for plays (farm.py): each laner's and jungler's CS given up around their
+    # plays, worth what the model says that gold, XP and CS would have been to their team at
+    # the end of the window; and the same for what a typical window like it gives up, which
+    # the model already expects when the play happens. The difference is what's charged (a
+    # play that cost less farm than usual is credited). Plays in the same window share it.
+    rows = farm_calc.given_up(replay, frames, moments, positions or {}, getattr(model, "farm", None))
+    if rows:
+        shifted = []
+        for r in rows:
+            team = team_of(r["pid"])
+            shifted.append(farm_calc.shifted(pairs[r["frame"]], team, r["gold"], r["xp"], r["cs"], r["role"]))
+            shifted.append(farm_calc.shifted(pairs[r["frame"]], team, r["typical_gold"], r["typical_xp"],
+                                             r["typical_cs"], r["role"]))
+        values = [float(x) for x in model.blue([a for a, _ in shifted], [b for _, b in shifted])]
+        for n_, r in enumerate(rows):
+            base, sign = curve[r["frame"]], 1 if team_of(r["pid"]) == 100 else -1
+            worth = max(0.0, sign * (values[2 * n_] - base))
+            usual = max(0.0, sign * (values[2 * n_ + 1] - base))
+            k = len(r["moments"])
+            for j in r["moments"]:
+                moments[j].setdefault("farm", []).append(
+                    {"pid": r["pid"], "cs": round(r["cs"] / k, 1), "gold": round(r["gold"] / k),
+                     "xp": round(r["xp"] / k), "typical_cs": round(r["typical_cs"] / k, 1),
+                     "away": r["away"], "plays": k, "pace": r["pace"], "died": r["died"],
+                     "window": [_clock(60_000 * r["from"]), _clock(60_000 * (r["to"] + 1))],
+                     "worth": round(100 * worth / k, 2), "cost": round(100 * (worth - usual) / k, 2)})
+                facts[j].setdefault("farm", {})[str(r["pid"])] = [round((worth - usual) / k, 6), 60_000 * r["frame"],
+                                                                  round(r["gold"] / k), round(r["xp"] / k),
+                                                                  round(r["cs"] / k, 1), round(worth / k, 6)]
+
     # Gold and XP each player earned each minute, and their lane opponent.
     earned = {}
     for pid in range(1, 11):
@@ -354,14 +411,30 @@ def share(facts: dict[str, Any], rules: Rules = RULES) -> dict[str, dict[str, An
         for g in gains[pid]:
             running += g
             line.append(_pts(running))
+        net: Counter = Counter()                          # a play's share net of its farm cost
+        for a, i in plays[pid]:
+            net[i] += a
+        mine = [(a, i) for i, a in net.items()]
         players[str(pid)] = {**{k: _pts(v) for k, v in c.items()},
                              "total": _pts(sum(c.values())),
                              "best": [{"moment": i, "swing": _pts(a)}
-                                      for a, i in sorted(plays[pid], key=lambda x: -x[0])[:PLAYS] if a > 0.0005],
+                                      for a, i in sorted(mine, key=lambda x: -x[0])[:PLAYS] if a > 0.0005],
                              "worst": [{"moment": i, "swing": _pts(a)}
-                                       for a, i in sorted(plays[pid], key=lambda x: x[0])[:PLAYS] if a < -0.0005],
+                                       for a, i in sorted(mine, key=lambda x: x[0])[:PLAYS] if a < -0.0005],
+                             "farm": _farm_summary(facts, pid),
                              "line": line}
     return players
+
+
+def _farm_summary(facts: dict[str, Any], pid: int) -> dict[str, float] | None:
+    """The farm a player gave up for their plays over the game: plays it touched, CS, gold,
+    XP and its worth in points of win chance."""
+    rows = [f["farm"][str(pid)] for f in facts["events"] if str(pid) in (f.get("farm") or {})]
+    if not rows:
+        return None
+    return {"plays": len(rows), "cost": _pts(sum(r[0] for r in rows)),
+            "worth": _pts(sum(r[5] if len(r) > 5 else r[0] for r in rows)), "gold": round(sum(r[2] for r in rows)),
+            "xp": round(sum(r[3] for r in rows)), "cs": round(sum(r[4] for r in rows), 1)}
 
 
 def credit_of(facts: dict[str, Any], rules: Rules = RULES):
@@ -425,6 +498,15 @@ def credit_of(facts: dict[str, Any], rules: Rules = RULES):
                 give(_team(300 - side), -gain * (1 - rules.dead_share), kind, t)
             else:
                 give(_team(300 - side), -gain, kind, t)
+        # Farm given up to make the play: out of the player's economy (where the lost gold
+        # and XP would show minutes later) and onto the play, so a roam is judged net of the
+        # waves it cost. The player's total doesn't change.
+        if rules.farm_cost:
+            for who, entry in (f.get("farm") or {}).items():
+                pid, cost, until = int(who), entry[0], entry[1]
+                part = "deaths" if kind == "kills" and pid == f.get("victim") else kind
+                give([pid], -cost, part, t, n)
+                give([pid], cost, "economy", until)
 
     # Economy: what moved between minutes that the events don't explain.
     earned, opponent = facts["earned"], facts.get("opponent") or {}

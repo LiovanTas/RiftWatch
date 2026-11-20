@@ -2,6 +2,7 @@
 
 import math
 from collections import Counter
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -131,6 +132,18 @@ def test_team_swing_adds_up_to_the_result():
         for v in d["players"].values():                    # the parts make up the total
             assert sum(v[k] for k in swing.PARTS) == pytest.approx(v["total"], abs=0.3)
             assert v["line"][-1] == pytest.approx(v["total"], abs=0.3)   # and the running line ends there
+
+
+def test_a_herald_nobody_took_is_nobodys_and_the_sums_still_hold():
+    frames, events = game()
+    # Riot records a summoned herald expiring as killed by team 300.
+    events = [*events, {"type": "ELITE_MONSTER_KILL", "timestamp": 15 * 60_000, "killerTeamId": 300,
+                        "killerId": 0, "monsterType": "RIFTHERALD"}]
+    r = Replay(frames, events)
+    assert r.state(16 * 60_000, 100)["heralds_enemy"] == r.state(14 * 60_000, 100)["heralds_enemy"]
+    d = swing.game_swing(LeadModel(), frames, events, NAMES)
+    assert not any("Herald" in m["text"] for m in d["moments"])
+    assert sum(d["players"][str(p)]["total"] for p in range(1, 6)) == pytest.approx(50, abs=0.3)
 
 
 def test_kills_credit_the_killer_assisters_and_the_dead():
@@ -316,8 +329,10 @@ def test_kills_are_shared_by_damage_and_economy_by_the_lane():
                  6: "TOP", 7: "JUNGLE", 8: "MIDDLE", 9: "BOTTOM", 10: "UTILITY"}
     data = swing.evaluate(LeadModel(), frames, events, NAMES, positions=positions)
     i = next(n for n, f in enumerate(data["facts"]["events"]) if f["kind"] == "kills")
-    measured, _, _ = swing.credit_of({**data["facts"], "events": [data["facts"]["events"][i]]}, swing.RULES)
-    fixed, _, _ = swing.credit_of({**data["facts"], "events": [data["facts"]["events"][i]]}, swing.FIXED_RULES)
+    one = {**data["facts"], "events": [data["facts"]["events"][i]]}
+    # the kill's own shares, before any farm it cost is charged (tests/test_farm.py)
+    measured, _, _ = swing.credit_of(one, replace(swing.RULES, farm_cost=False))
+    fixed, _, _ = swing.credit_of(one, replace(swing.FIXED_RULES, farm_cost=False))
     # half by damage (0.9 / 0.1), half equally: 0.7 / 0.3 of the kill; fixed rules: 0.5 / 0.5
     assert measured[1]["kills"] / measured[2]["kills"] == pytest.approx(0.7 / 0.3, rel=1e-6)
     assert fixed[1]["kills"] == pytest.approx(fixed[2]["kills"])

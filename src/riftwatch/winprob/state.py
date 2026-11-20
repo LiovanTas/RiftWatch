@@ -46,10 +46,15 @@ FEATURES = BASE_FEATURES                       # what the first model (wp1) read
 # games: dragon 5:00 and 5:00 after each, Baron 20:00 and 6:00 after, Elder 6:00 after a soul.
 TOWER_TIERS = (("OUTER_TURRET", "outer"), ("INNER_TURRET", "inner"), ("BASE_TURRET", "base"),
                ("NEXUS_TURRET", "nexus"))
+# Where the gold is: each lane's gold and XP gap against the player in the same position (a
+# fed carry isn't a fed support, though the team totals are the same).
+LANES = (("TOP", "top"), ("JUNGLE", "jungle"), ("MIDDLE", "mid"), ("BOTTOM", "bot"), ("UTILITY", "support"))
+LANE_FEATURES = tuple(f"lane_{what}_{lane}" for _, lane in LANES for what in ("gold", "xp"))
 EXTRA_FEATURES = (tuple(f"towers_{name}_{side}" for _, name in TOWER_TIERS for side in ("own", "enemy"))
                   + ("plates_own", "plates_enemy", "lvl6_own", "lvl6_enemy", "lvl11_own", "lvl11_enemy",
                      "lvl16_own", "lvl16_enemy", "held_gold_own", "held_gold_enemy",
-                     "dead_time_own", "dead_time_enemy", "dragon_up", "elder_up", "baron_up"))
+                     "dead_time_own", "dead_time_enemy", "dragon_up", "elder_up", "baron_up")
+                  + LANE_FEATURES)
 RICH_FEATURES = BASE_FEATURES + EXTRA_FEATURES
 DRAGON_SPAWN_S, DRAGON_RESPAWN_S, BARON_SPAWN_S, BARON_RESPAWN_S, ELDER_RESPAWN_S = 300, 300, 1200, 360, 360
 # What a finished item can give, as the model counts it per team.
@@ -141,10 +146,22 @@ class Catalog:
 class Replay:
     def __init__(self, frames: list[dict], events: list[dict], champions: dict[int, int] | None = None,
                  purchases: dict[int, list[tuple[int, int]]] | None = None,
-                 catalog: Catalog | None = None) -> None:
+                 catalog: Catalog | None = None, positions: dict[int, str] | None = None) -> None:
         """``champions``: participant id -> champion id. ``purchases``: participant id ->
-        [(second, item id), ...] (the timeline's purchases, undos taken out)."""
+        [(second, item id), ...] (the timeline's purchases, undos taken out). ``positions``:
+        participant id -> TOP ... UTILITY (for each lane's gaps)."""
         self.frames = frames
+        # Each lane's two players: (blue pid, red pid), when both are known.
+        self.lanes: dict[str, tuple[int, int]] = {}
+        for pos, lane in LANES:
+            pair_ = [p for p, q in (positions or {}).items() if q == pos]
+            blue = [p for p in pair_ if 1 <= p <= 5]
+            red = [p for p in pair_ if 6 <= p <= 10]
+            if len(blue) == 1 and len(red) == 1:
+                self.lanes[lane] = (int(blue[0]), int(red[0]))
+        self._player = {(pid, key): [float((f.get(str(pid)) or {}).get(src, 0)) for f in frames]
+                        for pid in {p for pair_ in self.lanes.values() for p in pair_}
+                        for key, src in (("gold", "totalGold"), ("xp", "xp"))}
         self.events = sorted((e for e in events if e.get("type") in KEPT_EVENTS),
                              key=lambda e: e.get("timestamp", 0))
         self.times = [e.get("timestamp", 0) for e in self.events]
@@ -198,6 +215,10 @@ class Replay:
                 counts[("plates_lost", lost)] = counts.get(("plates_lost", lost), 0) + 1
             elif kind == "ELITE_MONSTER_KILL":
                 taker, monster = _side(e.get("killerTeamId")), e.get("monsterType")
+                if taker == OTHER:
+                    # Neutral (team 300): a summoned herald expiring, nobody's take.
+                    self._prefix.append(dict(counts))
+                    continue
                 if monster in MONSTERS:
                     counts[(MONSTERS[monster], taker)] = counts.get((MONSTERS[monster], taker), 0) + 1
                 if monster == "ELDER_DRAGON":
@@ -237,6 +258,16 @@ class Replay:
         """A player's value from the last minute frame at or before ``t``."""
         return self._frame_value(pid, key, t)
 
+    def _player_value(self, pid: int, key: str, t: float) -> float:
+        """A player's gold or XP at ``t``, interpolated between minute frames."""
+        values = self._player.get((pid, key)) or []
+        if not values:
+            return 0.0
+        i = int(t // 60_000)
+        if i >= len(values) - 1:
+            return values[-1]
+        return values[i] + (values[i + 1] - values[i]) * ((t - i * 60_000) / 60_000)
+
     def _total(self, key: str, team: int, t: float, interpolate: bool) -> float:
         values = self._totals[(key, team)]
         if not values:
@@ -266,12 +297,14 @@ class Replay:
     # -- the state ---------------------------------------------------------------------------
     def pair(self, t: float, upto: int | None = None, gold_bonus: dict[int, float] | None = None,
              item_time: float | None = None,
-             item_extra: dict[int, Counter] | None = None) -> tuple[dict[str, float], dict[str, float]]:
+             item_extra: dict[int, Counter] | None = None,
+             player_bonus: dict[int, float] | None = None) -> tuple[dict[str, float], dict[str, float]]:
         """The state at time ``t`` (ms) from blue's side and from red's, counting the first
         ``upto`` events (all events up to ``t`` by default) and items bought up to
         ``item_time`` (``t`` by default). ``gold_bonus`` adds gold to a team (a kill's bounty,
-        which the minute frames only show later); ``item_extra`` adds item flags to a team
-        (an item someone could have bought instead)."""
+        which the minute frames only show later) and ``player_bonus`` the same to a player's
+        lane; ``item_extra`` adds item flags to a team (an item someone could have bought
+        instead)."""
         if upto is None:
             upto = bisect_right(self.times, t)
         c = self._prefix[upto]
@@ -302,6 +335,11 @@ class Replay:
         elder_up = float(soul_taken and t - since >= ELDER_RESPAWN_S * 1000)
         baron_up = float(t >= BARON_SPAWN_S * 1000
                          and (last["baron"] is None or t - last["baron"] >= BARON_RESPAWN_S * 1000))
+        lane_gap = {}                                           # blue's gap in each lane
+        for lane, (b, r) in self.lanes.items():
+            extra = (player_bonus or {}).get(b, 0.0) - (player_bonus or {}).get(r, 0.0)
+            lane_gap[lane] = ((self._player_value(b, "gold", t) - self._player_value(r, "gold", t) + extra) / 1000,
+                              (self._player_value(b, "xp", t) - self._player_value(r, "xp", t)) / 1000)
         items = None
         if self.catalog is not None:
             items = self.item_counts(t if item_time is None else item_time)
@@ -346,6 +384,11 @@ class Replay:
             f["dead_time_own"] = dead_time[own]
             f["dead_time_enemy"] = dead_time[enemy]
             f["dragon_up"], f["elder_up"], f["baron_up"] = dragon_up, elder_up, baron_up
+            sign = 1.0 if own == 100 else -1.0
+            for _, lane in LANES:
+                gold_gap, xp_gap = lane_gap.get(lane, (0.0, 0.0))
+                f[f"lane_gold_{lane}"] = sign * gold_gap
+                f[f"lane_xp_{lane}"] = sign * xp_gap
             if items is not None:
                 for flag in ITEM_FLAGS:
                     f[f"{flag}_own"] = float(items[own].get(flag, 0))

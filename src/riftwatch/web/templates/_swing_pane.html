@@ -1,9 +1,10 @@
 {% set sw = d.swing %}
 {% macro why_block(m) -%}
-{% if m.why or m.lines %}
+{% if m.why or m.lines or m.farm %}
 <div class="sw-why">
   {% if m.why %}<div class="chips">{% for w in m.why %}<span class="{{ 'up' if w.value > 0 else 'down' }}">{{ w.label }} <b>{{ '%+.1f'|format(w.value) }}</b></span>{% endfor %}</div>{% endif %}
   {% for line in m.lines %}<p>{{ line }}</p>{% endfor %}
+  {% if m.farm %}<div class="sw-farm" data-tip="Farm given up&#10;CS the player didn't take against their own farming pace this game, while away for the play (or dead), turned into gold and XP with what a CS is worth for their role; valued by the model at the end of the window">{% for f in m.farm %}<p class="{{ 'you' if f.you }}"><span class="tag">Farm</span> {{ f.text }}</p>{% endfor %}</div>{% endif %}
 </div>
 {% endif %}
 {%- endmacro %}
@@ -42,6 +43,7 @@
     <div class="sw-parts">{% for x in me.parts %}<div class="sw-part" data-tip="{{ x.name }}&#10;{{ x.tip }}"><span>{{ x.name }}</span><b class="{{ 'up' if x.value > 0 else 'down' if x.value < 0 }}">{{ '%+.1f'|format(x.value) }}</b></div>{% endfor %}</div>
   </div>
   {% if me.deaths %}<p class="sw-note">You died <b>{{ me.deaths.count }}</b> time{{ 's' if me.deaths.count != 1 }}: the deaths themselves moved your team's chance by <b>{{ me.deaths.swing }}</b> points{% if me.deaths.while_dead %}, and the enemy took <b>{{ me.deaths.while_dead }}</b> more while you were down ({{ me.deaths.costly }} of those deaths){% endif %}. Open a death below to see why it cost what it did.</p>{% endif %}
+  {% if me.farm %}<p class="sw-note">To make your plays you gave up about <b>{{ '%.0f'|format(me.farm.cs) }} CS</b> of farm ({{ '{:,}'.format(me.farm.gold) }} gold, {{ '{:,}'.format(me.farm.xp) }} XP) over {{ me.farm.plays }} play{{ 's' if me.farm.plays != 1 }}, worth <b>{{ '%.1f'|format(me.farm.worth if me.farm.worth is defined else me.farm.cost) }}</b> points of win chance. {% if me.farm.cost >= 0.1 %}That's <b class="down">{{ '%.1f'|format(me.farm.cost) }}</b> more than typical plays like them, charged to those plays.{% elif me.farm.cost <= -0.1 %}That's <b class="up">{{ '%.1f'|format(-me.farm.cost) }}</b> less than typical plays like them, credited to those plays.{% else %}About what typical plays like them cost.{% endif %} Open a play below to see its farm.</p>{% endif %}
   <div class="sw-plays">
     <div>
       <h5>Your biggest plays</h5>

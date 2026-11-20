@@ -120,7 +120,7 @@ def load_dataset(conn, catalog: Catalog, limit: int | None = None, log=print) ->
         cur.execute(sql)
         for g, (_, frames, events, rows) in enumerate(cur):
             champions, purchases = players(rows)
-            replay = Replay(frames, events, champions, purchases, catalog)
+            replay = Replay(frames, events, champions, purchases, catalog, positions(rows))
             if replay.winner not in (100, 200) or len(frames) < 6:
                 continue
             for m in range(1, len(frames)):               # every whole minute, both sides
@@ -579,7 +579,12 @@ def save(model: WinModel, metrics: dict, models_dir: Path | str) -> Path:
 
     out = Path(models_dir) / DIRNAME
     out.mkdir(parents=True, exist_ok=True)
+    farm_table = getattr(model, "farm", None)
+    if hasattr(model, "farm"):
+        del model.farm                       # read from farm.json on load, not pickled
     joblib.dump(model, out / MODEL_FILE)
+    if farm_table is not None:
+        model.farm = farm_table
     (out / METRICS_FILE).write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     _loaded.pop(str(out / MODEL_FILE), None)
     return out
@@ -597,8 +602,16 @@ def load(models_dir: Path | str) -> WinModel | None:
             return None
         import joblib
 
+        from riftwatch.winprob import farm
+
         model = joblib.load(path)
         model.stamp = f"{path.stat().st_mtime_ns // 1_000_000_000:x}"   # changes on every retrain
+        # What a CS is worth and the typical farming pace (farm.py), measured from stored
+        # games; rebuilding it changes Swing, so it's part of the stamp.
+        model.farm = farm.load_table(path.parent)
+        farm_file = path.parent / farm.FILE
+        if farm_file.exists():
+            model.stamp += f"f{farm_file.stat().st_mtime_ns // 1_000_000_000:x}"
         _loaded[key] = model
     return _loaded[key]
 

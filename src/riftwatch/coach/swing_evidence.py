@@ -138,6 +138,19 @@ def _moment_text(m: dict, share: float, team: int, pid: int, moments: list[dict]
         text += f" That was {lev:.1f} times the swing of a typical moment like it in {stage}."
     if m.get("death"):
         text += _death_detail(m, moments, names, pid in m.get("lost", []))
+    mine = next((f for f in m.get("farm") or [] if f["pid"] == pid), None)
+    if mine and (mine["cs"] >= 1 or abs(mine["cost"]) >= 0.05):
+        text += (f" {'Dying' if pid in m.get('lost', []) else 'Making this play'} cost you about {mine['cs']:.0f} CS of farm "
+                 f"({mine['gold']:,} gold, {mine['xp']:,} XP) against your own farming pace, worth "
+                 f"{mine.get('worth', mine['cost']):.1f} points of win chance")
+        if "typical_cs" in mine:
+            text += (f"; a typical {'death' if pid in m.get('lost', []) else 'play'} like it costs {mine['typical_cs']:.0f} CS, "
+                     + (f"so {mine['cost']:.1f} more is taken out of your Swing for it."
+                        if mine["cost"] >= 0.05 else
+                        f"so you're credited {-mine['cost']:.1f} for costing less." if mine["cost"] <= -0.05
+                        else "about the same."))
+        else:
+            text += "."
     return text
 
 

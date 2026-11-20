@@ -660,22 +660,32 @@ The state (`winprob/state.py`) is rebuilt from the timeline at any second:
 - **composition** (14): each team's champions by class and the share of its damage that's
   magic (from what those champions deal in stored games)
 - **champions**: which ten champions are playing
+- **the richer game state** (33 more): towers lost by tier (outer, inner, base, nexus) and
+  turret plates; how many players on each side have reached levels 6, 11 and 16; gold held
+  but not spent; how many minutes the dead are still out; whether dragon, Elder and Baron are
+  up right now (spawn and respawn times measured from stored games: dragon at 5:00 and 5:00
+  after each kill, Baron at 20:00 and 6:00 after, Elder 6:00 after a soul); and each lane's
+  gold and XP gap against the player in the same position, so a fed carry isn't read as a
+  fed support with the same team totals
 
-Four versions are trained on the same games (`winprob/model.py`), each network stopped on
+Six versions are trained on the same games (`winprob/model.py`), each network stopped on
 held-out training *games* (scikit-learn's own early stopping holds out random rows from the
 same games, which hides the problem below), with its weight penalty chosen the same way:
 
 1. a neural network (scikit-learn MLP, 64 and 32 units) on the game state
-2. the same network with items and composition as inputs
-3. the same with one input per champion per side (an embedding in its first layer)
-4. **stacked**: the game-state network with a regularised logistic layer on top for items,
+2. **state plus**: five of those networks on the richer state, trained from different random
+   starts and averaged, which smooths the chance between nearby states
+3. the network with the richer state, items and composition as inputs
+4. the same with one input per champion per side (an embedding in its first layer)
+5. **stacked**: the game-state network with a regularised logistic layer on top for items,
    item-against-team matchups (armor against physical damage, magic resist against magic,
    penetration against resistances, anti-heal against lifesteal), classes and how they scale
    with the minute, and each champion's own strength and scaling
+6. **stacked plus**: the same logistic layer on top of state plus
 
 Inputs that stay the same all game let a network recognise each game by its line-up and
-memorise who won: versions 2 and 3 stop after a single epoch and do no better (or worse) on
-new games. A linear layer can't memorise games, so it keeps only what holds across them.
+memorise who won: versions 3 and 4 stop after a single epoch and do worse on new games than
+the stacked versions. A linear layer can't memorise games, so it keeps only what holds across them.
 Calibration is Platt scaling (a logistic curve on the log-odds), not isotonic: isotonic is a
 staircase, and a small change in the state (a finished item) that lands on a flat step moves
 the chance by exactly nothing, which Swing can't afford. The version kept is the best on every
@@ -687,43 +697,41 @@ network on all 5,156 held-out games, with a 95% interval from resampling games):
 
 | Version | Log loss | Brier | AUC | Calibration error | vs the game-state network |
 |---|---|---|---|---|---|
-| Game-state network | 0.5169 | 0.1752 | 0.814 | 0.0065 | |
-| + items and composition in the network | 0.5130 | 0.1735 | 0.818 | 0.0053 | +0.0026 (-0.0006 to +0.0053) |
-| + champions in the network | 0.5311 | 0.1809 | 0.802 | 0.0163 | -0.0199 (-0.0269 to -0.0133) |
-| **Stacked (used)** | **0.5033** | **0.1699** | **0.826** | **0.0040** | **+0.0119 (+0.0081 to +0.0154)** |
+| Game-state network | 0.5170 | 0.1753 | 0.814 | 0.0071 | |
+| State plus | 0.5102 | 0.1729 | 0.819 | 0.0056 | +0.0060 (+0.0041 to +0.0078) |
+| Richer state, items and composition in the network | 0.5086 | 0.1722 | 0.821 | 0.0074 | +0.0072 (+0.0039 to +0.0100) |
+| + champions in the network | 0.5116 | 0.1732 | 0.819 | 0.0084 | +0.0015 (-0.0045 to +0.0072) |
+| Stacked | 0.5035 | 0.1700 | 0.826 | 0.0042 | +0.0118 (+0.0081 to +0.0153) |
+| **Stacked plus (used)** | **0.4977** | **0.1680** | **0.830** | **0.0029** | **+0.0169 (+0.0129 to +0.0208)** |
 | Gold lead and minute only | 0.5335 | 0.1812 | 0.801 | 0.0063 | |
+
+Stacked plus beats stacked by +0.0051 (+0.0033 to +0.0069) on the same held-out games, so
+the richer state is clearly outside noise, and it's the best calibrated of all. It's better
+at every stage of a game:
 
 | Minutes | 0-10 | 10-15 | 15-20 | 20-25 | 25-30 | 30+ |
 |---|---|---|---|---|---|---|
-| AUC, stacked | 0.682 | 0.804 | 0.858 | 0.897 | 0.920 | 0.910 |
+| AUC, stacked plus | 0.684 | 0.808 | 0.861 | 0.901 | 0.923 | 0.921 |
+| AUC, stacked (before) | 0.682 | 0.804 | 0.858 | 0.897 | 0.920 | 0.910 |
 | AUC, gold only | 0.663 | 0.781 | 0.835 | 0.872 | 0.898 | 0.881 |
 
 The champion terms are penalised harder than the rest (their columns scaled down before the
 layer's L2 penalty, the scale and penalty chosen together on validation games; 0.3 here): at
 full weight they overfit the draft. The stacked version's edge over the game-state network
 grew with the data (+0.0098 on 9,156 games, +0.0070 on 13,425, +0.0119 on 17,182, the last
-clearly outside noise), and it reads the draft a little (AUC 0.549 in the first two minutes,
-against 0.529), which is what the draft share of Swing rests on. Numbers aren't comparable
-between runs: the test games differ, and each crawl changed the mix of ranks.
+clearly outside noise), and it reads the draft a little (AUC 0.549 in the first two minutes
+for stacked plus, against 0.529 for the game-state network), which is what the draft share of
+Swing rests on. Numbers aren't comparable between runs: the test games differ, and each crawl
+changed the mix of ranks.
 
-What the logistic layer learned reads like the game: armor is worth more the more of the
+What the logistic layer learned (in the stacked version; current weights on `/swing`) reads
+like the game: armor is worth more the more of the
 enemy's damage is physical (+0.21 log-odds against an all-physical team), anti-heal is worth
 nothing on its own (-0.08) but pays against lifesteal (+0.04 per enemy lifesteal item), crit
 items are the best damage items (+0.06), marksmen start behind (-0.13) and scale hardest
 (+0.12 for every 30 minutes), supports and mages grow (+0.08, +0.02) while assassins, tanks
 and fighters fall off (-0.13, -0.05, -0.05). These are associations on top of the game state
 (defensive items are often bought by the team that's behind), listed on `/swing`.
-
-**A richer game state (being measured).** Two more versions read 19 more inputs, all from
-the timeline: towers lost by tier (outer, inner, base, nexus), turret plates, how many players
-on each side have hit levels 6, 11 and 16, gold held but not spent, how many minutes the dead
-are still out, and whether dragon, Elder and Baron are up right now. Spawn and respawn times
-are measured from stored games: dragon at 5:00 and 5:00 after each kill, Baron at 20:00 and
-6:00 after, Elder 6:00 after a soul. **State plus** is five of the game-state networks trained
-from different random starts and averaged, which smooths the chance between nearby states;
-**stacked plus** puts the same logistic layer on top. Each is compared with the stacked
-version on the same held-out games, with the same resampled interval, and is only used if it
-does better.
 
 ### The decomposition and sharing it out
 
@@ -785,7 +793,7 @@ On 171,940 player-games (1,033 players with 20+ games):
 
 | Stat | Reliability (split-half, Spearman-Brown) | Predicts later win rate (r) |
 |---|---|---|
-| **Swing** | 0.51 | +0.089 |
+| **Swing** | 0.52 | +0.090 |
 | RiftWatch score (KDA, kill share, damage, gold, farm, vision) | 0.53 | +0.120 |
 | KDA | 0.50 | +0.028 |
 | Kill participation | 0.59 | +0.045 |
@@ -793,17 +801,21 @@ On 171,940 player-games (1,033 players with 20+ games):
 | Gold per minute | 0.75 | +0.076 |
 | Win rate | 0.06 | +0.005 |
 
+(Swing on the stacked-plus model with farm charged; the stacked model gave 0.51 and +0.089.)
+
 - **Prediction against its ceiling.** A later half's win rate is mostly luck: no stat could
   correlate with it beyond 0.30 (the square root of its reliability). With past win rate
-  known, past Swing still adds a partial correlation of +0.103 (95% CI 0.042 to 0.163).
+  known, past Swing still adds a partial correlation of +0.10 (95% CI 0.04 to 0.16).
 - **The sharing rules.** Every stored game was shared again under rule sets fixed in advance:
-  the old fixed shares (reliability 0.48, prediction 0.085), damage-shared kills only (0.47,
-  0.082), lane-relative economy only (0.51, 0.092) and both (0.51, 0.089, used). Measuring
-  economy against the lane opponent is what made Swing more repeatable; damage-shared kills
-  are the principled split but change little. Moving each remaining choice far either side
-  (a quarter or three quarters instead of half) moves a player-game's Swing by 0.3 to 1.3
-  points on average (correlation 0.996 to 0.9996 with the rules used).
-- **The model.** The same games scored with the first network instead: correlation 0.950.
+  the old fixed shares (reliability 0.51, prediction 0.087), damage-shared kills only (0.50,
+  0.085), lane-relative economy only (0.53, 0.093) and both (0.52, 0.090, used). The
+  differences are well inside each other's intervals: the rules matter little. Moving each
+  remaining choice far either side (a quarter or three quarters instead of half) moves a
+  player-game's Swing by 0.3 to 1.4 points on average (correlation 0.997 to 0.9997 with the
+  rules used). The farm charge moves points between a player's own parts, so it leaves every
+  total, and these checks, as they were.
+- **The model.** The same games scored with the first network instead: correlation 0.918
+  (0.950 for the stacked model, which was closer to it).
 
 Swing repeats as well as KDA and the site's own score, and predicts as well as damage and
 gold, though not as well as the composite score: like win probability added in baseball, it
@@ -815,8 +827,8 @@ average in one game, x = theta + noise, Var(theta) = tau^2, Var(noise) = sigma^2
 estimate from n games is the average times n tau^2 / (n tau^2 + sigma^2), with a margin of
 sqrt(tau^2 sigma^2 / (n tau^2 + sigma^2)). tau^2 is the covariance of players' averages over two
 halves of their games (the noise in each is independent), sigma^2 the average spread of a
-player's own games: tau = 3.19, sigma = 16.61, so a rating is pulled towards average as if 27
-average games were added. A test checks the estimators on simulated players with known levels.
+player's own games: tau = 3.83, sigma = 19.4, so a rating is pulled towards average as if 26
+average games were added (3.19, 16.61 and 27 on the stacked model). A test checks the estimators on simulated players with known levels.
 It's on the profile ("Swing rating +x +- y"), and `/swing` has a **Swing ladder** of the players
 RiftWatch has seen with 10+ games, by rating in their main role.
 
@@ -861,6 +873,56 @@ respawned, caught by three or more, holding 1,500+ gold, deep in enemy territory
 timers) and measures what each costs per game, beside the same figure for every stored player
 in their role. The profile's **Where your Swing comes from** panel shows each part of Swing
 against the role average and the habits that cost the player most beyond what's typical.
+
+### Farm given up for plays
+
+A laner who roams or a jungler who ganks stops farming. `winprob/farm.py` measures how much,
+for laners and junglers (not supports), from the timeline's minute frames:
+
+- **Farming minutes:** alive throughout, in their own area at both minute frames, and in no
+  kill, death, objective or structure. Until 14:00 (when plates fall) the area is their lane,
+  or the jungle and river for a jungler; after that it's anywhere but a base. Backs count as
+  neither farming nor away.
+- **Pace:** their CS over their farming minutes against the role's typical CS for those
+  minutes of a game (from stored games), pulled towards typical by three minutes' worth.
+- **Window:** the run of minutes away around their plays (up to two either side), plus up to
+  two farming minutes after it to count farm they caught up on.
+- **CS given up:** pace × typical minus what they took, never below zero. It's turned into
+  gold and XP with measured values per CS (by role and stage), then valued by the model at the
+  end of the window.
+
+The model already expects what a typical play costs: a kill or a death moves the chance by
+what such plays usually lead to. So Swing charges each play only the farm it cost **beyond a
+typical window like it** (same role, same stage, with or without a death), and credits plays
+that cost less, such as a roam after shoving the wave. The charge comes out of the player's
+economy part, where the extra lost farm would otherwise show minutes later. Totals don't
+change: every team still sums to exactly ±50.
+
+The typical is weighted by what a CS was worth at the end of each window, by the model
+(`farm.json`, from 2,942 games). The charge is about worth-per-CS × (CS − typical), so this
+weighting makes it average zero over stored games, as an expected cost should. A plain mean
+didn't: windows late in decided games, with long death timers and little a CS can change,
+pulled the typical up and credited the average death 0.3 points. Weighted, the typical window
+gives up 2 to 5 CS alive and 7 to 17 dead, depending on role and stage, and the average charge
+per play by kind is close to zero, except where it shouldn't be:
+
+| Average charge per play (points) | Roams and ganks | Other fights | Objectives | Towers | Deaths |
+|---|---|---|---|---|---|
+| Top | +0.14 | +0.02 | +0.06 | 0.00 | -0.07 |
+| Jungle | +0.02 | +0.04 | -0.01 | +0.02 | -0.11 |
+| Mid | +0.16 | +0.01 | +0.08 | +0.01 | -0.10 |
+| Bot | +0.09 | +0.01 | +0.04 | +0.01 | -0.07 |
+
+A laner's roam costs more farm than a typical play (+0.09 to +0.16 a roam): a jungler's gank
+doesn't, since camps wait. Each moment on the match page says what it cost whom ("this play cost about 12 CS of farm (260 gold, 790 XP; 9:00-12:00), worth 1.1
+points of win chance; a typical play like it costs 3 CS…"). The profile's **Were your plays
+worth the farm?** table (`winprob/trades.py`) adds this up by kind of play: roams and ganks,
+other fights, objectives, towers and deaths. It shows what each kind gained, the extra farm it
+cost and the net, against the same for players in the role.
+
+Fixed along the way: a Rift Herald that expires is recorded by Riot as killed by team 300
+(neutral). Swing gave it to neither team, so about 1 game in 12 summed to ±48 instead of ±50,
+and the game state counted it as an enemy herald for both sides. Both are fixed.
 
 ### Storage
 
@@ -1208,11 +1270,13 @@ On 11,236 games with at least one known player (4.2 a game on average):
 | Prediction | Log loss | AUC |
 |---|---|---|
 | Coin flip | 0.6931 | 0.500 |
-| Players' ratings | 0.6917 | 0.531 |
-| Players and draft | 0.6885 | 0.558 |
+| Players' ratings | 0.6925 | 0.530 |
+| Players and draft | 0.6894 | 0.557 |
 
-When it leans 5 points or more (1,702 games), it says 57.3% on average and is right 55.3% of
-the time, so it's slightly overconfident. The page shows the backtest and says that most of
+When it leans 5 points or more (2,569 games), it says 57.8% on average and is right 54.3% of
+the time, so it's overconfident. The ratings on the new model spread wider (tau 3.83 against
+3.19), and the fixed 0.04 log-odds per point turns that into bolder calls than the games bear
+out (on the stacked model: 0.6885 and 0.558, 57.3% said, 55.3% right). The page shows the backtest and says that most of
 a solo-queue game is still decided in the game. Matchmaking is built to make games close to a
 coin flip before they start, so a small edge is about what you'd expect.
 
