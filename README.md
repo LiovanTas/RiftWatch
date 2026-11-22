@@ -1387,6 +1387,18 @@ Database tests need a disposable Postgres (they wipe it) and are skipped unless
 `RIFTWATCH_TEST_DATABASE_URL` is set; CI always runs them. Watchdog tests that use real
 windows run on Windows only.
 
+To look at pages without opening a browser, `tools/screenshots.py` shoots them in headless
+Chromium at desktop and phone width and reports console errors, failed requests and anything
+that makes a page scroll sideways:
+
+```bash
+pip install -e ".[shots]"
+python -m playwright install chromium
+python tools/screenshots.py / /champions /players/na/Name-TAG --theme both
+```
+
+Without `--url` it starts the site from the checkout on a free port; the PNGs land in `out/shots/`.
+
 Commits are checked by `.githooks/pre-commit`, which refuses a commit whose author or
 committer doesn't match the repo's `user.email`. Enable it once per clone with
 `git config core.hooksPath .githooks`.
