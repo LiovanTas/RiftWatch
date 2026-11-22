@@ -102,3 +102,20 @@ def test_live_and_lobby_predictions_from_the_database(tmp_path):
         assert pregame.lobby(conn, gd, [("Nobody", "NA1")], CompModel(), tmp_path / "models") is None
         result = pregame.backtest(conn, CompModel(), {"rating": {"tau": 3.0, "sigma": 15.0}, "role_means": {}})
         assert result["enough"] is False
+
+
+def test_the_calibration_fit_recovers_known_weights_and_shrinks_the_predictions():
+    rng = np.random.default_rng(5)
+    x = [[1.0, d, k] for d, k in zip(rng.normal(0, 1, 6000), rng.normal(0, 0.3, 6000), strict=True)]
+    y = [float(rng.random() < 1 / (1 + math.exp(-(0.1 + 0.5 * r[1] + 0.8 * r[2])))) for r in x]
+    blue, players, draft = pregame._fit_logistic(x, y)
+    assert blue == pytest.approx(0.1, abs=0.08) and players == pytest.approx(0.5, abs=0.08)
+    assert draft == pytest.approx(0.8, abs=0.25)
+    # Ratings worth half what the raw slope says: the same gap moves the chance half as far.
+    raw = pregame.predict([player(100, 5.0), player(200, 0.0)], None, None)
+    fitted = pregame.predict([player(100, 5.0), player(200, 0.0)], None, None, {"players": 0.5})
+    assert 50 < fitted["blue"] < raw["blue"] and fitted["blue"] - 50 == pytest.approx((raw["blue"] - 50) / 2, abs=0.2)
+    # Blue side's edge only counts when sides are known (not for a lobby against an average team).
+    sided = pregame.predict([player(100, 0.0), player(200, 0.0)], None, None, {"blue": 0.08})
+    unsided = pregame.predict([player(100, 0.0)], None, None, {"blue": 0.08}, sided=False)
+    assert sided["blue"] == pytest.approx(52.0, abs=0.1) and unsided["blue"] == 50.0

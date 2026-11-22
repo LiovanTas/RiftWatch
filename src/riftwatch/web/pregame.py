@@ -27,6 +27,7 @@ from their games *before* it, and scored against the 50% you'd guess without the
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from collections import defaultdict
@@ -67,6 +68,7 @@ def draft_chance(model, blue: list[int], red: list[int]) -> float | None:
         s: dict[str, Any] = dict.fromkeys(features, 0.0)        # anything the model reads, at zero
         mine, theirs = catalog.comp(own), catalog.comp(enemy)
         values = {"alive_own": 5.0, "alive_enemy": 5.0,          # nobody's dead at the start
+                  "dragon_in": 5.0, "elder_in": 6.0, "baron_in": 6.0,   # nothing's up yet
                   "magic_share_own": mine["magic_share"], "magic_share_enemy": theirs["magic_share"]}
         for cls in CLASSES:
             values[f"{cls.lower()}s_own"], values[f"{cls.lower()}s_enemy"] = mine[cls], theirs[cls]
@@ -114,10 +116,13 @@ def comfort_term(comp: dict | None, games: int | None) -> tuple[float, str]:
 
 # -- putting it together -----------------------------------------------------------------------
 
-def predict(players: list[dict], draft: float | None, comp: dict | None) -> dict[str, Any]:
+def predict(players: list[dict], draft: float | None, comp: dict | None, fit: dict | None = None,
+            sided: bool = True) -> dict[str, Any]:
     """``players``: dicts with team (100/200), name, champion, icon, rating {value, sd, known,
-    games}, champion_games. Returns blue's chance, each part and the most and least helpful
-    players."""
+    games}, champion_games. ``fit``: the backtest's calibration (how much the ratings and the
+    draft are really worth, and blue side's edge when ``sided``). Returns blue's chance, each
+    part and the most and least helpful players."""
+    fit = {"blue": 0.0, "players": 1.0, "draft": 1.0, **(fit or {})}
     teams = {100: [p for p in players if p["team"] == 100], 200: [p for p in players if p["team"] == 200]}
     rating_diff = (sum(p["rating"]["value"] for p in teams[100]) - sum(p["rating"]["value"] for p in teams[200]))
     sd = math.sqrt(sum(p["rating"]["sd"] ** 2 for p in players)) if players else 0.0
@@ -126,10 +131,11 @@ def predict(players: list[dict], draft: float | None, comp: dict | None) -> dict
         c, label = comfort_term(comp, p.get("champion_games"))
         p["comfort"], p["comfort_label"] = round(100 * c / 4, 1), label     # points near 50%
         comfort += c if p["team"] == 100 else -c
-    draft_logit = logit(draft) if draft is not None else 0.0
-    total = draft_logit + PER_POINT * rating_diff + comfort
+    draft_logit = (fit["blue"] if sided else 0.0) + (fit["draft"] * logit(draft) if draft is not None else 0.0)
+    per_point = fit["players"] * PER_POINT
+    total = draft_logit + per_point * rating_diff + comfort
     blue = sigmoid(total)
-    low, high = sigmoid(total - PER_POINT * sd), sigmoid(total + PER_POINT * sd)
+    low, high = sigmoid(total - per_point * sd), sigmoid(total + per_point * sd)
     ranked = sorted((p for p in players if p["rating"]["known"]), key=lambda p: -p["rating"]["value"])
     known = sum(1 for p in players if p["rating"]["known"])
     return {
@@ -137,7 +143,7 @@ def predict(players: list[dict], draft: float | None, comp: dict | None) -> dict
         "low": round(100 * low, 1), "high": round(100 * high, 1),
         "draft": round(100 * draft, 1) if draft is not None else None,
         "parts": {"draft": round(100 * (sigmoid(draft_logit) - 0.5), 1),
-                  "players": round(100 * (sigmoid(PER_POINT * rating_diff) - 0.5), 1),
+                  "players": round(100 * (sigmoid(per_point * rating_diff) - 0.5), 1),
                   "comfort": round(100 * (sigmoid(comfort) - 0.5), 1)},
         "rating_diff": round(rating_diff, 1), "sd": round(sd, 1), "known": known, "of": len(players),
         "best": ranked[:2], "worst": [p for p in ranked[::-1][:2] if p not in ranked[:2]],
@@ -178,7 +184,7 @@ def live(conn: psycopg.Connection, gd: GameData, report: dict, model, models_dir
                         "champion_games": p.get("champion_games") or 0,
                         "rating": player_term(conn, model, validation, p.get("puuid"))})
     draft = draft_chance(model, lineups[100], lineups[200]) if lineups[100] and lineups[200] else None
-    out = predict(players, draft, comp)
+    out = predict(players, draft, comp, (load_backtest(models_dir) or {}).get("fit") if models_dir else None)
     mine = next((p["team"] for p in players if p["me"]), None)
     out.update(kind="live", draft_auc=auc, my_team=mine, tau=(validation or {}).get("rating", {}).get("tau"))
     return out
@@ -197,7 +203,7 @@ def lobby(conn: psycopg.Connection, gd: GameData, ids: list[tuple[str, str]], mo
                         "champion_games": None, "rating": player_term(conn, model, validation, puuid)})
     if not any(p["rating"]["known"] for p in players):
         return None
-    out = predict(players, None, None)
+    out = predict(players, None, None, (load_backtest(models_dir) or {}).get("fit") if models_dir else None, sided=False)
     out.update(kind="lobby", tau=(validation or {}).get("rating", {}).get("tau"))
     return out
 
@@ -255,14 +261,47 @@ def backtest(conn: psycopg.Connection, model, validation: dict, min_prior: int =
     players = [min(max(sigmoid(PER_POINT * (g[100] - g[200])), 1e-4), 1 - 1e-4) for _, g in scored]
     with_draft = [min(max(sigmoid(PER_POINT * (g[100] - g[200]) + logit((draft_start.get(m) or 50) / 100)), 1e-4), 1 - 1e-4)
                   for m, g in scored]
-    strong = [(p, y) for p, y in zip(players, ys, strict=True) if abs(p - 0.5) >= 0.05]
+
+    def confident(preds: list[float]) -> dict[str, float]:
+        strong = [(p, y) for p, y in zip(preds, ys, strict=True) if abs(p - 0.5) >= 0.05]
+        return {"games": len(strong),
+                "predicted": round(100 * sum(p if p > 0.5 else 1 - p for p, _ in strong) / max(1, len(strong)), 1),
+                "right": round(100 * sum((p > 0.5) == (y == 1.0) for p, y in strong) / max(1, len(strong)), 1)}
+
+    # Calibrated: how much the ratings and the draft are really worth, and blue side's edge,
+    # fitted by logistic regression and scored on the half of the games it wasn't fitted on.
+    x = [[1.0, PER_POINT * (g[100] - g[200]), logit((draft_start.get(m) or 50) / 100)] for m, g in scored]
+    halves = [int(hashlib.md5(m.encode()).hexdigest(), 16) % 2 for m, _ in scored]
+    held_out = [0.5] * len(scored)
+    for h in (0, 1):
+        w = _fit_logistic([r for r, k in zip(x, halves, strict=True) if k != h],
+                          [y for y, k in zip(ys, halves, strict=True) if k != h])
+        for i, k in enumerate(halves):
+            if k == h:
+                held_out[i] = min(max(sigmoid(sum(a * b for a, b in zip(w, x[i], strict=True))), 1e-4), 1 - 1e-4)
+    w = _fit_logistic(x, ys)
     return {"games": len(scored), "enough": True, "min_prior": min_prior,
             "known_per_game": round(sum(g["known"] for _, g in scored) / len(scored), 2),
             "coin_flip": round(math.log(2), 4), "players": evaluate(players, ys),
-            "players_and_draft": evaluate(with_draft, ys),
-            "confident": {"games": len(strong),
-                          "predicted": round(100 * sum(p if p > 0.5 else 1 - p for p, _ in strong) / max(1, len(strong)), 1),
-                          "right": round(100 * sum((p > 0.5) == (y == 1.0) for p, y in strong) / max(1, len(strong)), 1)}}
+            "players_and_draft": evaluate(with_draft, ys), "confident": confident(players),
+            "calibrated": {**evaluate(held_out, ys), "confident": confident(held_out)},
+            "fit": {"blue": round(w[0], 4), "players": round(w[1], 4), "draft": round(w[2], 4)}}
+
+
+def _fit_logistic(x: list[list[float]], y: list[float], steps: int = 25) -> list[float]:
+    """Logistic regression by Newton's method (a tiny ridge keeps it stable)."""
+    import numpy as np
+
+    X, Y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+    w = np.zeros(X.shape[1])
+    for _ in range(steps):
+        p = 1 / (1 + np.exp(-(X @ w)))
+        hess = X.T @ (X * (p * (1 - p))[:, None]) + 1e-6 * np.eye(X.shape[1])
+        step = np.linalg.solve(hess, X.T @ (Y - p))
+        w += step
+        if np.abs(step).max() < 1e-8:
+            break
+    return [float(v) for v in w]
 
 
 def _auc(preds: list[float], ys: list[float]) -> float:

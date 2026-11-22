@@ -92,6 +92,7 @@ GROUP = {"alive_own": "alive", "alive_enemy": "alive", "gold_diff": "gold", "kil
          # of the tower, and taking an objective also takes it off the map until it respawns
          "dead_time_own": "alive", "dead_time_enemy": "alive", "plates_own": "plates", "plates_enemy": "plates",
          "dragon_up": "dragons", "elder_up": "elder", "baron_up": "baron",
+         "dragon_in": "dragons", "elder_in": "elder", "baron_in": "baron",
          **{f"towers_{tier}_{side}": "towers" for tier in ("outer", "inner", "base", "nexus")
             for side in ("own", "enemy")},
          # a lane's gap only moves at an event by the killer's bounty
@@ -238,9 +239,10 @@ def evaluate(model, frames: list[dict], events: list[dict], names: dict[int, str
             if 1 <= (e.get("killerId") or 0) <= 10 and team_of(e["killerId"]) != team_of(e.get("victimId", 1)):
                 by_player = {e["killerId"]: amount}
         upto = i + 1
-        while (upto < len(replay.events) and replay.events[upto].get("type") == "DRAGON_SOUL_GIVEN"
+        while (upto < len(replay.events)
+               and replay.events[upto].get("type") in ("DRAGON_SOUL_GIVEN", "WARD_PLACED", "WARD_KILL")
                and abs(replay.events[upto].get("timestamp", 0) - t) <= 2000):
-            upto += 1                                       # the soul comes with the dragon
+            upto += 1                                       # the soul comes with the dragon (wards between change nothing)
         before, after = replay.pair(t, i), replay.pair(t, upto, bonus, player_bonus=by_player)
         groups = _changed(before, after)
         subsets = subsets_of(before, after, groups)

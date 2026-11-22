@@ -59,7 +59,8 @@ GAME_SQL = """
            jsonb_path_query_array(t.raw, '$.info.frames[*].participantFrames'),
            jsonb_path_query_array(t.raw, '$.info.frames[*].events[*] ? (@.type == "CHAMPION_KILL"
                || @.type == "ELITE_MONSTER_KILL" || @.type == "BUILDING_KILL"
-               || @.type == "DRAGON_SOUL_GIVEN" || @.type == "TURRET_PLATE_DESTROYED" || @.type == "GAME_END")'),
+               || @.type == "DRAGON_SOUL_GIVEN" || @.type == "TURRET_PLATE_DESTROYED" || @.type == "WARD_PLACED"
+               || @.type == "WARD_KILL" || @.type == "GAME_END")'),
            (SELECT jsonb_agg(jsonb_build_array(b.participant_id, b.champion_id, b.purchases, b.purchase_s, b.position))
               FROM participant_builds b WHERE b.match_id = t.match_id)
       FROM match_timelines t"""

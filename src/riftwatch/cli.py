@@ -207,7 +207,7 @@ def cmd_winprob_train(settings: Settings, args: argparse.Namespace) -> int:
     from riftwatch.web.gamedata import shared
     from riftwatch.winprob import model as wp
 
-    cache = Path(settings.models_dir).parent / "winprob_dataset_v3.npz"     # v3: lane gaps
+    cache = Path(settings.models_dir).parent / "winprob_dataset_v4.npz"     # v4: vision and objective timers
     catalog_file = cache.with_suffix(".catalog.joblib")
     if args.reuse and cache.exists() and catalog_file.exists() and not args.limit:
         print(f"reusing the games read last time ({cache})")

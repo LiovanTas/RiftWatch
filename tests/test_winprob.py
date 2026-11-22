@@ -381,3 +381,27 @@ def test_points_never_come_out_as_negative_zero():
 
     assert str(swing._pts(-0.0004)) == "0.0" and math.copysign(1, swing._pts(-0.0004)) == 1
     assert swing._pts(0.01234) == 1.2 and swing._pts(-0.01234) == -1.2
+
+
+def test_vision_and_objective_timers_are_read_from_each_side():
+    frames, events = game()
+    events = [e for e in events if e["type"] not in ("WARD_PLACED", "WARD_KILL")]    # only the wards below
+    wards = [{"type": "WARD_PLACED", "timestamp": 60_000 * m, "creatorId": 1, "wardType": "YELLOW_TRINKET"}
+             for m in (5, 6, 7)]
+    wards += [{"type": "WARD_PLACED", "timestamp": 400_000, "creatorId": 7, "wardType": "CONTROL_WARD"},
+              {"type": "WARD_KILL", "timestamp": 410_000, "killerId": 7, "wardType": "YELLOW_TRINKET"},
+              {"type": "WARD_PLACED", "timestamp": 420_000, "creatorId": 8, "wardType": "UNDEFINED"}]
+    r = Replay(frames, [*events, *wards])
+    blue, red = r.pair(7.5 * 60_000)
+    assert blue["wards_own"] == 3 and red["wards_enemy"] == 3       # placed in the last 3 minutes
+    assert red["control_wards_own"] == 1 and blue["control_wards_enemy"] == 1
+    assert red["wards_cleared_own"] == 1 and red["wards_own"] == 0  # an undefined ward isn't counted
+    assert r.pair(8.5 * 60_000)[0]["wards_own"] == 2                # the 5:00 ward is out of the window
+    # Dragon spawns at 5:00 and is taken at 9:20: 3 minutes away at 2:00, up at 6:00, 4:20 away at 10:00.
+    assert r.pair(2 * 60_000)[0]["dragon_in"] == pytest.approx(3.0)
+    assert r.pair(6 * 60_000)[0]["dragon_in"] == 0.0
+    assert r.pair(10 * 60_000)[0]["dragon_in"] == pytest.approx(4 + 20 / 60, abs=1e-6)
+    assert r.pair(10 * 60_000)[0]["baron_in"] == 6.0 and r.pair(10 * 60_000)[0]["elder_in"] == 6.0
+    # Swing ignores wards: the same moments, and the soul still comes with its dragon.
+    d = swing.game_swing(LeadModel(), frames, [*events, *wards], NAMES)
+    assert [m["text"] for m in d["moments"]] == [m["text"] for m in swing.game_swing(LeadModel(), frames, events, NAMES)["moments"]]

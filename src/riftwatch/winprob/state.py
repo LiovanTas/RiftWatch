@@ -50,11 +50,19 @@ TOWER_TIERS = (("OUTER_TURRET", "outer"), ("INNER_TURRET", "inner"), ("BASE_TURR
 # fed carry isn't a fed support, though the team totals are the same).
 LANES = (("TOP", "top"), ("JUNGLE", "jungle"), ("MIDDLE", "mid"), ("BOTTOM", "bot"), ("UTILITY", "support"))
 LANE_FEATURES = tuple(f"lane_{what}_{lane}" for _, lane in LANES for what in ("gold", "xp"))
+# Vision: wards each team placed and cleared in the last few minutes (control wards over a
+# longer window, as they last until killed), and how long until the next dragon, Elder and
+# Baron (a fight a minute before Baron spawns isn't one twenty minutes before).
+WARD_WINDOW_S, CONTROL_WINDOW_S = 180, 300
+VISION_FEATURES = ("wards_own", "wards_enemy", "control_wards_own", "control_wards_enemy",
+                   "wards_cleared_own", "wards_cleared_enemy")
+TIMER_FEATURES = ("dragon_in", "elder_in", "baron_in")
 EXTRA_FEATURES = (tuple(f"towers_{name}_{side}" for _, name in TOWER_TIERS for side in ("own", "enemy"))
                   + ("plates_own", "plates_enemy", "lvl6_own", "lvl6_enemy", "lvl11_own", "lvl11_enemy",
                      "lvl16_own", "lvl16_enemy", "held_gold_own", "held_gold_enemy",
                      "dead_time_own", "dead_time_enemy", "dragon_up", "elder_up", "baron_up")
-                  + LANE_FEATURES)
+                  + LANE_FEATURES + VISION_FEATURES + TIMER_FEATURES)
+WARD_TYPES = {"YELLOW_TRINKET": "wards", "SIGHT_WARD": "wards", "BLUE_TRINKET": "wards", "CONTROL_WARD": "control"}
 RICH_FEATURES = BASE_FEATURES + EXTRA_FEATURES
 DRAGON_SPAWN_S, DRAGON_RESPAWN_S, BARON_SPAWN_S, BARON_RESPAWN_S, ELDER_RESPAWN_S = 300, 300, 1200, 360, 360
 # What a finished item can give, as the model counts it per team.
@@ -70,7 +78,7 @@ COMP_FEATURES = (tuple(f"{c.lower()}s_{side}" for c in CLASSES for side in ("own
                  + ("magic_share_own", "magic_share_enemy"))
 FULL_FEATURES = RICH_FEATURES + ITEM_FEATURES + COMP_FEATURES
 KEPT_EVENTS = ("CHAMPION_KILL", "ELITE_MONSTER_KILL", "BUILDING_KILL", "DRAGON_SOUL_GIVEN",
-               "TURRET_PLATE_DESTROYED", "GAME_END")
+               "TURRET_PLATE_DESTROYED", "WARD_PLACED", "WARD_KILL", "GAME_END")
 BARON_BUFF_S, ELDER_BUFF_S, INHIB_RESPAWN_S = 180, 150, 300
 # Base respawn time by level (seconds), before the late-game increase.
 BASE_RESPAWN = (6, 6, 8, 8, 10, 12, 16, 21, 26, 32.5, 35, 37.5, 40, 42.5, 45, 47.5, 50, 52.5)
@@ -234,6 +242,17 @@ class Replay:
                 counts[("last", "soul")] = ts
             self._prefix.append(dict(counts))
 
+        # Wards placed (by kind) and cleared, by team, in time order.
+        self._wards: dict[tuple[str, int], list[float]] = {(k, team): [] for k in ("wards", "control", "cleared")
+                                                           for team in (100, 200)}
+        for e in self.events:
+            if e.get("type") == "WARD_PLACED" and 1 <= (e.get("creatorId") or 0) <= 10:
+                kind = WARD_TYPES.get(e.get("wardType"))
+                if kind:
+                    self._wards[(kind, team_of(e["creatorId"]))].append(e.get("timestamp", 0))
+            elif e.get("type") == "WARD_KILL" and 1 <= (e.get("killerId") or 0) <= 10:
+                self._wards[("cleared", team_of(e["killerId"]))].append(e.get("timestamp", 0))
+
         # Finished items, in the order they were bought: (ms, participant, item id).
         self.items: list[tuple[int, int, int]] = []
         if catalog is not None:
@@ -335,6 +354,25 @@ class Replay:
         elder_up = float(soul_taken and t - since >= ELDER_RESPAWN_S * 1000)
         baron_up = float(t >= BARON_SPAWN_S * 1000
                          and (last["baron"] is None or t - last["baron"] >= BARON_RESPAWN_S * 1000))
+        # Minutes until each is up again (0 when up), capped: beyond a few minutes it's all "later".
+        if soul_taken:
+            dragon_in = 5.0
+        elif dragon_up:
+            dragon_in = 0.0
+        else:
+            due = DRAGON_SPAWN_S * 1000 if last["dragon"] is None else last["dragon"] + DRAGON_RESPAWN_S * 1000
+            dragon_in = min(5.0, max(0.0, (due - t) / 60_000))
+        elder_in = (6.0 if not soul_taken else 0.0 if elder_up
+                    else min(6.0, max(0.0, (since + ELDER_RESPAWN_S * 1000 - t) / 60_000)))
+        if baron_up:
+            baron_in = 0.0
+        else:
+            due = BARON_SPAWN_S * 1000 if last["baron"] is None else last["baron"] + BARON_RESPAWN_S * 1000
+            baron_in = min(6.0, max(0.0, (due - t) / 60_000))
+
+        def recent(kind: str, team: int, window_s: int) -> float:
+            times = self._wards[(kind, team)]
+            return float(bisect_right(times, t) - bisect_right(times, t - window_s * 1000))
         lane_gap = {}                                           # blue's gap in each lane
         for lane, (b, r) in self.lanes.items():
             extra = (player_bonus or {}).get(b, 0.0) - (player_bonus or {}).get(r, 0.0)
@@ -384,6 +422,11 @@ class Replay:
             f["dead_time_own"] = dead_time[own]
             f["dead_time_enemy"] = dead_time[enemy]
             f["dragon_up"], f["elder_up"], f["baron_up"] = dragon_up, elder_up, baron_up
+            f["dragon_in"], f["elder_in"], f["baron_in"] = dragon_in, elder_in, baron_in
+            for side, team in (("own", own), ("enemy", enemy)):
+                f[f"wards_{side}"] = recent("wards", team, WARD_WINDOW_S)
+                f[f"control_wards_{side}"] = recent("control", team, CONTROL_WINDOW_S)
+                f[f"wards_cleared_{side}"] = recent("cleared", team, WARD_WINDOW_S)
             sign = 1.0 if own == 100 else -1.0
             for _, lane in LANES:
                 gold_gap, xp_gap = lane_gap.get(lane, (0.0, 0.0))
