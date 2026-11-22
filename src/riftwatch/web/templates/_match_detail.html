@@ -11,6 +11,15 @@
     <span class="d-links">{% if game_url and not on_game_page %}<a class="btn" href="{{ game_url }}" title="This game on its own page, to share">Game page &#8599;</a>{% endif %}{% if analysis_url %}<a class="btn" href="{{ analysis_url }}">RiftWatch analysis &rarr;</a>{% endif %}</span>
   </div>
   <div class="d-pane on" data-pane="overview">
+    {% if d.swing and d.swing.turning %}{% set tp = d.swing.turning %}
+    <div class="turning {{ tp.kind }}{% if tp.good is not none %} {{ 'good' if tp.good else 'bad' }}{% endif %}">
+      <span class="tp-k">{% if tp.kind == 'comeback' %}Comeback{% elif tp.kind == 'lead' %}Turning point{% else %}Biggest blow{% endif %}</span>
+      <span class="tp-t"><b class="clock">{{ tp.clock }}</b> {{ tp.text }}{% if tp.how %} <small class="how">{{ tp.how }}</small>{% endif %}</span>
+      <span class="tp-ch" data-tip="{{ tp.winner }}'s chance to win&#10;just before and just after this moment, from RiftWatch's win-probability model">{{ tp.winner }} {{ tp.before }}% <i>&rarr;</i> <b>{{ tp.after }}%</b></span>
+      <span class="tp-n">{% if tp.kind == 'comeback' %}{{ tp.winner }} came back from {{ tp.low }}% at {{ tp.low_clock }} and never trailed again.{% elif tp.kind == 'lead' %}{{ tp.winner }} took the lead here and kept it.{% elif tp.led_all_game %}{{ tp.winner }} was favoured from the draft on; this was the biggest single swing their way.{% else %}{{ tp.winner }} went ahead for good between fights (farm, plates, map pressure); this was the biggest single swing their way.{% endif %}</span>
+      <button type="button" class="btn" data-goto-pane="swing">Win chance &rarr;</button>
+    </div>
+    {% endif %}
     {% if d.damage_profile %}
     <div class="dmg-profile">
       {% for t in d.damage_profile %}
@@ -75,7 +84,52 @@
         {% else %}<p class="muted small">No clear weak spots in this game.</p>{% endfor %}
       </div>
     </div>
-    {% if d.insights.lane %}
+    {% set ln = d.insights.laning %}
+    {% if ln %}
+    <div class="laning">
+      <div class="ln-head">
+        <h4>Laning phase <span class="muted small">0:00&ndash;{{ ln.minutes }}:00{% if d.insights.opponent %} &middot; against {% if d.insights.opponent_icon %}<img class="inline-champ" src="{{ d.insights.opponent_icon }}" alt="" loading="lazy">{% endif %}{{ d.insights.opponent }}{% endif %}</span></h4>
+        {% if ln.verdict %}<span class="ln-verdict">{{ ln.verdict }}</span>{% endif %}
+      </div>
+      <div class="ln-checks">
+        {% for c in ln.checks %}
+        <div class="ln-check">
+          <span class="k">{{ c.minute }}:00</span>
+          <span class="v"><b>{{ c.cs }}</b> CS{% if c.cs_diff is defined %} <i class="{{ 'up' if c.cs_diff > 0 else 'down' if c.cs_diff < 0 }}">{{ '%+d'|format(c.cs_diff) }}</i>{% endif %}</span>
+          <span class="v"><b>{{ '{:,}'.format(c.gold) }}</b> gold{% if c.gold_diff is defined %} <i class="{{ 'up' if c.gold_diff > 0 else 'down' if c.gold_diff < 0 }}">{{ '%+d'|format(c.gold_diff) }}</i>{% endif %}</span>
+          <span class="v">level <b>{{ c.level }}</b>{% if c.xp_diff is defined %} <i class="{{ 'up' if c.xp_diff > 0 else 'down' if c.xp_diff < 0 }}">{{ '%+d'|format(c.xp_diff) }} XP</i>{% endif %}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% if ln.strip %}
+      <div class="ln-strip" role="img" aria-label="Each minute of the laning phase: farming, away or in base">{% for s in ln.strip %}<i class="{{ s.kind }}" data-tip="{{ s.m }}:00&ndash;{{ s.m + 1 }}:00&#10;{{ {'farm': 'farming', 'away': 'away: in a play, out of lane or dead', 'base': 'in base'}[s.kind] }} &middot; {{ s.cs }} CS"></i>{% endfor %}</div>
+      <div class="ln-key"><span><i class="farm"></i>farming {{ ln.farm_minutes }} min</span><span><i class="away"></i>away {{ ln.away_minutes }} min</span><span><i class="base"></i>in base {{ ln.base_minutes }} min</span>{% if ln.pace %}<span class="pace" data-tip="Farming pace&#10;CS in the minutes you were farming against a typical {{ ln.role }}'s in the same minutes of a game">pace while farming <b class="{{ 'up' if ln.pace >= 100 else 'down' }}">{{ ln.pace }}%</b> of a typical {{ ln.role }}</span>{% endif %}</div>
+      {% endif %}
+      <div class="ln-facts">
+        {% if ln.given %}<span data-tip="Farm given up for plays before 14:00&#10;CS you didn't take while away for {{ ln.given.plays }} play{{ 's' if ln.given.plays != 1 }} or dead, against your own pace; Swing charges each play what it cost beyond a typical play like it">Farm given up for plays: <b>{{ '%.0f'|format(ln.given.cs) }} CS</b> ({{ '{:,}'.format(ln.given.gold) }} gold, {{ '{:,}'.format(ln.given.xp) }} XP), worth {{ '%.1f'|format(ln.given.worth) }}{% if ln.given.charged|abs >= 0.1 %}, <span class="{{ 'down' if ln.given.charged > 0 else 'up' }}">{{ '%.1f'|format(ln.given.charged|abs) }} {{ 'more' if ln.given.charged > 0 else 'less' }} than typical</span>{% endif %}</span>{% endif %}
+        <span>Plates taken <b>{{ ln.plates_took }}</b>{% if ln.plates_lost is not none %} &middot; lost in your lane <b>{{ ln.plates_lost }}</b>{% endif %}</span>
+        <span>K/D/A before 14:00 <b>{{ ln.kills }}/{{ ln.deaths }}/{{ ln.assists }}</b></span>
+      </div>
+    </div>
+    {% set jg = d.insights.jungle %}
+    {% if jg %}
+    <div class="laning jungle-card">
+      <div class="ln-head"><h4>Jungle, first 14 minutes</h4><span class="ln-verdict">{{ jg.ganks }} kill{{ 's' if jg.ganks != 1 }} taken part in, {{ jg.deaths }} death{{ 's' if jg.deaths != 1 }} &middot; {{ jg.with_me }} of your team's {{ jg.ours }} early objective{{ 's' if jg.ours != 1 }} with you</span></div>
+      <div class="ln-checks">
+        {% for l in jg.lanes + [jg.jungle] %}
+        <div class="ln-check{{ ' quiet' if not l.kills and not l.deaths }}"><span class="k">{{ l.label }}</span>
+          <span class="v"><b class="{{ 'up' if l.kills }}">{{ l.kills }}</b> kill{{ 's' if l.kills != 1 }} &middot; <b class="{{ 'down' if l.deaths }}">{{ l.deaths }}</b> death{{ 's' if l.deaths != 1 }}</span>
+          <span class="v muted">{% if l.first %}first at {{ l.first }}{% else %}no kills{% endif %}</span></div>
+        {% endfor %}
+      </div>
+      <div class="ln-facts">
+        {% if jg.first_clear %}<span data-tip="First clear&#10;jungle CS at 3 and 4 minutes, against the enemy jungler">First clear {% for c in jg.first_clear %}<b>{{ c.cs }}</b>{% if c.enemy is defined %} vs {{ c.enemy }}{% endif %} at {{ c.minute }}:00{{ ' &middot; ' if not loop.last }}{% endfor %}</span>{% endif %}
+        <span>In the enemy jungle <b>{{ jg.invading }}</b> of 14 minutes</span>
+        {% if jg.objectives %}<span>Objectives: {% for o in jg.objectives %}<i class="obj {{ 'ours' if o.ours else 'theirs' }}{{ ' me' if o.with_me }}" data-tip="{{ o.name }} at {{ o.clock }}&#10;{{ 'your team' if o.ours else 'the enemy' }}{{ ', with you' if o.with_me }}">{{ o.name }} {{ o.clock }}</i>{% endfor %}</span>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+    {% elif d.insights.lane %}
     <h4 style="margin-top:16px">Lane against {% if d.insights.opponent_icon %}<img class="inline-champ" src="{{ d.insights.opponent_icon }}" alt="" loading="lazy">{% endif %}{{ d.insights.opponent }}</h4>
     <table class="board lane-table">
       <thead><tr><th>Minute</th><th>Gold</th><th>CS</th><th>XP</th></tr></thead>

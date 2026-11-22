@@ -124,12 +124,15 @@ def farm_lines(m: dict, names: dict[int, str], mine: int | None = None) -> list[
                 f"worth {worth:.1f} points of win chance.")
         if "typical_cs" in f:
             kind = "death" if dead else "play"
-            text += f" A typical {kind} like it costs {f['typical_cs']:.0f} CS, which the chance already expects, so "
+            plays = f.get("plays", 1)
+            text += (f" A typical {kind} window like it gives up about {f['typical_cs'] * plays:.0f} CS, which the "
+                     "chance already expects, so ")
             text += (f"{abs(f['cost']):.1f} more is charged to it." if f["cost"] >= 0.05
                      else f"it's credited {abs(f['cost']):.1f} for costing less." if f["cost"] <= -0.05
                      else "it's about even.")
-        rows.append({"pid": f["pid"], "you": you, "cs": f["cs"], "gold": f["gold"], "xp": f["xp"],
-                     "cost": f["cost"], "worth": worth, "away": f["away"], "text": text})
+        rows.append({"pid": f["pid"], "you": you, "who": who, "dead": dead, "cs": f["cs"], "gold": f["gold"],
+                     "xp": f["xp"], "cost": f["cost"], "worth": worth, "away": f["away"],
+                     "charged": "typical_cs" in f, "text": text})
     return rows
 
 
@@ -206,14 +209,107 @@ def swing_view(conn: psycopg.Connection, sw: dict, players: list[dict], gd: Game
                 "choices": choice_view(conn, model, gd, me, players),
                 "reliability": norms.get("_choices") or {},
                 "opponent": _opponent(sw, me, players, names, keys)}
-    marks = [{"t": m["t"], "after": m["after"], "n": i + 1} for i, m in enumerate(order)]
+    turn = turning_point(sw)
+    key = (turn["t"], turn["text"]) if turn else None
+    marks = [{"t": m["t"], "after": m["after"], "n": i + 1, "turn": (m["t"], m["text"]) == key}
+             for i, m in enumerate(order)]
+    if turn is not None:
+        turn["n"] = numbered.get(key)
+        turn["how"] = how(moments[turn["index"]])
+        turn["good"] = (sw["winner"] == my_team) if my_team else None
+        if turn["n"] is None:                         # not among the biggest eight: mark it anyway
+            marks.append({"t": turn["t"], "after": moments[turn["index"]]["after"], "n": "T", "turn": True})
     values = [v for _, v in sw["series"]]
     return {"chart": win_chart(sw["series"], sw["end_s"], marks),
             "data": json.dumps({"series": sw["series"], "end": sw["end_s"], "team": my_team}),
-            "teams": teams, "moments": [moment(m) for m in order], "me": mine,
+            "teams": teams, "moments": [moment(m) for m in order], "me": mine, "turning": turn,
             "start": sw.get("start", 50.0), "reads_items": bool(sw.get("reads_items")),
             "my_start": (sw.get("start", 50.0) if my_team != 200 else 100 - sw.get("start", 50.0)) if my_team else None,
             "peak_blue": max(values), "low_blue": min(values)}
+
+
+def highlights(conn: psycopg.Connection, model, gd: GameData, n: int = 6, recent: int = 1500,
+               fresh: bool = False) -> list[dict]:
+    """The plays that moved a game's chance most in the most recent stored ranked solo games,
+    one per game (for the home page), cached for ten minutes."""
+    if model is None:
+        return []
+    from riftwatch.stats import champions as champ_stats
+
+    ver = swing_calc.version(model)
+
+    def build() -> list[dict]:
+        rows = conn.execute("""
+            WITH recent AS (SELECT match_id, max(game_start) AS game_start FROM participant_builds
+                             WHERE queue_id = 420 AND NOT remake GROUP BY match_id ORDER BY 2 DESC LIMIT %s)
+            SELECT s.match_id, r.game_start, (s.data->>'winner')::int, m
+              FROM recent r JOIN match_swing s USING (match_id), jsonb_array_elements(s.data->'moments') m
+             WHERE s.version = %s AND m->>'part' <> 'items' AND jsonb_typeof(m->'by') = 'number'
+             ORDER BY (m->>'swing')::float DESC LIMIT 80""", (recent, ver)).fetchall()
+        picked, seen = [], set()
+        for match_id, start, winner, m in rows:
+            if match_id in seen:
+                continue
+            seen.add(match_id)
+            picked.append((match_id, start, winner, m))
+            if len(picked) == n:
+                break
+        if not picked:
+            return []
+        who = {(mid, pid): (champ, name) for mid, pid, champ, name in conn.execute(
+            "SELECT match_id, participant_id, champion_id, riot_name FROM participant_builds WHERE match_id = ANY(%s)",
+            ([p[0] for p in picked],))}
+        out = []
+        for match_id, start, winner, m in picked:
+            champ, name = who.get((match_id, m["by"]), (0, None))
+            team = m.get("team") or 100
+            before = m["before"] if team == 100 else 100 - m["before"]
+            after = m["after"] if team == 100 else 100 - m["after"]
+            out.append({"match_id": match_id, "clock": m["clock"], "text": m["text"], "swing": m["swing"],
+                        "before": round(before), "after": round(after), "won": winner == team,
+                        "champion": gd.champion(champ).name if champ else "", "icon": gd.champion_icon(champ) if champ else "",
+                        "player": name or "Unknown", "when": start.strftime("%b %d") if start else ""})
+        return out
+    return champ_stats.cached(("swing_highlights", ver, n), build, fresh)
+
+
+def turning_point(sw: dict) -> dict[str, Any] | None:
+    """The moment that decided the game, from the winner's side of the win-chance curve:
+
+    * a **comeback** or **lead change**: the last moment that took the winner from behind (under
+      50%) to ahead, when they never fell behind again after it, with the lowest chance they
+      came back from;
+    * otherwise (they led all game, or the lead changed between events) the single moment that
+      moved the chance most towards the winner.
+    """
+    moments = [(i, m) for i, m in enumerate(sw.get("moments") or []) if m.get("part") != "items"]
+    winner, series = sw.get("winner"), sw.get("series") or []
+    if winner not in (100, 200) or not moments or not series:
+        return None
+
+    def mine(v: float) -> float:                       # blue's chance as the winner's
+        return v if winner == 100 else 100 - v
+    curve = [(t, mine(v)) for t, v in series]
+    low_t, low = min(curve, key=lambda x: x[1])
+    behind = [t for t, v in curve if v < 50]
+    last_behind = behind[-1] if behind else None
+    label = "Blue" if winner == 100 else "Red"
+    pick, kind = None, "swing"
+    if last_behind is not None:
+        crossings = [(i, m) for i, m in moments
+                     if mine(m["before"]) < 50 <= mine(m["after"]) and m["t"] / 1000 >= last_behind - 1]
+        if crossings:
+            pick, kind = crossings[-1], ("comeback" if low < 35 else "lead")
+    if pick is None:
+        toward = [(i, m) for i, m in moments if mine(m["after"]) > mine(m["before"])]
+        if not toward:
+            return None
+        pick = max(toward, key=lambda x: mine(x[1]["after"]) - mine(x[1]["before"]))
+    i, m = pick
+    return {"index": i, "t": m["t"], "clock": m["clock"], "text": m["text"], "kind": kind, "winner": label,
+            "before": round(mine(m["before"])), "after": round(mine(m["after"])), "swing": m["swing"],
+            "low": round(low), "low_clock": f"{int(low_t // 60)}:{int(low_t % 60):02d}",
+            "led_all_game": not behind}
 
 
 def _opponent(sw: dict, me: dict, players: list[dict], names: dict[int, str], keys: list[str]) -> dict | None:
@@ -368,6 +464,7 @@ def swing_profile(conn: psycopg.Connection, gd: GameData, puuid: str, model, nor
     from riftwatch.winprob import trades
 
     plays = trades.player([(r[1], r[2], d) for r, d in rows], norms.get("_trades"), model)
+    clutch = _clutch(rows, gd)
     trend = [{"total": d["players"][str(r[1])]["total"], "win": d["winner"] == r[3],
               "champion": gd.champion(r[4]).name, "match_id": r[0]} for r, d in reversed(rows)]
     top = max([abs(t["total"]) for t in trend] + [1])
@@ -377,7 +474,30 @@ def swing_profile(conn: psycopg.Connection, gd: GameData, puuid: str, model, nor
             "typical": round(typical["total"], 1) if typical else None, "parts": compare,
             "peak": max([abs(c["mine"]) for c in compare] + [abs(c["typical"] or 0) for c in compare] + [1]),
             "worst": worst if worst and worst["gap"] < -0.5 else None,
-            "best": best if best and best["gap"] > 0.5 else None, "patterns": patterns, "plays": plays}
+            "best": best if best and best["gap"] > 0.5 else None, "patterns": patterns, "plays": plays,
+            "clutch": clutch}
+
+
+def _clutch(rows, gd: GameData) -> dict[str, Any] | None:
+    """In how many of the player's games they were in the moment that decided it (the turning
+    point): making the play for the side that won, or dying in it."""
+    made, died, examples = [], [], []
+    for (match_id, pid, _, team, champ), data in rows:
+        tp = turning_point(data)
+        if tp is None:
+            continue
+        m = data["moments"][tp["index"]]
+        winner = data.get("winner")
+        entry = {"match_id": match_id, "clock": tp["clock"], "text": tp["text"], "champion": gd.champion(champ).name,
+                 "win": winner == team}
+        if pid in (m.get("lost") or []):
+            died.append({**entry, "kind": "died"})
+        elif pid in (m.get("players") or []) and m.get("team") == winner == team:
+            made.append({**entry, "kind": "made"})
+    if not made and not died:
+        return None
+    return {"games": len(rows), "made": len(made), "died": len(died),
+            "examples": (made[:2] + died[:1]) if made else died[:2]}
 
 
 def _patterns(rows, typical: dict) -> list[dict]:

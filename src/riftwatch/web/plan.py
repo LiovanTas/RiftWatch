@@ -175,16 +175,22 @@ def blocks(games: list[dict], key: str, habit_norms: dict, part_norms: dict, siz
     return out
 
 
-def chart(points: list[dict], goal: float, width: int = 640, height: int = 150) -> str | None:
+def chart(points: list[dict], goal: float, width: int = 960, height: int = 170, flip: bool = False) -> str | None:
     """Inline SVG: the cost per game for each block (solid), the role's typical (dashed) and
-    the target (dotted). Higher is worse."""
+    the target (dotted). Higher is worse; with ``flip`` (a part of Swing) it's drawn as the
+    Swing itself, the same sign the text uses, so higher is better. Wide and short, so the
+    labels stay small on a wide panel."""
     if len(points) < 2:
         return None
+    s = -1.0 if flip else 1.0
+    points = [{**p, "cost": s * p["cost"], "typical": None if p["typical"] is None else s * p["typical"]}
+              for p in points]
+    goal = s * goal
     values = [p["cost"] for p in points] + [p["typical"] for p in points if p["typical"] is not None] + [goal]
-    lo, hi = min(values + [0.0]), max(values + [1.0])
-    pad = (hi - lo) * 0.1 or 1.0
+    lo, hi = min(values + [0.0]), max(values + [0.0])
+    pad = (hi - lo) * 0.12 or 1.0
     lo, hi = lo - pad, hi + pad
-    left, right, top, bottom = 40, width - 8, 8, height - 18
+    left, right, top, bottom = 44, width - 10, 10, height - 20
 
     def x(i):
         return left + (right - left) * i / (len(points) - 1)
@@ -195,11 +201,13 @@ def chart(points: list[dict], goal: float, width: int = 640, height: int = 150) 
     mine = " ".join(f"{x(i):.1f},{y(p['cost']):.1f}" for i, p in enumerate(points))
     typ = [(i, p["typical"]) for i, p in enumerate(points) if p["typical"] is not None]
     typical = " ".join(f"{x(i):.1f},{y(v):.1f}" for i, v in typ)
-    dots = "".join(f'<circle cx="{x(i):.1f}" cy="{y(p["cost"]):.1f}" r="3"/>' for i, p in enumerate(points))
+    dots = "".join(f'<circle cx="{x(i):.1f}" cy="{y(p["cost"]):.1f}" r="3.5"/>' for i, p in enumerate(points))
+    zero = f'<line x1="{left}" x2="{right}" y1="{y(0):.1f}" y2="{y(0):.1f}" class="zero"/>' if lo < 0 < hi else ""
     return (f'<svg viewBox="0 0 {width} {height}" class="plan-chart" role="img" '
-            f'aria-label="Cost per game in blocks of {BLOCK} games, oldest first">'
+            f'aria-label="{"Swing" if flip else "Cost"} per game in blocks of {BLOCK} games, oldest first">' + zero +
             f'<line x1="{left}" x2="{right}" y1="{y(goal):.1f}" y2="{y(goal):.1f}" class="goal"/>'
-            f'<text x="{left - 6}" y="{y(goal) + 4:.1f}" class="tick" text-anchor="end">{goal:.1f}</text>'
+            f'<text x="{left - 6}" y="{y(goal) + 4:.1f}" class="tick" text-anchor="end">'
+            f'{format(goal, "+.1f") if flip else format(goal, ".1f")}</text>'
             + (f'<polyline points="{typical}" class="typical"/>' if typical else "")
             + f'<polyline points="{mine}" class="mine"/>{dots}'
             f'<text x="{left}" y="{height - 3}" class="tick">older</text>'
@@ -248,11 +256,13 @@ def build(conn: psycopg.Connection, gd: GameData, puuid: str, model, norms: dict
         return out
     goal = target(focus)
     pts = blocks(games, focus["key"], habit_norms, part_norms)
+    moved = trend([_cost(g, focus["key"]) for g in games])
+    if focus["kind"] == "part" and "last" in moved:       # say it as Swing, the sign the text uses
+        moved = {**moved, "last": -moved["last"], "before": -moved["before"]}
     out["focus"] = {**{k: (round(v, 1) if isinstance(v, float) else v) for k, v in focus.items()},
                     "target": {k: (round(v, 1) if isinstance(v, float) else v) for k, v in goal.items()},
-                    "trend": {k: (round(v, 1) if isinstance(v, float) else v)
-                              for k, v in trend([_cost(g, focus["key"]) for g in games]).items()},
-                    "chart": chart(pts, goal["cost"]), "blocks": len(pts),
+                    "trend": {k: (round(v, 1) if isinstance(v, float) else v) for k, v in moved.items()},
+                    "chart": chart(pts, goal["cost"], flip=focus["kind"] == "part"), "blocks": len(pts),
                     "picked": bool(choice) and focus["key"] == choice and (not options or focus is not options[0]),
                     "examples": examples(games[-recent:], focus["key"], gd, as_path)}
     return out

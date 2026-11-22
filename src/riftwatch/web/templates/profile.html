@@ -168,6 +168,10 @@
         <div class="panel-head"><span>Where your Swing comes from</span><span class="muted small">last {{ sp.games }} games{% if sp.role %} &middot; against {{ sp.role }} players{% endif %} &middot; <a href="/swing">what is Swing?</a></span></div>
         <div class="panel-body">
           <p class="sp-lead">You add <b class="{{ 'up' if sp.avg >= 0 else 'down' }}">{{ '%+.1f'|format(sp.avg) }}</b> points of win chance a game{% if sp.typical is not none %}; {{ sp.role or 'players' }} players average <b>{{ '%+.1f'|format(sp.typical) }}</b>{% endif %}.{% if sp.worst %} The biggest gap is <b>{{ sp.worst.name|lower }}</b>: {{ '%+.1f'|format(sp.worst.mine) }} a game against {{ '%+.1f'|format(sp.worst.typical) }} ({{ sp.worst.tip }}).{% endif %}{% if sp.best %} You're ahead on <b>{{ sp.best.name|lower }}</b> ({{ '%+.1f'|format(sp.best.mine) }} against {{ '%+.1f'|format(sp.best.typical) }}).{% endif %}</p>
+          {% if sp.clutch %}{% set cl = sp.clutch %}
+          <p class="sp-clutch" data-tip="Turning points&#10;the moment that decided each game, read from the win-chance curve: the last lead change that held, or the biggest swing towards the winner">Turning points: you made the play that decided <b class="up">{{ cl.made }}</b> of your last {{ cl.games }} games{% if cl.died %} and died in the one that decided <b class="down">{{ cl.died }}</b>{% endif %}.
+            {% for e in cl.examples %}<a href="/games/{{ e.match_id }}?as={{ profile_base|replace('/players/', '') }}" class="sp-clutch-ex {{ e.kind }}">{{ e.champion }} &middot; {{ e.clock }} {{ e.text }}</a>{% endfor %}</p>
+          {% endif %}
           {% if sp.trend %}
           <div class="sp-trend" aria-label="Swing in each of the last {{ sp.trend|length }} games, oldest first">{% for t in sp.trend %}<a href="/games/{{ t.match_id }}?as={{ profile_base|replace('/players/', '') }}" class="{{ 'w' if t.win else 'l' }}" data-tip="{{ t.champion }} &middot; {{ 'Victory' if t.win else 'Defeat' }}&#10;Swing {{ '%+.1f'|format(t.total) }}"><i class="{{ 'up' if t.total >= 0 else 'down' }}" style="height:{{ [t.height, 2]|max }}%"></i></a>{% endfor %}</div>
           {% endif %}

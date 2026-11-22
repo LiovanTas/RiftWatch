@@ -4,7 +4,7 @@
 <div class="sw-why">
   {% if m.why %}<div class="chips">{% for w in m.why %}<span class="{{ 'up' if w.value > 0 else 'down' }}">{{ w.label }} <b>{{ '%+.1f'|format(w.value) }}</b></span>{% endfor %}</div>{% endif %}
   {% for line in m.lines %}<p>{{ line }}</p>{% endfor %}
-  {% if m.farm %}<div class="sw-farm" data-tip="Farm given up&#10;CS the player didn't take against their own farming pace this game, while away for the play (or dead), turned into gold and XP with what a CS is worth for their role; valued by the model at the end of the window">{% for f in m.farm %}<p class="{{ 'you' if f.you }}"><span class="tag">Farm</span> {{ f.text }}</p>{% endfor %}</div>{% endif %}
+  {% if m.farm %}<div class="sw-farm">{% for f in m.farm %}<div class="fr{{ ' you' if f.you }}" data-tip="Farm given up&#10;{{ f.text }}"><span class="tag">Farm</span><span class="who">{{ f.who }}</span><span class="cs">{{ '%.0f'|format(f.cs) }} CS {{ 'missed dead' if f.dead else 'given up' }}</span><span class="gx">{{ '{:,}'.format(f.gold) }} gold &middot; {{ '{:,}'.format(f.xp) }} XP &middot; worth {{ '%.1f'|format(f.worth) }}</span>{% if f.charged %}<span class="chg {{ 'down' if f.cost >= 0.05 else 'up' if f.cost <= -0.05 }}">{% if f.cost >= 0.05 %}{{ '%.1f'|format(f.cost) }} more than typical{% elif f.cost <= -0.05 %}{{ '%.1f'|format(-f.cost) }} less than typical{% else %}as typical{% endif %}</span>{% endif %}</div>{% endfor %}</div>{% endif %}
 </div>
 {% endif %}
 {%- endmacro %}

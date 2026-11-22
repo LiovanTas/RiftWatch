@@ -171,7 +171,8 @@ def player(rows: list[tuple[int, str, dict]], table: dict | None, model) -> dict
     extra_total = sum(k["farm"] * k["plays"] for k in kinds) / len(rows)
     gold_total = sum(k["gold"] * k["plays"] for k in kinds) / len(rows)
     xp_total = sum(k["xp"] * k["plays"] for k in kinds) / len(rows)
-    rated = [k for k in kinds if k["typical_net"] is not None and k["plays"] >= 5]
+    # Deaths don't "pay off": compare only the plays a player chooses to make.
+    rated = [k for k in kinds if k["typical_net"] is not None and k["plays"] >= 5 and k["key"] != "deaths"]
     best = max(rated, key=lambda k: k["net"] - k["typical_net"], default=None)
     worst = min(rated, key=lambda k: k["net"] - k["typical_net"], default=None)
     return {"games": len(rows), "role": farm_calc.ROLE_NAMES.get(role, ""), "kinds": kinds,

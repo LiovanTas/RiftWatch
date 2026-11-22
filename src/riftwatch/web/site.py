@@ -140,10 +140,17 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
                                 "role": gamedata.POSITIONS.get(r["position"], ""),
                                 "position": r["position"], "tier": r["tier"],
                                 "win_rate": r["win_rate"]})
+            try:
+                from riftwatch.web import swingview
+
+                plays = swingview.highlights(conn, win_model, gd) if ranked else []
+            except Exception as exc:                  # noqa: BLE001 -- the home page still shows
+                log.warning("highlights failed: %s", exc)
+                plays = []
         stats = {"games": games, "ranked": ranked, "players": players,
                  "champions": len(gd.champions) or 170, "patch": ".".join(gd.version.split(".")[:2])}
         return render("home.html", nav="home", stats=stats, top_champions=top,
-                      watch=patch_watch()[:2])
+                      watch=patch_watch()[:2], plays=plays)
 
     def search_error(message: str) -> HTMLResponse:
         return render("home.html", status=400, nav="home", error=message,
@@ -237,6 +244,7 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
 
             with pool.connection() as conn:
                 swingview.role_parts(conn, win_model, fresh=True)
+                swingview.highlights(conn, win_model, game_data(), fresh=True)    # the home page's
 
     app.state.warm_tiers = warm_tiers
 
@@ -983,6 +991,8 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             mains = views.champion_players(conn, champ.id, s.get("position"), PLATFORM_REGION)
             duo = champ_stats.partners(conn, champ.id, s.get("position"))
             curves = champ_stats.win_rate_curves(conn, champ.id, s.get("position"))
+            curves = {**curves, "length_svg": views.win_rate_chart(curves["length"], "Win rate by game length"),
+                      "patch_svg": views.win_rate_chart(curves["patch"], "Win rate by patch")}
             paths = champ_stats.build_paths(conn, champ.id, s.get("position"), item_check("is_legendary"))
             table = champ_stats.matchup_table(conn, champ.id, s.get("position"))
             from riftwatch.winprob import swing as swing_calc

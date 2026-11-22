@@ -45,6 +45,20 @@
   </div>
   {% endif %}
 
+  {% if plays %}
+  <div class="section-title"><h2>Biggest plays</h2><a href="/swing">what is Swing? &rarr;</a></div>
+  <div class="plays-grid">
+    {% for p in plays %}
+    <a class="play-card {{ 'won' if p.won else 'lost' }}" href="/games/{{ p.match_id }}">
+      <div class="pc-top">{% if p.icon %}<img src="{{ p.icon }}" alt="" loading="lazy">{% endif %}<div class="pc-who"><b>{{ p.player }}</b><span>{{ p.champion }} &middot; {{ p.when }}</span></div><span class="pc-swing">+{{ '%.1f'|format(p.swing) }}</span></div>
+      <p class="pc-text"><span class="clock">{{ p.clock }}</span> {{ p.text }}</p>
+      <div class="pc-bar" aria-label="Their team's chance to win before and after"><i class="b" style="width:{{ p.before }}%"></i><i class="a" style="left:{{ p.before }}%;width:{{ p.after - p.before }}%"></i></div>
+      <div class="pc-foot"><span>{{ p.before }}% &rarr; <b>{{ p.after }}%</b> to win</span><span class="{{ 'up' if p.won else 'down' }}">{{ 'won the game' if p.won else 'lost anyway' }}</span></div>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   {% if watch %}
   <div class="section-title"><h2>Patch watch</h2><a href="/patches">what each change moved &rarr;</a></div>
   <div class="watch panel">

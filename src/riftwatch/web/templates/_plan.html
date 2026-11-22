@@ -17,8 +17,8 @@
       {% endif %}
     </div>
     {% if f.chart %}
-    <div class="plan-chart-wrap" data-tip="{{ f.name }}, points of win chance lost per game&#10;blocks of 5 games, oldest on the left; dashed: typical for your role; dotted: your target">{{ f.chart|safe }}</div>
-    <div class="plan-key"><span><i class="mine"></i>you, per 5 games</span><span><i class="typical"></i>typical</span><span><i class="goal"></i>target</span><span class="muted">lower is better</span></div>
+    <div class="plan-chart-wrap" data-tip="{{ f.name }}, {{ 'your Swing from it' if f.kind == 'part' else 'points of win chance lost' }} per game&#10;blocks of 5 games, oldest on the left; dashed: typical for your role; dotted: your target">{{ f.chart|safe }}</div>
+    <div class="plan-key"><span><i class="mine"></i>you, per 5 games</span><span><i class="typical"></i>typical</span><span><i class="goal"></i>target</span><span class="muted">{{ 'higher' if f.kind == 'part' else 'lower' }} is better</span></div>
     {% endif %}
     <p class="plan-trend {{ f.trend.verdict }}">
       {% if f.trend.verdict == 'early' %}Not enough games to call a trend yet ({{ f.trend.games }} of 20).

@@ -453,6 +453,60 @@ def gold_chart(series: list[dict], width: int = 720, height: int = 160) -> str |
             f"{ticks}</svg>")
 
 
+def win_rate_chart(points: list[dict], label: str, width: int = 560, height: int = 190,
+                   few: int = 30) -> str | None:
+    """Inline SVG of win rates by bucket (game length, patch): a bar up or down from an even
+    50% line, scaled to the data, with a 95% margin whisker (normal approximation) so it's
+    plain which differences are noise, and each bucket's games underneath. Buckets with
+    fewer than ``few`` games are greyed out."""
+    import math
+
+    if not points:
+        return None
+    rows = []
+    for p in points:
+        n, wr = p["games"], p["win_rate"]
+        q = wr / 100
+        moe = 196 * math.sqrt(max(q * (1 - q), 0.0025) / n) if n else 50.0
+        rows.append((p["label"], n, wr, moe))
+    # Every bar fits; whiskers longer than 10 points run off the edge (they're the noisy ones).
+    reach = max([abs(wr - 50) + min(moe, 10) for _, n, wr, moe in rows] + [8.0])
+    reach = min(50.0, math.ceil(reach / 5) * 5)
+    left, right, top, bottom = 38, width - 6, 12, height - 40
+    mid = (top + bottom) / 2
+
+    def y(v: float) -> float:
+        return mid - (bottom - top) / 2 * max(-1.0, min(1.0, (v - 50) / reach))
+
+    slot = (right - left) / len(rows)
+    bar = min(46.0, slot * 0.55)
+    parts = [f'<line x1="{left}" x2="{right}" y1="{mid:.1f}" y2="{mid:.1f}" class="even"/>',
+             f'<text x="{left - 6}" y="{mid + 4:.1f}" class="tick" text-anchor="end">50%</text>']
+    for v in (50 + reach, 50 - reach):
+        parts.append(f'<line x1="{left}" x2="{right}" y1="{y(v):.1f}" y2="{y(v):.1f}" class="grid"/>'
+                     f'<text x="{left - 6}" y="{y(v) + 4:.1f}" class="tick" text-anchor="end">{v:.0f}%</text>')
+    for i, (name, n, wr, moe) in enumerate(rows):
+        cx = left + slot * (i + 0.5)
+        y0, y1 = sorted((y(50), y(wr)))
+        cls = ("up" if wr >= 50 else "down") + (" few" if n < few else "")
+        parts.append(f'<g class="col {cls}"><title>{name}: {wr:.1f}% won in {n:,} games '
+                     f'(±{moe:.1f} points, 95%){" - too few games to say much" if n < few else ""}</title>'
+                     f'<rect x="{cx - bar / 2:.1f}" y="{y0:.1f}" width="{bar:.1f}" height="{max(1.5, y1 - y0):.1f}" rx="3"/>'
+                     f'<line x1="{cx:.1f}" x2="{cx:.1f}" y1="{y(wr + moe):.1f}" y2="{y(wr - moe):.1f}" class="moe"/>'
+                     f'<line x1="{cx - 5:.1f}" x2="{cx + 5:.1f}" y1="{y(wr + moe):.1f}" y2="{y(wr + moe):.1f}" class="moe"/>'
+                     f'<line x1="{cx - 5:.1f}" x2="{cx + 5:.1f}" y1="{y(wr - moe):.1f}" y2="{y(wr - moe):.1f}" class="moe"/>'
+                     f'<text x="{cx:.1f}" y="{bottom + 15}" class="val" text-anchor="middle">{wr:.0f}%</text>'
+                     f'<text x="{cx:.1f}" y="{bottom + 27}" class="lbl" text-anchor="middle">{name}</text>'
+                     f'<text x="{cx:.1f}" y="{bottom + 38}" class="n" text-anchor="middle">{n:,} games</text></g>')
+    total = sum(n for _, n, _, _ in rows)
+    sparse = sum(1 for _, n, _, _ in rows if n < few) * 2 > len(rows)
+    note = (f'<p class="wr-note">Only {total:,} stored games here, so most of these differences are luck: '
+            f'grey bars have under {few} games, and the whiskers show how far the true rate could be.</p>'
+            if sparse else "")
+    return (f'<svg viewBox="0 0 {width} {height}" class="wr-chart" role="img" aria-label="{label}">'
+            + "".join(parts) + "</svg>" + note)
+
+
 def win_chart(series: list[list[float]], end_s: float, marks: list[dict],
               width: int = 720, height: int = 190) -> str | None:
     """Inline SVG of blue's chance to win over the game: above the middle line blue is
@@ -486,8 +540,10 @@ def win_chart(series: list[list[float]], end_s: float, marks: list[dict],
                 break
             my += step
         placed.append((mx, my))
-        dots += (f'<g class="mark" transform="translate({mx:.1f},{my:.1f})">'
-                 f'<circle r="8"/><text y="3.5" text-anchor="middle">{m["n"]}</text></g>')
+        turn = m.get("turn")
+        dots += (f'<g class="mark{" turn" if turn else ""}" transform="translate({mx:.1f},{my:.1f})">'
+                 + ("<title>The turning point</title>" if turn else "")
+                 + f'<circle r="{9.5 if turn else 8}"/><text y="3.5" text-anchor="middle">{m["n"]}</text></g>')
     return (f'<svg viewBox="0 0 {width} {height}" class="gold-chart win-chart" role="img" '
             f'aria-label="Blue team&#39;s chance to win over the game">'
             f'<defs><clipPath id="wabove"><rect x="0" y="0" width="{width}" height="{mid:.1f}"/></clipPath>'
@@ -618,9 +674,17 @@ def match_detail(conn: psycopg.Connection, gd: GameData, match_id: str, puuid: s
         team15 = (gold[15]["diff"] * (1 if me["team_id"] == 100 else -1)) if len(gold) > 15 else None
         found = insights.game_notes(me, players, insights.baselines(conn), tier,
                                     lambda cid: gd.champion(cid).name, lane, team15)
+        from riftwatch.web import jungle, laning
+
         notes = {"good": [n.view() for n in found if n.kind == "good"],
                  "bad": [n.view() for n in found if n.kind == "bad"],
                  "lane": [{"minute": k, **v} for k, v in sorted(lane.items())],
+                 "laning": laning.report(timeline[0] if timeline else None, me["participant_id"],
+                                        opp["participant_id"] if opp else None, me["position"], sw,
+                                        getattr(win_model, "farm", None)),
+                 "jungle": (jungle.report(timeline[0] if timeline else None, me["participant_id"],
+                                          opp["participant_id"] if opp else None)
+                            if me["position"] == "JUNGLE" else None),
                  "opponent": gd.champion(opp["champion_id"]).name if opp else None,
                  "opponent_icon": gd.champion_icon(opp["champion_id"]) if opp else None}
     return {

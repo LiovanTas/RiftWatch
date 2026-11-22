@@ -215,6 +215,13 @@
       }
       return;
     }
+    const go = e.target.closest('[data-goto-pane]');
+    if (go) {                                   // a link inside a pane to another tab of the same game
+      const root = go.closest('.m-detail, .detail-root');
+      const btn = $$('.d-tabs button', root).find((b) => b.dataset.pane === go.dataset.gotoPane);
+      if (btn) { btn.click(); btn.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+      return;
+    }
     const tab = e.target.closest('.d-tabs button');
     if (tab) {
       const root = tab.closest('.m-detail, .detail-root');
