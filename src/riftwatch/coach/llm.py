@@ -41,7 +41,7 @@ from riftwatch.coach.grounding import (
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 # Changes with the system prompt: part of each cached answer's key, so a new prompt writes
 # new coaching instead of serving answers written under the old one.
-PROMPT_VERSION = "p2"
+PROMPT_VERSION = "p3"      # p3: one point per area
 MAX_POINTS = 5  # the prompt asks for at most five; enforced here because "high" effort wrote six
 
 # USD per million tokens: input, output, cache read, cache write (5-minute TTL).
@@ -110,6 +110,9 @@ Rules:
 - At most five points, most important first: sustained patterns and large gaps before
   small ones, weaknesses before strengths, and include one strength if the evidence has
   any. Fewer points if the evidence is thin.
+- One point per area: when several items say the same thing (CS behind at 20 minutes, CS
+  in the bottom quarter from 18 to 30), make them one point that cites all of them, never
+  separate points with the same title.
 - title: a short phrase. explanation: one or two sentences. advice: one or two sentences
   of concrete things to do next game.
 - headline: one sentence on the overall picture, with no numbers.

@@ -90,6 +90,35 @@ def _vs_median(m: Metric, value: float, median: float) -> str:
     return f"median {m.show(median)}, {m.show(abs(diff)).lstrip('+')} {word} it" if diff else f"median {m.show(median)}"
 
 
+LANING_ENDS = 15        # minute: after it, a lead over the lane opponent isn't "laning" any more
+OPPONENT_WORDS = {"JUNGLE": "the enemy jungler", "UTILITY": "the enemy support"}
+
+
+def _area_for(metric, role: str, start: int | None = None) -> str:
+    """The area a lane-opponent number belongs to. It's "laning" only for a laner in the
+    laning phase. A jungler's "lane opponent" is the enemy jungler, so CS against them is
+    farming (camps) and gold or XP is economy; after minute 15 the same is true for every
+    role, and a jungler's solo kills are fighting."""
+    if metric.area != "laning":
+        return metric.area
+    name = metric.name
+    late = (start is not None and start >= LANING_ENDS) or name.endswith("_at_20")
+    if role == "JUNGLE" or late:
+        if name.startswith("cs_diff"):
+            return "farming"
+        if name.startswith(("gold_diff", "xp_diff")):
+            return "economy"
+        if role == "JUNGLE" and name == "solo_kills":
+            return "fighting"
+    return metric.area
+
+
+def _opponent_words(text: str, role: str) -> str:
+    """"lane opponent" in a sentence, named for the role (a jungler's is the enemy jungler)."""
+    words = OPPONENT_WORDS.get(role)
+    return text.replace("lane opponent", words) if words else text
+
+
 def _polarity(goodness: float) -> str | None:
     if goodness <= WEAK:
         return "weakness"
@@ -175,6 +204,14 @@ def game_evidence(
           f"final score {int(p.metrics.get('kills', 0))}/{int(p.metrics.get('deaths', 0))}/"
           f"{int(p.metrics.get('assists', 0))}.{compared}")
 
+    role = (p.role or "").upper()
+
+    def area_of(metric, start: int | None = None) -> str:
+        return _area_for(metric, role, start)
+
+    def who(text: str) -> str:
+        return _opponent_words(text, role)
+
     # Whole-game metrics, most extreme first, capped per area so one area can't crowd out
     # the rest.
     candidates = []
@@ -188,13 +225,14 @@ def game_evidence(
     per_area: Counter[str] = Counter()
     taken = 0
     for severity, pol, s in candidates:
-        if taken >= max_metric_findings or per_area[s.metric.area] >= max_per_area:
+        area = area_of(s.metric)
+        if taken >= max_metric_findings or per_area[area] >= max_per_area:
             continue
-        b.add("metric", s.metric.area, pol,
-              _metric_text(s, group, score.reference.get(s.metric.name), score.reference_label),
+        b.add("metric", area, pol,
+              who(_metric_text(s, group, score.reference.get(s.metric.name), score.reference_label)),
               severity, metric=s.metric.name,
               value=s.value, better_than=round(s.goodness, 1), n=s.baseline.n)
-        per_area[s.metric.area] += 1
+        per_area[area] += 1
         taken += 1
 
     # Per-minute curves: sustained stretches below/above the comparison group.
@@ -205,11 +243,11 @@ def game_evidence(
         for pol, test in (("weakness", lambda g: g <= WEAK), ("strength", lambda g: g >= STRONG)):
             for run in _runs(scores, test):
                 last = run[-1]
-                b.add("curve", m.area, pol,
-                      f"From minute {run[0].minute} to minute {last.minute}, {m.label} stayed "
-                      f"in the {'bottom' if pol == 'weakness' else 'top'} quarter of comparable players"
-                      f"{group.suffix(last)}; at minute {last.minute} it was "
-                      f"{m.show(last.value)} ({_vs_median(m, last.value, last.baseline.p50)}).",
+                b.add("curve", area_of(m, run[0].minute), pol,
+                      who(f"From minute {run[0].minute} to minute {last.minute}, {m.label} stayed "
+                          f"in the {'bottom' if pol == 'weakness' else 'top'} quarter of comparable players"
+                          f"{group.suffix(last)}; at minute {last.minute} it was "
+                          f"{m.show(last.value)} ({_vs_median(m, last.value, last.baseline.p50)})."),
                       severity=sum(abs(s.goodness - 50) for s in run) / len(run) + len(run),
                       metric=name, start=run[0].minute, end=last.minute)
 

@@ -231,7 +231,8 @@ def test_persistent_violation_is_dropped():
 
 
 def test_point_cap_is_enforced():
-    many = CoachOutput(headline="x", points=[point(explanation="52 CS") for _ in range(7)])
+    areas = ("farming", "laning", "fighting", "survival", "vision", "objectives", "economy")
+    many = CoachOutput(headline="x", points=[point(area=a, explanation="52 CS") for a in areas])
     coach, _ = fake_coach(many)
     assert len(coach.write(EV, "this game").output.points) == 5
 
@@ -412,3 +413,38 @@ def test_stream_endpoint_streams_then_caches(conn, tmp_path):
         assert events == [{"type": "final", "output": ok.model_dump(), "cached": True}]
         assert len(messages.calls) == 1
     pool.close()
+
+
+def test_lane_numbers_are_laning_only_for_laners_in_the_laning_phase():
+    from riftwatch.coach.evidence import _area_for, _opponent_words
+    from riftwatch.features.metrics import CURVE_METRICS, GAME_METRICS
+
+    cs10, gold15, cs20 = GAME_METRICS["cs_diff_at_10"], GAME_METRICS["gold_diff_at_15"], GAME_METRICS["cs_diff_at_20"]
+    assert _area_for(cs10, "MIDDLE") == "laning" and _area_for(gold15, "TOP") == "laning"
+    # A jungler's lane opponent is the enemy jungler: CS is farming, gold and XP economy.
+    assert _area_for(cs10, "JUNGLE") == "farming" and _area_for(gold15, "JUNGLE") == "economy"
+    # After the laning phase it's farming or economy for everyone.
+    assert _area_for(cs20, "MIDDLE") == "farming"
+    curve = CURVE_METRICS["cs_diff"]
+    assert _area_for(curve, "MIDDLE", start=8) == "laning" and _area_for(curve, "MIDDLE", start=15) == "farming"
+    assert _opponent_words("CS lead over lane opponent", "JUNGLE") == "CS lead over the enemy jungler"
+    assert _opponent_words("CS lead over lane opponent", "TOP") == "CS lead over lane opponent"
+
+
+def test_one_card_per_area_backed_by_every_finding_in_it():
+    from riftwatch.coach.evidence import Evidence, EvidenceSet
+    from riftwatch.coach.grounding import CoachPoint, merge_same_area
+    from riftwatch.coach.pipeline import offline_coach
+
+    items = [Evidence(id=f"E{i}", kind="metric", area=area, polarity=pol, text=f"finding {i}", severity=sev)
+             for i, (area, pol, sev) in enumerate([("farming", "weakness", 30), ("farming", "weakness", 20),
+                                                   ("vision", "strength", 25), ("farming", "weakness", 10),
+                                                   ("survival", "weakness", 15)], start=1)]
+    out = offline_coach(EvidenceSet(items=items), role="JUNGLE")
+    assert [p.title for p in out.points] == ["Work on farming", "Work on survival", "Keep up vision"]
+    farming = out.points[0]
+    assert farming.explanation == "finding 1" and farming.evidence_ids == ["E1", "E2", "E4"]
+    a = CoachPoint(area="farming", kind="weakness", title="CS", explanation="x", advice="y", evidence_ids=["E1"])
+    b = CoachPoint(area="farming", kind="weakness", title="CS again", explanation="z", advice="w", evidence_ids=["E2", "E1"])
+    merged = merge_same_area([a, b])
+    assert len(merged) == 1 and merged[0].title == "CS" and merged[0].evidence_ids == ["E1", "E2"]

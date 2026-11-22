@@ -109,6 +109,9 @@ _ROLE_ADVICE = {
 }
 
 
+MAX_EVIDENCE_PER_POINT = 3
+
+
 def offline_coach(evidence: EvidenceSet, limit: int = 6, role: str = "") -> CoachOutput:
     """Template coaching straight from the evidence, for when no LLM is configured. Every
     point quotes its evidence sentence, so it is grounded by construction."""
@@ -116,18 +119,25 @@ def offline_coach(evidence: EvidenceSet, limit: int = 6, role: str = "") -> Coac
         (e for e in evidence.items if e.polarity in ("weakness", "strength")),
         key=lambda e: (e.polarity != "weakness", -e.severity),
     )
+    # One point per area and side: three farming findings are one thing to work on, told by
+    # the strongest of them and backed by the rest, not three cards saying the same.
+    groups: dict[tuple[str, str], list] = {}
+    for e in ranked:
+        area = e.area if e.area in _ADVICE else "survival"
+        groups.setdefault((area, e.polarity), []).append(e)
     points = []
-    for e in ranked[:limit]:
-        weak = e.polarity == "weakness"
+    for (area, polarity), items in list(groups.items())[:limit]:
+        weak = polarity == "weakness"
+        lead = items[0]
         points.append(CoachPoint(
-            area=e.area if e.area in _ADVICE else "survival",
-            kind=e.polarity,
-            title=("Work on " if weak else "Keep up ") + e.area,
-            explanation=e.text,
-            advice=(_ROLE_ADVICE.get(role, {}).get(e.area)
-                    or _ADVICE.get(e.area, _ADVICE["survival"])) if weak else
+            area=area,
+            kind=polarity,
+            title=("Work on " if weak else "Keep up ") + area,
+            explanation=lead.text,
+            advice=(_ROLE_ADVICE.get(role, {}).get(lead.area)
+                    or _ADVICE.get(lead.area, _ADVICE["survival"])) if weak else
                    "This is a strength; keep doing what produced it.",
-            evidence_ids=[e.id],
+            evidence_ids=[e.id for e in items[:MAX_EVIDENCE_PER_POINT]],
         ))
     # No counts in the headline: "4 areas to work on" is a number no evidence item states,
     # and the grounding check (rightly) rejects it.

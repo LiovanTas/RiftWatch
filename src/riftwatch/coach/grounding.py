@@ -99,11 +99,28 @@ def validate(output: CoachOutput, evidence: EvidenceSet) -> list[Violation]:
 
 
 def without_violations(output: CoachOutput, problems: list[Violation]) -> tuple[CoachOutput, list[CoachPoint]]:
-    """Drop every point with a violation. A bad headline is replaced by a neutral one."""
+    """Drop every point with a violation. A bad headline is replaced by a neutral one. Points
+    left on the same area and side are merged into the first (its words, everyone's
+    evidence), so the page never shows two cards saying the same thing."""
     bad = {v.point for v in problems if v.point is not None}
     kept = [p for i, p in enumerate(output.points) if i not in bad]
     dropped = [p for i, p in enumerate(output.points) if i in bad]
     headline = output.headline
     if any(v.point is None for v in problems):
         headline = "Coaching notes for this game, based on the measured evidence below."
-    return CoachOutput(headline=headline, points=kept), dropped
+    return CoachOutput(headline=headline, points=merge_same_area(kept)), dropped
+
+
+def merge_same_area(points: list[CoachPoint]) -> list[CoachPoint]:
+    """One point per (area, kind): later ones fold their evidence into the first."""
+    out: list[CoachPoint] = []
+    seen: dict[tuple[str, str], CoachPoint] = {}
+    for p in points:
+        key = (p.area, p.kind)
+        if key in seen:
+            first = seen[key]
+            first.evidence_ids = first.evidence_ids + [e for e in p.evidence_ids if e not in first.evidence_ids]
+            continue
+        seen[key] = p
+        out.append(p)
+    return out

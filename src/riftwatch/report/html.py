@@ -355,12 +355,16 @@ def coach_html(result: CoachResult, coach_url: str | None = None) -> str:
               else f"{result.model}{' · cached' if result.cached else ''}")
     parts = [f'<p class="headline">{_esc(result.output.headline)}</p>']
     for point in result.output.points:
-        cited = " ".join(f"[{e}] {by_id[e].text}" for e in point.evidence_ids if e in by_id)
+        cited = [by_id[e].text for e in point.evidence_ids if e in by_id]
+        # The template coach's explanation is its first finding word for word: list only the
+        # rest, each cut to its first sentence, folded away until asked for.
+        others = [_first_sentence(_plain(t)) for t in cited if t != point.explanation]
+        ev = (f'<details class="ev"><summary>{len(others)} more finding{"s" if len(others) != 1 else ""} behind this</summary>'
+              f'<ul>{"".join(f"<li>{_esc(t)}</li>" for t in others)}</ul></details>' if others else "")
         parts.append(
             f'<div class="point"><div class="kind">{"work on" if point.kind == "weakness" else "strength"}'
             f" · {_esc(point.area)}</div><h4>{_esc(point.title)}</h4>"
-            f"<p>{_esc(point.explanation)}</p><p class=\"advice\">{_esc(point.advice)}</p>"
-            f'<p class="ev">Evidence: {_esc(cited)}</p></div>'
+            f"<p>{_esc(_plain(point.explanation))}</p><p class=\"advice\">{_esc(point.advice)}</p>{ev}</div>"
         )
     if result.dropped:
         parts.append(f'<p class="meta">{len(result.dropped)} point(s) removed by the grounding check.</p>')
@@ -447,6 +451,27 @@ for (const b of document.querySelectorAll('button[data-post]')) {
   });
 }
 """
+
+
+def _plain(text: str) -> str:
+    """A finding as a player reads it: without the comparison group's bookkeeping (who it was
+    compared with and how many, the Master+ median), first letter capitalised. The numbers that
+    matter stay; the full sentence is still in the evidence the coach was given."""
+    import re
+
+    out = re.sub(r"\s*\((?:vs [^()]*|n=[\d,]+)\)", "", text)
+    out = re.sub(r"\s*Master\+ median: [^.]*\.", "", out).strip()
+    return out[:1].upper() + out[1:] if out else out
+
+
+def _first_sentence(text: str, limit: int = 170) -> str:
+    """A finding's first sentence (a long evidence item runs on with the details behind it)."""
+    import re
+
+    first = re.split(r"(?<=[.!?])\s+(?=[A-Z])", text.strip(), maxsplit=1)[0]
+    if len(first) > 130 and "; " in first:                   # the clause that says what happened
+        first = first.split("; ", 1)[0] + "."
+    return first if len(first) <= limit else first[: limit - 1].rsplit(" ", 1)[0] + "…"
 
 
 def nav(links: list[tuple[str, str]]) -> str:
