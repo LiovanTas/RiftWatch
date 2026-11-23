@@ -42,23 +42,41 @@ class Window:
     seconds: float
 
 
-def parse_limits(header: str) -> list[Window]:
-    """``"20:1,100:120"`` -> ``[Window(20, 1), Window(100, 120)]``."""
+def parse_limits(header: str, *, allow_zero: bool = False) -> list[Window]:
+    """``"20:1,100:120"`` -> ``[Window(20, 1), Window(100, 120)]``. A zero count is only
+    meaningful as a tally (``allow_zero``), never as a limit."""
     windows = []
     for part in header.split(","):
         limit, sep, seconds = part.strip().partition(":")
         if not sep:
             raise ValueError(f"malformed rate-limit header {header!r}")
         window = Window(int(limit), float(seconds))
-        if window.limit <= 0 or window.seconds <= 0:
+        if window.seconds <= 0 or window.limit < 0 or (window.limit == 0 and not allow_zero):
             raise ValueError(f"non-positive rate limit in {header!r}")
         windows.append(window)
     return windows
 
 
 def parse_counts(header: str) -> dict[float, int]:
-    """``"3:1,57:120"`` -> ``{1.0: 3, 120.0: 57}`` (window seconds -> requests counted)."""
-    return {w.seconds: w.limit for w in parse_limits(header)}
+    """``"3:1,57:120"`` -> ``{1.0: 3, 120.0: 57}`` (window seconds -> requests counted).
+    Riot can report a window it hasn't counted anything in yet (``"0:60"``)."""
+    return {w.seconds: w.limit for w in parse_limits(header, allow_zero=True)}
+
+
+def _announced(header: str) -> list[Window] | None:
+    """The windows a response announces, or None when the header can't be used. A window of
+    zero requests can't be enforced (no slot ever frees), so it's left to Riot's 429s."""
+    try:
+        return [w for w in parse_limits(header, allow_zero=True) if w.limit > 0]
+    except ValueError:
+        return None
+
+
+def _tallied(header: str) -> dict[float, int] | None:
+    try:
+        return parse_counts(header)
+    except ValueError:
+        return None
 
 
 class Bucket:
@@ -169,19 +187,22 @@ class RateLimiter:
             waited += wait
 
     def update_from_headers(self, routing: str, method: str, headers: Mapping[str, str]) -> None:
-        """Learn limits and Riot's request tally from a response's headers."""
+        """Learn limits and Riot's request tally from a response's headers. A header that
+        can't be used is ignored: it's advice, and the response it came with is still good."""
         h = {k.lower(): v for k, v in headers.items()}
         with self._lock:
             now = self._clock()
             self._buckets(routing, method)  # make sure the app bucket exists
             app = self._app[routing]
-            if "x-app-rate-limit" in h:
-                app.set_limits(parse_limits(h["x-app-rate-limit"]))
-            if "x-app-rate-limit-count" in h:
-                app.sync_counts(parse_counts(h["x-app-rate-limit-count"]), now)
+            windows = _announced(h["x-app-rate-limit"]) if "x-app-rate-limit" in h else None
+            if windows:
+                app.set_limits(windows)
+            counts = _tallied(h["x-app-rate-limit-count"]) if "x-app-rate-limit-count" in h else None
+            if counts:
+                app.sync_counts(counts, now)
 
-            if "x-method-rate-limit" in h:
-                windows = parse_limits(h["x-method-rate-limit"])
+            windows = _announced(h["x-method-rate-limit"]) if "x-method-rate-limit" in h else None
+            if windows:
                 bucket = self._method.get((routing, method))
                 if bucket is None:
                     bucket = self._method[routing, method] = Bucket(windows, self._pad_s)
@@ -189,10 +210,9 @@ class RateLimiter:
                     bucket.consume(now)
                 else:
                     bucket.set_limits(windows)
-            if "x-method-rate-limit-count" in h and (routing, method) in self._method:
-                self._method[routing, method].sync_counts(
-                    parse_counts(h["x-method-rate-limit-count"]), now
-                )
+            counts = _tallied(h["x-method-rate-limit-count"]) if "x-method-rate-limit-count" in h else None
+            if counts and (routing, method) in self._method:
+                self._method[routing, method].sync_counts(counts, now)
 
     def block(self, routing: str, seconds: float, method: str | None = None) -> None:
         """Hold back all calls on ``routing`` (or just ``method`` there) for ``seconds`` --

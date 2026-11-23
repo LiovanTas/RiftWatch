@@ -112,6 +112,29 @@ def test_stale_running_job_is_retried(queue):
     assert queue.claim()[0] == job.id
 
 
+def test_a_long_job_keeps_beating_so_it_isnt_run_twice(queue):
+    import time
+
+    from riftwatch.web.jobs import JobQueue
+
+    q = JobQueue(queue.pool, workers=0, stale_after_s=0.6, heartbeat_s=0.1)
+    started = threading.Event()
+
+    def slow(params, progress):          # waiting on Riot's rate limit, say: nothing to report
+        started.set()
+        time.sleep(1.5)
+        return "ok"
+    q.register("slow", slow)
+    job, _ = q.submit("k", "slow", {})
+    runner = threading.Thread(target=q.run_one)
+    runner.start()
+    assert started.wait(5)
+    time.sleep(1.0)                      # well past stale_after_s without any progress
+    assert q.claim() is None             # still beating, so nobody takes it a second time
+    runner.join()
+    assert q.get(job.id).status == "done"
+
+
 def test_only_registered_kinds_are_claimed(queue):
     queue.submit("k", "unknown_kind", {})
     assert queue.claim() is None

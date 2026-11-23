@@ -50,6 +50,17 @@ def test_parse_limits_rejects(bad):
 
 def test_parse_counts():
     assert parse_counts("3:1,57:120") == {1.0: 3, 120.0: 57}
+    assert parse_counts("0:60") == {60.0: 0}           # a window Riot hasn't counted anything in yet
+
+
+def test_unusable_headers_never_fail_the_request():
+    # A sync failed on "non-positive rate limit in '0:60'": headers are advice, not a reason
+    # to throw away a good response.
+    rl, _ = limiter("5:10")
+    rl.update_from_headers("na1", "summoner", {"X-Method-Rate-Limit": "0:60", "X-Method-Rate-Limit-Count": "0:60",
+                                                 "X-App-Rate-Limit-Count": "0:60", "X-App-Rate-Limit": "junk"})
+    rl.update_from_headers("na1", "summoner", {"X-Method-Rate-Limit": "1600:60", "X-Method-Rate-Limit-Count": "0:60"})
+    assert rl.acquire("na1", "summoner") == 0.0
 
 
 # -- the core guarantee ---------------------------------------------------------------------

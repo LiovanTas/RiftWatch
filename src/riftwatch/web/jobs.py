@@ -6,7 +6,9 @@ Any number of server processes can run workers against the same table:
   the same one;
 * "next" means: from whichever owner (visitor) has the fewest jobs running, oldest first --
   one visitor queuing several syncs can't make everyone else wait;
-* a running job that stops sending heartbeats (its process died) goes back to the queue.
+* a running job that stops sending heartbeats (its process died) goes back to the queue. The
+  worker beats on its own thread while a job runs, so a job that's merely waiting (on Riot's
+  rate limit, shared with a crawl on the same key) is never taken for dead and run twice.
 
 Jobs are stored as a *kind* plus JSON *params*; each process registers a handler per kind,
 since a job may be picked up by a different process than the one that queued it.
@@ -71,13 +73,17 @@ def _job(row) -> Job:
 
 class JobQueue:
     def __init__(self, pool: ConnectionPool, *, workers: int = 2, cooldown_s: float = 60.0,
-                 stale_after_s: float = 120.0, poll_s: float = 0.25) -> None:
+                 stale_after_s: float = 120.0, poll_s: float = 0.25, heartbeat_s: float | None = None) -> None:
         self.pool = pool
         self.handlers: dict[str, Handler] = {}
         self.workers = workers
         self.cooldown_s = cooldown_s
         self.stale_after_s = stale_after_s
         self.poll_s = poll_s
+        # A running job's worker beats this often whatever the job is doing, so a job that
+        # waits a long time (on Riot's rate limit, say) isn't mistaken for a dead one and run
+        # a second time.
+        self.heartbeat_s = heartbeat_s if heartbeat_s is not None else stale_after_s / 4
         self.name = f"{socket.gethostname()}:{os.getpid()}"
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -171,18 +177,33 @@ class JobQueue:
                  error, job_id),
             )
 
+    def _beat(self, job_id: int) -> None:
+        with self.pool.connection() as conn:
+            conn.execute("UPDATE jobs SET heartbeat = now() WHERE id = %s AND status = 'running'", (job_id,))
+
     def run_one(self) -> bool:
         """Claim and run one job. Returns False if there was nothing to do."""
         claimed = self.claim()
         if claimed is None:
             return False
         job_id, kind, params = claimed
+        done = threading.Event()
+
+        def beat() -> None:                 # alive as long as this process is running the job
+            while not done.wait(self.heartbeat_s):
+                try:
+                    self._beat(job_id)
+                except Exception:           # database hiccup: the next beat will do
+                    pass
+        threading.Thread(target=beat, name=f"riftwatch-beat-{job_id}", daemon=True).start()
         try:
             result = self.handlers[kind](params, lambda msg: self._progress(job_id, msg))
             self._finish(job_id, result=result)
         except Exception as exc:  # a job's failure is recorded, never raised into the worker
             self._progress(job_id, traceback.format_exc(limit=1).strip().splitlines()[-1])
             self._finish(job_id, error=f"{type(exc).__name__}: {exc}")
+        finally:
+            done.set()
         return True
 
     def _worker(self) -> None:
