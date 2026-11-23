@@ -24,7 +24,6 @@
         {% if head and head.level %}<span class="lv">{{ head.level }}</span>{% endif %}
       </div>
       <div class="who">
-        <div class="eyebrow">Player file</div>
         <h1>{{ name }} <span class="tag">#{{ tag }}</span></h1>
         <div class="meta-line">
           <span class="reg">{{ region|upper }}</span>
@@ -118,7 +117,7 @@
         </div>
         {% if summary.trend|length > 2 %}
         <div class="trend">
-          <span class="eyebrow" style="color:var(--muted)">Score per game</span>
+          <span class="lbl">Score per game</span>
           <div class="bars" role="img" aria-label="Performance score of each recent game, oldest first">
             {% for t in summary.trend %}<i class="{{ t.result }}" style="height:{{ (t.score * 10)|round|int if t.result != 'remake' else 6 }}%" data-tip="{{ t.champion }} &middot; {{ t.result|replace('win', 'Victory')|replace('loss', 'Defeat')|replace('remake', 'Remake') }}&#10;Score {{ t.score }} &middot; {{ t.kda }} &middot; {{ t.when }}"></i>{% endfor %}
           </div>
@@ -126,7 +125,7 @@
         </div>
         {% endif %}
         <div class="top-champs">
-          <span class="eyebrow" style="color:var(--muted)">Picks</span>
+          <span class="lbl">Picks</span>
           {% for c in summary.champions %}
           <div class="tc"><img src="{{ c.icon }}" alt="" loading="lazy"><div><b>{{ c.name }}</b> {{ wr(c.win_rate) }} <span>{{ c.wins }}W {{ c.losses }}L &middot; {{ c.kda }} KDA</span></div></div>
           {% endfor %}
@@ -240,11 +239,11 @@
     <aside class="side">
       {% if focus %}
       <div class="panel focus">
-        <div class="panel-head"><span><span class="n">00</span>Focus: {{ focus.title|lower }}</span><span class="muted small">{{ focus.games }} of {{ focus.of }} games</span></div>
+        <div class="panel-head"><span>Focus: {{ focus.title|lower }}</span><span class="muted small">{{ focus.games }} of {{ focus.of }} games</span></div>
         <div class="panel-body">
           <p>{{ focus.phrase[:1]|upper }}{{ focus.phrase[1:] }} came up in <b>{{ focus.games }}</b> of your last {{ focus.of }} games. You average <b>{{ focus.average }}</b>{% if focus.typical %}; typical for {{ focus.who }} is <b>{{ focus.typical }}</b>{% endif %}.</p>
           {{ focus.spark|safe }}
-          <div class="focus-trend {{ focus.trend }}">{% if focus.trend == 'better' %}&#9650; Getting better: {{ focus.recent }} in the newer half of these games, from {{ focus.earlier }}.{% elif focus.trend == 'worse' %}&#9660; Getting worse: {{ focus.recent }} in the newer half, from {{ focus.earlier }}.{% else %}Steady at {{ focus.recent }}.{% endif %}</div>
+          <div class="focus-trend {{ focus.trend }}">{% if focus.trend == 'better' %}<i class="tri up" aria-hidden="true"></i> Getting better: {{ focus.recent }} in the newer half of these games, from {{ focus.earlier }}.{% elif focus.trend == 'worse' %}<i class="tri down" aria-hidden="true"></i> Getting worse: {{ focus.recent }} in the newer half, from {{ focus.earlier }}.{% else %}Steady at {{ focus.recent }}.{% endif %}</div>
           <span class="muted small">Dots below the dashed line are games under the typical value. Oldest on the left.</span>
         </div>
       </div>
@@ -274,7 +273,7 @@
       {% endif %}
       {% if summary and (summary.patterns.good or summary.patterns.bad) %}
       <div class="panel patterns">
-        <div class="panel-head"><span><span class="n">01</span>Patterns</span><span class="muted small">in {{ summary.games }} games</span></div>
+        <div class="panel-head"><span>Patterns</span><span class="muted small">in {{ summary.games }} games</span></div>
         <div class="panel-body">
           {% for kind, title in (('good', 'Keeps doing well'), ('bad', 'Keeps coming up')) %}{% if summary.patterns[kind] %}
           <h4>{{ title }}</h4>
@@ -285,7 +284,7 @@
       {% endif %}
       {% if season %}
       <div class="panel">
-        <div class="panel-head"><span><span class="n">02</span>Season {{ year }} champions</span><a class="muted small" href="?tab=champions">All &rarr;</a></div>
+        <div class="panel-head"><span>Season {{ year }} champions</span><a class="muted small" href="?tab=champions">All &rarr;</a></div>
         <div class="panel-body" style="padding-top:6px;padding-bottom:6px">
           <table class="mini-table">
           {% for c in season[:7] %}
@@ -301,7 +300,7 @@
       {% endif %}
       {% if friends %}
       <div class="panel">
-        <div class="panel-head"><span><span class="n">03</span>Duo partners</span><span class="muted small">last 60 games</span></div>
+        <div class="panel-head"><span>Duo partners</span><span class="muted small">last 60 games</span></div>
         <div class="panel-body" style="padding-top:6px;padding-bottom:6px">
           <table class="mini-table">
           {% for f in friends %}
@@ -321,7 +320,7 @@
 {% elif tab == 'champions' %}
   {% if try and try.picks %}
   <div class="panel try-panel" style="margin-top:20px">
-    <div class="panel-head"><span><span class="n">&#9733;</span>Champions to try</span><span class="muted small">strong in {{ try.role|lower }} right now{% if try.best %}, chosen to suit your {{ try.best|join(' and ') }}{% endif %}</span></div>
+    <div class="panel-head"><span>Champions to try</span><span class="muted small">strong in {{ try.role|lower }} right now{% if try.best %}, chosen to suit your {{ try.best|join(' and ') }}{% endif %}</span></div>
     <div class="panel-body try-grid">
       {% for c in try.picks %}<a class="try-card" href="/champions/{{ c.slug }}?role={{ try.position|lower }}"><img src="{{ c.icon }}" alt=""><div><b>{{ c.name }}</b> <span class="tier-b t-{{ c.tier|replace('+', 'p') }}">{{ c.tier }}</span><p>{{ c.reason[:1]|upper }}{{ c.reason[1:] }}</p><small>{{ c.win_rate|round|int }}% win rate over {{ '{:,}'.format(c.games) }} games{% if c.played %} &middot; you've played {{ c.played }}{% endif %}</small></div></a>{% endfor %}
     </div>
@@ -329,7 +328,7 @@
   {% endif %}
   {% if records %}
   <div class="panel" style="margin-top:12px">
-    <div class="panel-head"><span><span class="n">&#9873;</span>Personal records</span><span class="muted small">every stored game</span></div>
+    <div class="panel-head"><span>Personal records</span><span class="muted small">every stored game</span></div>
     <div class="panel-body records">
       {% for r in records %}<a class="rec" href="{{ r.url }}"><img src="{{ r.icon }}" alt=""><div><span>{{ r.label }}</span><b>{{ r.value }}</b><small>{{ r.champion }} {{ r.kda }} &middot; {{ r.date }} &middot; {{ 'win' if r.win else 'loss' }}</small></div></a>{% endfor %}
     </div>
@@ -339,7 +338,7 @@
   <div class="cols-2" style="margin:20px 0 12px">
     {% for kind, title, note in (('hard', 'Your hardest lane opponents', 'most losses beyond an even record'), ('easy', 'Your easiest lane opponents', 'most wins beyond an even record')) %}
     <div class="panel">
-      <div class="panel-head"><span><span class="n">{{ '01' if kind == 'hard' else '02' }}</span>{{ title }}</span><span class="muted small">{{ note }}</span></div>
+      <div class="panel-head"><span>{{ title }}</span><span class="muted small">{{ note }}</span></div>
       <div class="panel-body">
         {% for m in matchups[kind] %}
         <div class="pm-row">
@@ -399,7 +398,7 @@
 {% elif tab == 'live' %}
   <div style="margin:20px 0 40px">
     {% if live %}
-      <div class="panel" style="margin-bottom:12px"><div class="panel-head"><span><span class="n">LIVE</span>{{ live.queue }} &middot; {{ live.platform|upper }} &middot; {{ live.clock }} in when scouted</span>
+      <div class="panel" style="margin-bottom:12px"><div class="panel-head"><span><span class="badge live">Live</span> {{ live.queue }} &middot; {{ live.platform|upper }} &middot; {{ live.clock }} in when scouted</span>
         <button class="btn" data-scout="{{ scout_url }}" type="button">{{ icon('refresh') }} Refresh</button></div></div>
       {% include "_pregame.html" %}
       {% for team in live.teams %}

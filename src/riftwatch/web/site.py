@@ -134,10 +134,19 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             if ranked:
                 rows = champ_stats.tier_list(conn, changes=patch_changes(),
                                              systems=item_changes())["rows"]
-                for r in [r for r in rows if r["tier"] in ("S+", "S")][:12]:
+                overall = [r for r in rows if r["tier"] in ("S+", "S")][:12]
+                by_role: dict[str, list] = {}
+                for r in rows:                         # rows are best first: each role's top six
+                    if len(by_role.setdefault(r["position"], [])) < 6:
+                        by_role[r["position"]].append(r)
+                picked = {id(r): r for r in overall + [r for rs in by_role.values() for r in rs]}
+                role_top = {id(r) for rs in by_role.values() for r in rs}
+                all_top = {id(r) for r in overall}
+                for r in picked.values():
                     c = gd.champion(r["champion_id"])
                     top.append({"name": c.name, "slug": c.slug, "icon": gd.champion_icon(c.id),
                                 "role": gamedata.POSITIONS.get(r["position"], ""),
+                                "in_all": id(r) in all_top, "in_role": id(r) in role_top,
                                 "position": r["position"], "tier": r["tier"],
                                 "win_rate": r["win_rate"]})
             try:
@@ -147,10 +156,15 @@ def register(app: FastAPI, services, *, coach, advisor, brain,
             except Exception as exc:                  # noqa: BLE001 -- the home page still shows
                 log.warning("highlights failed: %s", exc)
                 plays = []
+            try:
+                feature = swingview.feature_game(conn, gd, plays[0] if plays else None)
+            except Exception as exc:                  # noqa: BLE001 -- the hero falls back to its text
+                log.warning("feature game failed: %s", exc)
+                feature = None
         stats = {"games": games, "ranked": ranked, "players": players,
                  "champions": len(gd.champions) or 170, "patch": ".".join(gd.version.split(".")[:2])}
         return render("home.html", nav="home", stats=stats, top_champions=top,
-                      watch=patch_watch()[:2], plays=plays)
+                      watch=patch_watch()[:2], plays=plays, feature=feature)
 
     def search_error(message: str) -> HTMLResponse:
         return render("home.html", status=400, nav="home", error=message,

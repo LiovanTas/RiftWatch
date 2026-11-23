@@ -800,4 +800,17 @@
       try { await navigator.clipboard.writeText(location.href); const t = b.innerHTML; b.textContent = 'Copied!'; setTimeout(() => (b.innerHTML = t), 1400); } catch {}
     });
   }
+
+  // -- home: role tabs on the meta preview ----------------------------------------------------
+  for (const tabs of document.querySelectorAll('.meta-tabs')) {
+    tabs.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-meta-role]');
+      if (!b) return;
+      for (const x of tabs.querySelectorAll('button')) { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', String(x === b)); }
+      const role = b.dataset.metaRole;
+      for (const t of document.querySelectorAll('.meta-tile')) {
+        t.hidden = role ? !(t.dataset.role === role && t.dataset.rtop === '1') : t.dataset.all !== '1';
+      }
+    });
+  }
 })();

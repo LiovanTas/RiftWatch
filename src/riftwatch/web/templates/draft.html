@@ -2,9 +2,9 @@
 {% block title %}Draft Assistant: What to Pick in Champ Select | RiftWatch{% endblock %}
 {% block description %}Which champion to pick in champ select, given the bans, both teams' picks, your role, your champion pool and your playstyle, from stored ranked games.{% endblock %}
 {% block content %}
+<!-- impeccable-disable broken-image: hidden slots draft.js fills when a champion is picked -->
 <div class="container draft" id="draft" data-champs="{{ champs_json }}" data-role="{{ role }}">
   <div class="page-title">
-    <div class="eyebrow">Champ select</div>
     <h1>Draft assistant</h1>
     <p>Enter the bans and picks as they happen. RiftWatch ranks champions for your role by expected win chance, built from stored ranked games: the champion's strength at your rank, the lane matchup, how it has done with your team's picks and against theirs, what it does to your team's damage mix and frontline, and, with your Riot ID, your comfort on it and the kind of champion you win on.</p>
     <p class="muted small">Riot's public API doesn't show champ select, so picks are typed in by hand; RiftWatch never reads the game client.</p>

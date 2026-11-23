@@ -1,42 +1,54 @@
 {% extends "base.html" %}
 {% from "_macros.html" import icon, search_form, tier_badge, wr, pos_icon, patch_row %}
+{% macro wp_svg(g, cls) -%}
+<svg class="wp-graph {{ cls }}" viewBox="0 0 {{ g.width }} {{ g.height }}" role="img" aria-label="Blue's chance to win over the game, with the three biggest moments numbered">
+  <defs>
+    <clipPath id="wp-up-{{ cls }}"><rect x="0" y="0" width="{{ g.width }}" height="{{ g.mid }}"/></clipPath>
+    <clipPath id="wp-down-{{ cls }}"><rect x="0" y="{{ g.mid }}" width="{{ g.width }}" height="{{ g.height }}"/></clipPath>
+  </defs>
+  <path class="blue" d="{{ g.area }}" clip-path="url(#wp-up-{{ cls }})"/>
+  <path class="red" d="{{ g.area }}" clip-path="url(#wp-down-{{ cls }})"/>
+  <line class="mid" x1="0" x2="{{ g.width }}" y1="{{ g.mid }}" y2="{{ g.mid }}"/>
+  <text class="tick" x="{{ g.width - 4 }}" y="{{ g.mid - 5 }}" text-anchor="end">50%</text>
+  <path class="line" d="{{ g.line }}"/>
+  <text class="side b" x="6" y="{{ g.top + 12 }}">Blue ahead</text>
+  <text class="side r" x="6" y="{{ g.bottom - 6 }}">Red ahead</text>
+  {% for t in g.ticks %}<text class="tick" x="{{ t.x }}" y="{{ g.height - 6 }}" text-anchor="{{ 'start' if loop.first else 'middle' }}">{{ t.label }}</text>{% endfor %}
+  {% for d in g.dots %}<g class="mk"><circle cx="{{ d.cx }}" cy="{{ d.cy }}" r="11"/><text x="{{ d.cx }}" y="{{ d.cy }}">{{ d.n }}</text></g>{% endfor %}
+</svg>
+{%- endmacro %}
 {% block content %}
 <section class="hero">
   <div class="container">
     <div>
-      <div class="eyebrow">Post-game analysis for League of Legends</div>
-      <h1>Every minute of your game, <em>measured</em> against your rank.</h1>
-      <p class="lead">Look up any Riot ID in any region. RiftWatch lays out the match history, then shows where you gained and lost ground compared with players at your rank, in your role, on your champion.</p>
+      <h1>See the plays that <em>decided</em> your game.</h1>
+      <p class="lead">Look up any Riot ID. RiftWatch finds the moments that moved your chance to win, scores every minute against players at your rank, and coaches you only with numbers it can show.</p>
       {{ search_form(regions, 'auto', big=True) }}
       {% if error %}<p class="err">{{ error }}</p>{% endif %}
+      <p class="proof">{{ '{:,}'.format(stats.games) }} games analysed &middot; {{ '{:,}'.format(stats.players) }} players seen &middot; patch {{ stats.patch }} &middot; <a href="/about">how it works</a></p>
       <div class="chips" id="recent-chips"></div>
     </div>
-    <div class="hero-card" aria-hidden="true">
-      <div class="top"><b>CS at each minute</b><span class="eyebrow">sample review</span></div>
-      <svg class="spark" viewBox="0 0 420 150">
-        <path class="band" d="M10,128 C80,112 140,88 210,66 C280,46 340,30 410,18 L410,52 C340,62 280,76 210,94 C140,112 80,130 10,140 Z"/>
-        <path class="med" d="M10,134 C80,121 140,100 210,80 C280,61 340,46 410,35"/>
-        <path class="you" d="M10,136 C70,126 120,112 170,104 C220,96 250,93 290,88 C330,83 370,74 410,66"/>
-        <text class="lbl" x="10" y="12">minute 0</text><text class="lbl" x="410" y="148" text-anchor="end">minute 20</text>
-      </svg>
-      <div class="legend"><span><i style="background:var(--win)"></i>you</span><span><i style="background:var(--accent)"></i>typical at your rank</span><span><i style="background:var(--accent-soft);height:8px"></i>middle half</span></div>
-      <div class="note"><b>Work on farming.</b> From minute 7 your CS stayed in the bottom quarter of Platinum mid laners: 132 at minute 29 against a typical 204.</div>
-    </div>
+    {% if feature %}
+    <figure class="wp-card hero-card">
+      <div class="wp-top"><h2>The biggest swing in recent ranked games</h2><a href="/games/{{ feature.match_id }}">Open the game &rarr;</a></div>
+      <p class="wp-sub">Blue's chance to win, from the first minute to the last{% if feature.winner %}. {{ feature.winner }} won after {{ feature.minutes }} minutes{% endif %}.</p>
+      {{ wp_svg(feature.wide, 'wide') }}
+      {{ wp_svg(feature.narrow, 'narrow') }}
+      <ol class="wp-moments" aria-label="The three biggest moments, in Swing points of win chance">
+        {% for m in feature.marks %}<li class="{{ m.side }}"><span class="k">{{ m.n }}</span>{% if m.icon %}<img src="{{ m.icon }}" alt="" loading="lazy">{% else %}<span></span>{% endif %}<span class="t"><b>{{ m.text }}</b><span>{{ m.clock }} &middot; {{ m.player }}{% if m.champion %} on {{ m.champion }}{% endif %}</span></span><span class="d" data-tip="Swing&#10;points of win chance this moment moved, credited to the player who made it">+{{ m.swing }}</span></li>{% endfor %}
+      </ol>
+    </figure>
+    {% endif %}
   </div>
 </section>
 <div class="container">
-  <div class="ticker">
-    <div><b>{{ '{:,}'.format(stats.games) }}</b><span>games analysed</span></div>
-    <div><b>{{ '{:,}'.format(stats.players) }}</b><span>players seen</span></div>
-    <div><b>{{ stats.champions }}</b><span>champions tracked</span></div>
-    <div><b>{{ stats.patch }}</b><span>current patch</span></div>
-  </div>
 
   {% if top_champions %}
   <div class="section-title"><h2>Climbing the meta</h2><a href="/champions">full tier board &rarr;</a></div>
+  <div class="seg meta-tabs" role="group" aria-label="Role">{% for r, label in [('', 'All'), ('TOP', 'Top'), ('JUNGLE', 'Jungle'), ('MIDDLE', 'Mid'), ('BOTTOM', 'Bot'), ('UTILITY', 'Support')] %}<button type="button" class="{{ 'on' if not r }}" data-meta-role="{{ r }}" aria-pressed="{{ 'true' if not r else 'false' }}">{{ label }}</button>{% endfor %}</div>
   <div class="meta-strip">
     {% for c in top_champions %}
-    <a class="meta-tile" href="/champions/{{ c.slug }}?role={{ c.position|lower }}">
+    <a class="meta-tile" data-role="{{ c.position }}" data-all="{{ 1 if c.in_all else 0 }}" data-rtop="{{ 1 if c.in_role else 0 }}"{{ " hidden" if not c.in_all }} href="/champions/{{ c.slug }}?role={{ c.position|lower }}">
       <div class="row1"><img src="{{ c.icon }}" alt="" loading="lazy">{{ tier_badge(c.tier) }}</div>
       <b>{{ c.name }}</b>
       <span>{{ c.role }} &middot; {{ wr(c.win_rate) }}</span>
@@ -70,14 +82,5 @@
   </div>
   {% endif %}
 
-  <div class="section-title"><h2>How a review works</h2><a href="/about">the method &rarr;</a></div>
-  <div class="steps">
-    <div class="step-item"><span class="n">01</span><h3>Every game, laid out</h3><p>Items, runes, KDA, farm, vision and all ten players for each game, with what went well and what didn't, build and skill order, and the gold lead over time.</p></div>
-    <div class="step-item"><span class="n">02</span><h3>Scored against your rank</h3><p>Each minute is compared with players at your rank, in your role, on your champion and matchup, so the numbers mean something.</p></div>
-    <div class="step-item"><span class="n">03</span><h3>Coaching that cites its sources</h3><p>An AI coach explains the biggest gaps, and every number it quotes has to appear in the measured evidence.</p></div>
-    <div class="step-item"><span class="n">04</span><h3>Habits over time</h3><p>Weekly progress against a fixed yardstick, your champion pool, and whether you slip late in a session or after losses.</p></div>
-    <div class="step-item"><span class="n">05</span><h3>Learned from high-elo play</h3><p>Models trained on Grandmaster and Challenger games show what top players do in spots like yours. Replay any game on the minimap beside their choices.</p></div>
-    <div class="step-item"><span class="n">06</span><h3>Live, lobby and meta</h3><p>Scout a game in progress, look up your whole lobby at once, and check builds and a tier board from {{ '{:,}'.format(stats.ranked) }} ranked games that accounts for the latest patch notes.</p></div>
-  </div>
 </div>
 {% endblock %}

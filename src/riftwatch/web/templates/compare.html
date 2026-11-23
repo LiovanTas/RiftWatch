@@ -5,7 +5,6 @@
 {% block content %}
 <div class="container">
   <div class="page-title">
-    <div class="eyebrow">Compare</div>
     <h1>Two players, side by side</h1>
     <p>Recent ranked numbers for each player (their last 50 games), and every stored game they played on the same team or against each other.</p>
   </div>
@@ -61,7 +60,7 @@
   {% if data.h2h %}
   {% set h = data.h2h %}
   <div class="panel h2h" style="margin:12px 0 40px">
-    <div class="panel-head"><span><span class="n">H2H</span>Head to head</span><span class="muted small">stored games only</span></div>
+    <div class="panel-head"><span>Head to head</span><span class="muted small">stored games only</span></div>
     <div class="panel-body h2h-body">
       <div><span>Same team</span><b>{{ h.together }} game{{ 's' if h.together != 1 }}</b><small>{% if h.together %}{{ h.together_wins }}W {{ h.together - h.together_wins }}L ({{ (100 * h.together_wins / h.together)|round|int }}%){% else %}never stored together{% endif %}</small></div>
       <div><span>Against each other</span><b>{{ h.against }} game{{ 's' if h.against != 1 }}</b><small>{% if h.against %}{{ data.sides[0].name }} {{ h.a_wins }} &ndash; {{ h.b_wins }} {{ data.sides[1].name }}{% else %}never stored on opposite teams{% endif %}</small></div>

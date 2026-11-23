@@ -744,3 +744,71 @@ def session_recap(conn, gd: GameData, puuid: str, model, gap_minutes: int = 60) 
             "best": best, "worst": worst, "deaths": deaths, "death_cost": round(cost, 1),
             "death_cost_per_game": round(cost / max(1, len(swung)), 1),
             "death_share": round(death_share / max(1, len(swung)), 1)}
+
+
+def feature_game(conn: psycopg.Connection, gd: GameData, play: dict | None,
+                 width: int = 600, height: int = 210) -> dict | None:
+    """The home page's showcase: the game behind the biggest recent play, as a broadcast-style
+    win-chance graph (blue's chance over the game, shaded blue above 50% and red below) with its
+    three largest Swing moments numbered on the line and credited to the player who made them."""
+    from riftwatch.stats import champions as champ_stats
+
+    return champ_stats.cached(("swing_feature", play["match_id"] if play else None),
+                              lambda: _feature_game(conn, gd, play, width, height))
+
+
+def _feature_game(conn: psycopg.Connection, gd: GameData, play: dict | None, width: int, height: int) -> dict | None:
+    if not play:                 # no highlights for the current model: the latest games worked out will do
+        row = conn.execute("""
+            WITH recent AS (SELECT match_id FROM match_swing ORDER BY created_at DESC LIMIT 1500)
+            SELECT r.match_id, (SELECT max(game_start) FROM participant_builds p WHERE p.match_id = r.match_id)
+              FROM recent r JOIN match_swing s USING (match_id), jsonb_array_elements(s.data->'moments') m
+             WHERE m->>'part' <> 'items' AND jsonb_typeof(m->'by') = 'number'
+               AND EXISTS (SELECT 1 FROM participant_builds p WHERE p.match_id = r.match_id AND p.queue_id = 420)
+             ORDER BY (m->>'swing')::float DESC LIMIT 1""").fetchone()
+        if not row:
+            return None
+        play = {"match_id": row[0], "when": row[1].strftime("%b %d") if row[1] else ""}
+    row = conn.execute("SELECT data FROM match_swing WHERE match_id = %s", (play["match_id"],)).fetchone()
+    sw = row[0] if row else None
+    series = (sw or {}).get("series") or []
+    if len(series) < 2:
+        return None
+    end = max(float(sw.get("end_s") or 0), float(series[-1][0]), 60.0)
+    ranked = sorted((m for m in sw.get("moments") or [] if m.get("part") != "items" and isinstance(m.get("by"), int)),
+                    key=lambda m: -abs(m.get("swing") or 0))
+    moments: list[dict] = []
+    for m in ranked:                 # the biggest moments, at least two minutes apart so the marks don't stack
+        if all(abs(m["t"] - o["t"]) >= 120_000 for o in moments):
+            moments.append(m)
+        if len(moments) == 3:
+            break
+    moments.sort(key=lambda m: m["t"])
+    who = {pid: (champ, name) for pid, champ, name in conn.execute(
+        "SELECT participant_id, champion_id, riot_name FROM participant_builds WHERE match_id = %s", (play["match_id"],))}
+
+    def geom(w: int, h: int) -> dict:
+        pad, top, bottom = 4, 10, h - 24
+
+        def x(t: float) -> float:
+            return round(pad + (w - 2 * pad) * t / end, 1)
+
+        def y(blue: float) -> float:
+            return round(top + (bottom - top) * (100 - blue) / 100, 1)
+        line = " ".join(f"{'M' if i == 0 else 'L'}{x(t)},{y(v)}" for i, (t, v) in enumerate(series))
+        mid = y(50)
+        return {"width": w, "height": h, "top": top, "bottom": bottom, "mid": mid, "line": line,
+                "area": f"{line} L{x(series[-1][0])},{mid} L{x(series[0][0])},{mid} Z",
+                "ticks": [{"x": x(s), "label": f"{s // 60}:00"} for s in range(0, int(end) + 1, 600)],
+                "dots": [{"n": n, "cx": x(m["t"] / 1000), "cy": y(m["after"])} for n, m in enumerate(moments, 1)]}
+
+    marks = []
+    for n, m in enumerate(moments, 1):
+        champ, name = who.get(m["by"], (0, None))
+        marks.append({"n": n, "clock": m["clock"], "text": m["text"], "swing": round(abs(m["swing"]), 1),
+                      "side": "b" if (m.get("team") or 100) == 100 else "r", "player": name or "Unknown",
+                      "champion": gd.champion(champ).name if champ else "", "icon": gd.champion_icon(champ) if champ else ""})
+    winner = sw.get("winner")
+    return {"match_id": play["match_id"], "when": play.get("when", ""), "minutes": round(end / 60), "marks": marks,
+            "winner": "Blue" if winner == 100 else "Red" if winner == 200 else None,
+            "wide": geom(width, height), "narrow": geom(340, 230)}

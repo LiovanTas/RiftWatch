@@ -9,10 +9,10 @@
   <div class="container">
     <div class="portrait"><img src="{{ champ_icon }}" alt="{{ champ.name }}"></div>
     <div>
-      <div class="eyebrow">{{ role_name or "Champion" }}{% if s.games %} &middot; {{ '{:,}'.format(s.games) }} ranked games{% endif %}</div>
       <h1>{{ champ.name }}</h1>
+      <p class="context">{{ role_name or "Champion" }}{% if s.games %} &middot; {{ '{:,}'.format(s.games) }} ranked games{% endif %}</p>
       <div class="title">{{ champ.title }}{% if champ.tags %} &middot; {{ champ.tags|join(', ') }}{% endif %}</div>
-      {% if patch_changes or item_hits %}<div class="hero-patch">{% for c in patch_changes %}<a class="pm-line {{ c.kind }}" href="{{ c.source }}" target="_blank" rel="noopener"><i>{{ {'buff': '▲', 'nerf': '▼', 'adjust': '◆'}[c.kind] }}</i><b>{{ c.patch }}{{ ' preview' if c.status == 'preview' }}</b> {{ c.text }}</a>{% endfor %}{% for c in item_hits %}<span class="pm-line {{ c.kind }}"><i>{{ {'buff': '▲', 'nerf': '▼', 'adjust': '◆'}[c.kind] }}</i><b>{{ c.patch }}{{ ' preview' if c.status == 'preview' }}</b> {{ c.name }} {{ {'buff': 'buffed', 'nerf': 'nerfed', 'adjust': 'changed'}[c.kind] }} ({{ c.text }}), bought in {{ c.usage }}% of {{ champ.name }}'s games</span>{% endfor %}</div>{% endif %}
+      {% if patch_changes or item_hits %}<div class="hero-patch">{% for c in patch_changes %}<a class="pm-line {{ c.kind }}" href="{{ c.source }}" target="_blank" rel="noopener"><i>{{ {'buff': '', 'nerf': '', 'adjust': ''}[c.kind] }}</i><b>{{ c.patch }}{{ ' preview' if c.status == 'preview' }}</b> {{ c.text }}</a>{% endfor %}{% for c in item_hits %}<span class="pm-line {{ c.kind }}"><i>{{ {'buff': '', 'nerf': '', 'adjust': ''}[c.kind] }}</i><b>{{ c.patch }}{{ ' preview' if c.status == 'preview' }}</b> {{ c.name }} {{ {'buff': 'buffed', 'nerf': 'nerfed', 'adjust': 'changed'}[c.kind] }} ({{ c.text }}), bought in {{ c.usage }}% of {{ champ.name }}'s games</span>{% endfor %}</div>{% endif %}
       {% if abilities %}
       <div class="abil">{% for a in abilities %}<div class="slot" data-tip="{{ a.key }} &middot; {{ a.name }}&#10;{{ a.text }}"><img src="{{ a.icon }}" alt="{{ a.name }}" loading="lazy"><span>{{ a.key }}</span></div>{% endfor %}</div>
       {% endif %}
@@ -59,7 +59,7 @@
 
   <div class="cols-2">
     <div class="panel">
-      <div class="panel-head"><span><span class="n">01</span>Runes</span><span class="muted small">most played</span></div>
+      <div class="panel-head"><span>Runes</span><span class="muted small">most played</span></div>
       <div class="panel-body">
         {% if page %}
         <div class="runepage" style="margin-bottom:12px">
@@ -80,7 +80,7 @@
       </div>
     </div>
     <div class="panel">
-      <div class="panel-head"><span><span class="n">02</span>Summoner spells &amp; skills</span></div>
+      <div class="panel-head"><span>Summoner spells &amp; skills</span></div>
       <div class="panel-body">
         {% for sp in spells %}
         <div class="build-row"><div class="its">{% for x in sp.spells %}<div class="slot" data-tip="{{ x.name }}{% if x.text %}&#10;{{ x.text }}{% endif %}"><img src="{{ x.icon }}" alt="{{ x.name }}" loading="lazy"></div>{% endfor %}</div>
@@ -101,7 +101,7 @@
 
   <div class="cols-2" style="margin-top:12px">
     <div class="panel">
-      <div class="panel-head"><span><span class="n">03</span>Core builds</span><span class="muted small">first three finished items</span></div>
+      <div class="panel-head"><span>Core builds</span><span class="muted small">first three finished items</span></div>
       <div class="panel-body">
         {% for b in core %}
         <div class="build-row"><div class="its">{% for it in b['items'] %}{{ item_slot(it) }}{% if not loop.last %}<span class="arrow">&rsaquo;</span>{% endif %}{% endfor %}</div>
@@ -110,7 +110,7 @@
       </div>
     </div>
     <div class="panel">
-      <div class="panel-head"><span><span class="n">04</span>Starting items &amp; boots</span></div>
+      <div class="panel-head"><span>Starting items &amp; boots</span></div>
       <div class="panel-body">
         {% for b in starting %}
         <div class="build-row"><div class="its">{% for it in b['items'] %}{{ item_slot(it) }}{% endfor %}</div>
@@ -140,7 +140,7 @@
   {% endif %}
   {% if late %}
   <div class="panel" style="margin-top:12px">
-    <div class="panel-head"><span><span class="n">05</span>Later items</span><span class="muted small">by slot</span></div>
+    <div class="panel-head"><span>Later items</span><span class="muted small">by slot</span></div>
     <div class="panel-body cols-3">
       {% for slot in late %}
       <div><div class="muted small" style="margin-bottom:6px;font-weight:700">{{ slot.label }}</div>
@@ -152,7 +152,7 @@
   {% endif %}
   {% if choices %}
   <div class="panel" style="margin-top:12px">
-    <div class="panel-head"><span><span class="n">05b</span>Choices that beat the game state</span><span class="muted small">result minus the win chance when it was chosen &middot; <a href="/swing#choices">how</a></span></div>
+    <div class="panel-head"><span>Choices that beat the game state</span><span class="muted small">result minus the win chance when it was chosen &middot; <a href="/swing#choices">how</a></span></div>
     <div class="panel-body choice-grid">
       {% for c in choices %}
       <div>
@@ -172,14 +172,14 @@
 
   <div class="cols-2" style="margin-top:12px">
     <div class="panel">
-      <div class="panel-head"><span><span class="n">06</span>Toughest matchups</span><span class="muted small">lane opponents &middot; press Why? for the reasons</span></div>
+      <div class="panel-head"><span>Toughest matchups</span><span class="muted small">lane opponents &middot; press Why? for the reasons</span></div>
       <div class="panel-body vs-list">
         {% for v in counters %}<div class="vs"><a href="/champions/{{ v.slug }}"><img src="{{ v.icon }}" alt="" loading="lazy"><div><b>{{ v.name }}</b><span class="loss-text">{{ v.win_rate|round|int }}% WR</span> <span>&middot; {{ v.games }}</span></div></a><button class="why" type="button" data-why="/api/champions/{{ champ.slug }}/matchups/{{ v.slug }}?role={{ s.position|lower }}" data-icons="{{ champ_icon }} {{ v.icon }}" data-title="{{ champ.name }} vs {{ v.name }} &middot; {{ role_name }}">Why?</button></div>
         {% else %}<p class="muted">Not enough games against any one champion yet.</p>{% endfor %}
       </div>
     </div>
     <div class="panel">
-      <div class="panel-head"><span><span class="n">07</span>Best matchups</span></div>
+      <div class="panel-head"><span>Best matchups</span></div>
       <div class="panel-body vs-list">
         {% for v in best %}<div class="vs"><a href="/champions/{{ v.slug }}"><img src="{{ v.icon }}" alt="" loading="lazy"><div><b>{{ v.name }}</b><span class="wr-hi">{{ v.win_rate|round|int }}% WR</span> <span>&middot; {{ v.games }}</span></div></a><button class="why" type="button" data-why="/api/champions/{{ champ.slug }}/matchups/{{ v.slug }}?role={{ s.position|lower }}" data-icons="{{ champ_icon }} {{ v.icon }}" data-title="{{ champ.name }} vs {{ v.name }} &middot; {{ role_name }}">Why?</button></div>
         {% else %}<p class="muted">Not enough games against any one champion yet.</p>{% endfor %}
@@ -189,7 +189,7 @@
 
   {% if matchup_rows %}
   <div class="panel" style="margin-top:12px">
-    <div class="panel-head"><span><span class="n">08</span>Every matchup</span><span class="muted small">{{ matchup_rows|length }} lane opponents &middot; click a column to sort</span></div>
+    <div class="panel-head"><span>Every matchup</span><span class="muted small">{{ matchup_rows|length }} lane opponents &middot; click a column to sort</span></div>
     <div class="toolbar"><input type="search" placeholder="Find an opponent" data-filter="#mu-body tr" aria-label="Find an opponent"></div>
     <div class="scroll" style="max-height:420px;overflow-y:auto"><table class="data">
       <thead><tr><th class="l" data-sort>Opponent</th><th data-sort>Games</th><th data-sort>Win rate</th><th data-sort>Gold at 15</th><th data-sort>CS at 15</th><th></th></tr></thead>
@@ -206,7 +206,7 @@
   {% endif %}
   {% if duo %}
   <div class="panel" style="margin-top:12px">
-    <div class="panel-head"><span><span class="n">09</span>Best {{ duo_role|lower }} partners</span><span class="muted small">same team, ranked by win rate</span></div>
+    <div class="panel-head"><span>Best {{ duo_role|lower }} partners</span><span class="muted small">same team, ranked by win rate</span></div>
     <div class="panel-body vs-list">
       {% for v in duo %}<div class="vs"><a href="/champions/{{ v.slug }}"><img src="{{ v.icon }}" alt="" loading="lazy"><div><b>{{ v.name }}</b><span class="{{ 'wr-hi' if v.win_rate >= 55 else ('loss-text' if v.win_rate < 47 else '') }}">{{ v.win_rate|round|int }}% WR</span> <span>&middot; {{ v.games }}</span></div></a></div>{% endfor %}
     </div>
@@ -214,7 +214,7 @@
   {% endif %}
   {% if mains %}
   <div class="panel" style="margin-top:12px">
-    <div class="panel-head"><span><span class="n">10</span>Players to learn from</span><span class="muted small">most {{ champ.name }} {{ role_name|lower }} games RiftWatch has seen</span></div>
+    <div class="panel-head"><span>Players to learn from</span><span class="muted small">most {{ champ.name }} {{ role_name|lower }} games RiftWatch has seen</span></div>
     <div class="scroll"><table class="data">
       <thead><tr><th class="l">Player</th><th>Games</th><th>Win rate</th><th>KDA</th><th>CS/min</th></tr></thead>
       <tbody>{% for m in mains %}<tr>
@@ -225,7 +225,7 @@
   {% endif %}
   {% if abilities %}
   <div class="panel" style="margin-top:12px">
-    <div class="panel-head"><span><span class="n">11</span>Abilities</span></div>
+    <div class="panel-head"><span>Abilities</span></div>
     <div class="panel-body">
       {% for a in abilities %}
       <div class="ability"><div class="slot"><img src="{{ a.icon }}" alt="" loading="lazy"><span>{{ a.key }}</span></div><div><b>{{ a.name }}</b>{% if a.cooldown %}<span class="muted small"> &middot; cooldown {{ a.cooldown }}s</span>{% endif %}<p>{{ a.text }}</p></div></div>

@@ -9,8 +9,8 @@
     <span class="vs-word">vs</span>
     <a href="/champions/{{ b.slug }}?role={{ role|lower }}"><img src="{{ b_icon }}" alt="{{ b.name }}"></a>
     <div>
-      <div class="eyebrow">{{ role_name }} matchup</div>
       <h1>{{ a.name }} vs {{ b.name }}</h1>
+      <p class="context">{{ role_name }} matchup</p>
       <div class="meta-line"><a href="{{ reverse_url }}">See it from {{ b.name }}'s side &rarr;</a></div>
     </div>
     <button class="btn primary" type="button" data-why="{{ why_url }}" data-icons="{{ a_icon }} {{ b_icon }}" data-title="{{ a.name }} vs {{ b.name }} &middot; {{ role_name }}">Why? (AI explanation)</button>
@@ -28,26 +28,26 @@
     {% endif %}
   </div>
 
-  {% if note and note.verdict %}<div class="panel mu-note"><span class="eyebrow">AI verdict</span><p>{{ note.verdict }}</p>{% for p in note.points %}<p class="pt"><b>{{ p.title }}</b> {{ p.explanation }}</p>{% endfor %}</div>{% endif %}
+  {% if note and note.verdict %}<div class="panel mu-note"><span class="lbl">AI verdict</span><p>{{ note.verdict }}</p>{% for p in note.points %}<p class="pt"><b>{{ p.title }}</b> {{ p.explanation }}</p>{% endfor %}</div>{% endif %}
 
   <div class="cols-2" style="margin-top:12px">
     <div class="panel">
-      <div class="panel-head"><span><span class="n">01</span>First two items in this matchup</span><span class="muted small">most common, with their record</span></div>
+      <div class="panel-head"><span>First two items in this matchup</span><span class="muted small">most common, with their record</span></div>
       <div class="panel-body">{% for x in builds %}<div class="build-row"><div class="its">{% for it in x['items'] %}{{ item_slot(it) }}{% if not loop.last %}<span class="arrow">&rsaquo;</span>{% endif %}{% endfor %}</div><div class="rt"><b>{{ wr(x.win_rate) }}</b><span class="muted">{{ x.games }} games</span></div></div>{% else %}<p class="muted small">Not enough games with timelines yet.</p>{% endfor %}</div>
     </div>
     <div class="panel">
-      <div class="panel-head"><span><span class="n">02</span>Keystones</span></div>
+      <div class="panel-head"><span>Keystones</span></div>
       <div class="panel-body">{% for k in keystones %}<div class="build-row"><div class="its"><div class="slot rune" data-tip="{{ k.name }}"><img src="{{ k.icon }}" alt=""></div><span class="small">{{ k.name }}</span></div><div class="rt"><b>{{ wr(k.win_rate) }}</b><span class="muted">{{ k.games }} games</span></div></div>{% else %}<p class="muted small">Not enough games yet.</p>{% endfor %}</div>
     </div>
   </div>
 
   <div class="panel" style="margin-top:12px">
-    <div class="panel-head"><span><span class="n">03</span>Master+ games to study</span><span class="muted small">{{ a.name }} players in Master+, newest first</span></div>
+    <div class="panel-head"><span>Master+ games to study</span><span class="muted small">{{ a.name }} players in Master+, newest first</span></div>
     <div class="panel-body mu-games">{% for g in high_games %}<a class="rg {{ 'win' if g.win else 'loss' }}" href="{{ g.url }}"><span class="res">{{ 'W' if g.win else 'L' }}</span><b>{{ g.kda }}</b><span class="nm">{{ g.name }}</span><span class="its">{% for it in g['items'] %}<img src="{{ it.icon }}" alt="{{ it.name }}" data-tip="{{ it.name }}">{% endfor %}</span><span class="muted when">{{ g.when }}</span></a>{% else %}<p class="muted small">No Master+ games of this matchup stored.</p>{% endfor %}</div>
   </div>
 
   <div class="panel" style="margin:12px 0 40px">
-    <div class="panel-head"><span><span class="n">04</span>Your games of this matchup</span>
+    <div class="panel-head"><span>Your games of this matchup</span>
       <form class="mini-form" action="" method="get"><input type="hidden" name="role" value="{{ role|lower }}"><input name="me" value="{{ me }}" placeholder="Your Riot ID" aria-label="Your Riot ID"><button class="btn" type="submit">Show</button></form></div>
     <div class="panel-body mu-games">{% if my_games %}{% for g in my_games %}<a class="rg {{ 'win' if g.win else 'loss' }}" href="{{ g.url }}"><span class="res">{{ 'W' if g.win else 'L' }}</span><b>{{ g.kda }}</b><span class="its">{% for it in g['items'] %}<img src="{{ it.icon }}" alt="{{ it.name }}" data-tip="{{ it.name }}">{% endfor %}</span><span class="muted when">{{ g.when }}</span></a>{% endfor %}{% elif me and me_found %}<p class="muted small">No stored games of {{ me }} on {{ a.name }} against {{ b.name }}.</p>{% elif me %}<p class="muted small">RiftWatch hasn't seen {{ me }} yet.</p>{% else %}<p class="muted small">Enter your Riot ID to see your own games of this matchup.</p>{% endif %}</div>
   </div>

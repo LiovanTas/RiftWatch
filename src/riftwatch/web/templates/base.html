@@ -8,21 +8,27 @@
 <meta property="og:title" content="{{ self.title() }}">
 <meta property="og:description" content="{{ self.description() }}">
 <meta property="og:type" content="website">
-<meta name="theme-color" content="#090c12">
+<meta name="theme-color" content="#151311">
 <script>{{ theme_js|safe }}</script>
 <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
 <link rel="manifest" href="/static/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/static/logo.svg">
 <link rel="preconnect" href="https://ddragon.leagueoflegends.com" crossorigin>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;700&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap">
+<link rel="preload" href="/static/fonts/barlow-400-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/static/fonts/barlow-condensed-700-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/site.css?v={{ asset_version }}">
 {% block head %}{% endblock %}
 </head>
 <body class="{% block body_class %}{% endblock %}">
 {% include "_header.html" %}
 {% block content %}{% endblock %}
+<nav class="tabbar" aria-label="Main">
+  <a href="/" class="{{ 'on' if nav == 'home' }}">{{ icon('home') }}<span>Home</span></a>
+  <a href="/champions" class="{{ 'on' if nav == 'champions' }}">{{ icon('grid') }}<span>Tier list</span></a>
+  <button type="button" data-palette aria-label="Search a player or champion">{{ icon('search') }}<span>Search</span></button>
+  <a href="/swing" class="{{ 'on' if nav == 'swing' }}">{{ icon('chart') }}<span>Swing</span></a>
+  <a href="/leaderboard/{{ region if region and region != 'auto' else 'na' }}" class="{{ 'on' if nav == 'leaderboard' }}">{{ icon('trophy') }}<span>Ladder</span></a>
+</nav>
 <footer class="site-footer">
   <div class="container">
     <div>

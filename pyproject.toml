@@ -32,7 +32,7 @@ where = ["src"]
 "riftwatch.db" = ["migrations/*.sql"]
 "riftwatch.stats" = ["patch_notes.json"]
 "riftwatch.vision" = ["data/*.npz"]
-"riftwatch.web" = ["templates/*.html", "static/*"]
+"riftwatch.web" = ["templates/*.html", "static/*", "static/fonts/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

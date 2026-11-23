@@ -4,7 +4,6 @@
   <div class="panel-body">
     {% if pl.focus %}{% set f = pl.focus %}
     <div class="plan-focus">
-      <span class="k">Work on</span>
       <b>{{ f.name }}</b>
       <p class="why">{% if f.kind == 'habit' %}{{ f.detail[:1]|upper }}{{ f.detail[1:] }}. These deaths cost your team <b class="down">{{ '%.1f'|format(f.mine) }}</b> points of win chance a game; a typical player in the same role loses <b>{{ '%.1f'|format(f.typical) }}</b>{% if f.count is defined and f.count is not none %} ({{ '%.1f'|format(f.count) }} such deaths a game{% if f.typical_count is not none %}, typical {{ '%.1f'|format(f.typical_count) }}{% endif %}){% endif %}.{% else %}Your Swing from {{ f.name|lower }} is <b class="{{ 'up' if -f.mine >= 0 else 'down' }}">{{ '%+.1f'|format(-f.mine) }}</b> a game; a typical player in the same role gets <b>{{ '%+.1f'|format(-f.typical) }}</b>.{% endif %} {% if f.picked %}You chose this one; <a href="?#plan">back to the biggest gap</a>.{% else %}That's the biggest gap to your role in your recent games.{% endif %}</p>
     </div>
@@ -22,8 +21,8 @@
     {% endif %}
     <p class="plan-trend {{ f.trend.verdict }}">
       {% if f.trend.verdict == 'early' %}Not enough games to call a trend yet ({{ f.trend.games }} of 20).
-      {% elif f.trend.verdict == 'better' %}&#9650; Getting better: {{ '%.1f'|format(f.trend.last) }} a game over your last {{ f.trend.n_last }} games, from {{ '%.1f'|format(f.trend.before) }} in the {{ f.trend.n_before }} before (a change bigger than the &plusmn;{{ '%.1f'|format(f.trend.margin) }} games vary by).
-      {% elif f.trend.verdict == 'worse' %}&#9660; Getting worse: {{ '%.1f'|format(f.trend.last) }} a game over your last {{ f.trend.n_last }} games, from {{ '%.1f'|format(f.trend.before) }} in the {{ f.trend.n_before }} before.
+      {% elif f.trend.verdict == 'better' %}<i class="tri up" aria-hidden="true"></i> Getting better: {{ '%.1f'|format(f.trend.last) }} a game over your last {{ f.trend.n_last }} games, from {{ '%.1f'|format(f.trend.before) }} in the {{ f.trend.n_before }} before (a change bigger than the &plusmn;{{ '%.1f'|format(f.trend.margin) }} games vary by).
+      {% elif f.trend.verdict == 'worse' %}<i class="tri down" aria-hidden="true"></i> Getting worse: {{ '%.1f'|format(f.trend.last) }} a game over your last {{ f.trend.n_last }} games, from {{ '%.1f'|format(f.trend.before) }} in the {{ f.trend.n_before }} before.
       {% else %}No clear change yet: {{ '%.1f'|format(f.trend.last) }} a game over your last {{ f.trend.n_last }} games against {{ '%.1f'|format(f.trend.before) }} before, within the &plusmn;{{ '%.1f'|format(f.trend.margin) }} games vary by.{% endif %}
     </p>
     {% if f.tip %}<p class="plan-tip"><span class="tag">Try</span> {{ f.tip }}</p>{% endif %}
