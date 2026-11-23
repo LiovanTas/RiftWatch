@@ -18,10 +18,10 @@ def path_id(game_name: str, tag_line: str) -> str:
     return quote(f"{game_name}-{tag_line}", safe="")
 
 
-def _progress_chart(weeks) -> str:
+def _progress_chart(weeks, w: int = 1100, h: int = 230, cls: str = "wide") -> str:
     """Weekly "better than N%" as a line, with the 50% (typical) line for reference.
     Inline SVG in the page's own colour tokens, so it follows light and dark mode."""
-    w, h, left, right, top, bottom = 1100, 230, 40, 14, 12, 26
+    left, right, top, bottom = 40, 14, 12, 26
     n = len(weeks)
 
     def x(i: int) -> float:
@@ -46,10 +46,10 @@ def _progress_chart(weeks) -> str:
         f"({wk.games} games, {100 * wk.win_rate:.0f}% wins)</title></circle>"
         for i, wk in enumerate(weeks))
     labels = "".join(
-        f'<text x="{x(i):.1f}" y="{h - 8}" text-anchor="middle" font-size="11" '
-        f'fill="var(--muted)">{wk.start:%b %d}</text>'
-        for i, wk in enumerate(weeks) if i % max(1, n // 6) == 0 or i == n - 1)
-    return (f'<svg viewBox="0 0 {w} {h}" role="img" style="width:100%;height:auto" '
+        f'<text x="{x(i):.1f}" y="{h - 8}" text-anchor="{"start" if i == 0 else "end" if i == n - 1 else "middle"}" '
+        f'font-size="11" fill="var(--muted)">{wk.start:%b %d}</text>'
+        for i, wk in enumerate(weeks) if i % max(1, n // (6 if cls == "wide" else 3)) == 0 or i == n - 1)
+    return (f'<svg class="prog {cls}" viewBox="0 0 {w} {h}" role="img" style="width:100%;height:auto" '
             f'aria-label="Weekly average standing against players at your rank">'
             f"{ticks}{typical}"
             f'<polyline points="{pts}" fill="none" stroke="var(--you)" stroke-width="2"/>'
@@ -68,8 +68,8 @@ def progress_html(progress) -> str:
             f"{progress.games} games, each against players at your current rank in its role. "
             f"Trend: <strong>{trend}</strong> ({t.slope:+.1f} ±{t.se:.1f} points per 10 games)"
             + (f"; {_esc(', '.join(moving))}" if moving else "") + f".{_esc(ranks)}</p>"
-            f'<div class="card">{_progress_chart(progress.weeks)}'
-            '<p class="small" style="margin:6px 0 0">Blue: your weekly average \u201cbetter than\u201d '
+            f'<div class="card">{_progress_chart(progress.weeks)}{_progress_chart(progress.weeks, 360, 220, "narrow")}'
+            '<p class="small" style="margin:6px 0 0">Solid line: your weekly average \u201cbetter than\u201d '
             "across all stats. Dashed: a typical player at your rank (50%).</p></div>")
 
 
@@ -95,13 +95,13 @@ def sessions_html(report) -> str:
             f'<td class="num">{100 * g.win_rate:.0f}%</td>'
             f'<td class="num">{g.score:.0f}% ±{g.se:.0f}</td></tr>' for g in groups)
 
-    head = ('<tr class="area"><td>{}</td><td>games</td><td>win rate</td>'
-            "<td>better than</td></tr>")
+    head = ('<tr class="area"><td>{}</td><td class="num">Games</td><td class="num">Win rate</td>'
+            '<td class="num">Better than</td></tr>')
     return (f"<h2>Sessions</h2><p class=\"sub\">Last {report.games} games in {report.sessions} "
             f"sessions (an hour's break starts a new one). {_esc(' '.join(notes))}</p>"
             '<div class="card scroll"><table class="score">'
-            + head.format("game in session") + rows(report.by_position)
-            + head.format("previous game") + rows(report.by_streak) + "</table></div>")
+            + head.format("Game in session") + rows(report.by_position)
+            + head.format("Previous game") + rows(report.by_streak) + "</table></div>")
 
 
 def pool_html(pool) -> str:
@@ -113,14 +113,16 @@ def pool_html(pool) -> str:
                    "weaker": "weaker than your other picks"}.get(l.verdict, "")
         spread = f" ±{l.score_se:.0f}" if l.games > 1 else ""
         rows.append(
-            f"<tr><td>{_esc(l.champion)}<div class=\"small\">{_esc(l.role.lower())}</div></td>"
+            f"<tr><td>{_esc(l.champion)}<div class=\"small\">{_esc(l.role.lower())}</div>"
+            f"<div class=\"small phone-area\">best: {_esc(l.best_area or '')}</div></td>"
             f'<td class="num">{l.games}</td><td class="num">{100 * l.win_rate:.0f}%</td>'
-            f'<td class="num">{l.kills}/{l.deaths}/{l.assists}</td>'
+            f'<td class="num kda">{l.kills}/{l.deaths}/{l.assists}</td>'
             f'<td class="num">{l.score:.0f}%{spread}<div class="small">{_esc(verdict)}</div></td>'
-            f"<td>{_esc(l.best_area or '')}<div class=\"small\">weakest: {_esc(l.worst_area or '')}</div></td></tr>")
+            f"<td class=\"area-c\">{_esc(l.best_area or '')}<div class=\"small\">weakest: {_esc(l.worst_area or '')}</div></td></tr>")
     return (f"<h2>Champion pool</h2><p class=\"sub\">Last {pool.games} games. \"Better than\" is "
             "the average share of players at your rank in the same role you beat across all "
             "stats, adjusted for champion and matchup; ± is one standard error.</p>"
-            '<div class="card scroll"><table class="score"><tr class="area"><td>champion</td>'
-            "<td>games</td><td>win rate</td><td>K/D/A</td><td>better than</td><td>best area</td></tr>"
+            '<div class="card scroll"><table class="score"><tr class="area"><td>Champion</td>'
+            '<td class="num">Games</td><td class="num">Win rate</td><td class="num kda">K/D/A</td>'
+            '<td class="num">Better than</td><td class="area-c">Best area</td></tr>'
             + "".join(rows) + "</table></div>")

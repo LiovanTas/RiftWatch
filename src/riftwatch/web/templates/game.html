@@ -7,7 +7,7 @@
   <div class="game-head">
     {% if me %}<img src="{{ me.champion_icon }}" alt="">{% endif %}
     <div>
-      <h1>{% if me %}{{ me.name }} on {{ me.champion }}{% else %}Game {{ d.match_id }}{% endif %}</h1>
+      <h1>{% if me %}{{ me.name }} on {{ me.champion }}{% else %}{% set w = d.teams|selectattr('win')|first %}{% if w %}{{ w.label|replace(' team', '') }} won in {{ d.duration }}{% else %}Game {{ d.match_id }}{% endif %}{% endif %}</h1>
       <p class="context">{{ d.queue }} &middot; patch {{ d.patch|patchname }}</p>
       <div class="meta-line">
         {% if me %}<span class="res {{ 'win' if me.win else 'loss' }}">{{ 'Victory' if me.win else 'Defeat' }}</span><span>{{ me.kills }}/{{ me.deaths }}/{{ me.assists }}</span>{% endif %}

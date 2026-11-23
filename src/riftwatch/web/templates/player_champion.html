@@ -25,7 +25,7 @@
       <thead><tr><th class="l">Stat</th>{% for col in c.columns %}<th>{{ col }}</th>{% endfor %}</tr></thead>
       <tbody>{% for r in c.rows %}<tr><td class="l">{{ r.label }}</td>{% for v in r['values'] %}<td class="{{ ('mine ' ~ (r.verdict or '')) if loop.first }}">{{ v }}</td>{% endfor %}</tr>{% endfor %}</tbody>
     </table></div>
-    <p class="muted small" style="padding:0 16px 12px;margin:0">Green: at or better than Master+ {{ champ.name }} players; red: below them.</p>
+    <p class="muted small" style="padding:0 16px 12px;margin:0">Green: at or better than Master+ {{ champ.name }} players; orange: below them.</p>
   </div>
 
   <div class="cols-2" style="margin-top:12px">
@@ -40,9 +40,9 @@
     </div>
     <div class="panel">
       <div class="panel-head"><span>Your matchups on {{ champ.name }}</span><span class="muted small">lane opponents</span></div>
-      <div class="panel-body" style="max-height:330px;overflow-y:auto">
+      <div class="panel-body">
         {% for m in c.matchups %}
-        <div class="pm-row"><img src="{{ m.icon }}" alt=""><div class="who2"><b>vs {{ m.name }}</b><span>{{ m.wins }}W {{ m.games - m.wins }}L</span></div><b class="{{ 'wr-hi' if m.win_rate >= 55 else ('loss-text' if m.win_rate < 47 else '') }}">{{ m.win_rate }}%</b>
+        <div class="pm-row"><img src="{{ m.icon }}" alt=""><div class="who2"><b>vs {{ m.name }}</b><span>{{ m.wins }}W {{ m.games - m.wins }}L</span></div><b class="{{ 'wr-hi' if m.win_rate >= 55 else ('wr-lo' if m.win_rate < 47 else '') }}">{{ m.win_rate }}%</b>
           {% if c.position %}<button class="why-btn" type="button" data-why="/api/champions/{{ champ.slug }}/matchups/{{ m.slug }}?role={{ c.position|lower }}" data-icons="{{ champ_icon }} {{ m.icon }}" data-title="{{ champ.name }} vs {{ m.name }} &middot; {{ c.role }}">Why?</button>{% endif %}</div>
         {% else %}<p class="muted small">No lane opponents recorded.</p>{% endfor %}
       </div>

@@ -32,7 +32,7 @@
     </div>
     {% endif %}
     {% for t in d.teams %}
-    <div class="team-head {{ 'win' if t.win else 'loss' }}">
+    <div class="team-head {{ 'win' if t.win else 'loss' }} {{ 'side-b' if 'Blue' in t.label else 'side-r' }}">
       <span class="res">{{ 'Victory' if t.win else 'Defeat' }}</span>
       <span>({{ t.label }})</span>
       <span class="muted">{{ t.kills }} / {{ t.deaths }} / {{ t.assists }}</span>
