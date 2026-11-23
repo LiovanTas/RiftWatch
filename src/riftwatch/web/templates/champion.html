@@ -141,7 +141,7 @@
   {% if late %}
   <div class="panel" style="margin-top:12px">
     <div class="panel-head"><span><span class="n">05</span>Later items</span><span class="muted small">by slot</span></div>
-    <div class="panel-body cols-2" style="grid-template-columns:repeat(3,1fr)">
+    <div class="panel-body cols-3">
       {% for slot in late %}
       <div><div class="muted small" style="margin-bottom:6px;font-weight:700">{{ slot.label }}</div>
         {% for b in slot['items'] %}<div class="build-row"><div class="its">{{ item_slot(b.item) }}<span class="small">{{ b.item.name }}</span></div><div class="rt"><b>{{ wr(b.win_rate) }}</b><span class="muted">{{ b.games }}</span></div></div>{% endfor %}
