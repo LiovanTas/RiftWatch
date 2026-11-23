@@ -3,8 +3,10 @@
 Timelines give each player's gold, XP and level once a minute, and every kill, objective and
 structure with a timestamp. ``Replay`` rebuilds the state at any time ``t`` from one team's
 side: gold and XP leads (interpolated between the minute frames), kills, towers, inhibitors
-currently down, dragons and soul, Baron, Elder and their active buffs, heralds, voidgrubs,
-Atakhan, and how many players on each side are alive (from respawn timers).
+currently down, dragons and soul, Baron, Elder and how many players still hold their buffs
+(only the players alive at the kill get one, and a death ends it), heralds, voidgrubs, Atakhan,
+and how many players on each side are alive (from respawn timers). The timeline files the Elder
+as a dragon with an ``ELDER_DRAGON`` subtype; it isn't counted as one of the dragons.
 
 With a ``Catalog`` (what each finished item gives and what each champion is) it also reads:
 
@@ -200,6 +202,8 @@ class Replay:
         counts: dict[tuple[str, int], int] = {}
         self._prefix = [dict(counts)]
         self._timed: list[tuple[int, str, int, float]] = []          # (index, kind, team, until ms)
+        # Baron and Elder buffs go to the players alive at the kill, and each is lost on death.
+        self._buffs: list[tuple[int, str, int, float, frozenset[int]]] = []   # (index, kind, team, until, holders)
         self.deaths: list[tuple[int, int, float]] = []               # (index, victim, back ms)
         for i, e in enumerate(self.events):
             kind, ts = e.get("type"), e.get("timestamp", 0)
@@ -227,13 +231,15 @@ class Replay:
                     # Neutral (team 300): a summoned herald expiring, nobody's take.
                     self._prefix.append(dict(counts))
                     continue
+                if monster == "DRAGON" and e.get("monsterSubType") == "ELDER_DRAGON":
+                    monster = "ELDER_DRAGON"                  # the timeline files the Elder as a dragon
                 if monster in MONSTERS:
                     counts[(MONSTERS[monster], taker)] = counts.get((MONSTERS[monster], taker), 0) + 1
                 if monster == "ELDER_DRAGON":
-                    self._timed.append((i, "elder", taker, ts + ELDER_BUFF_S * 1000))
+                    self._buffs.append((i, "elder", taker, ts + ELDER_BUFF_S * 1000, self._alive(taker, ts)))
                     counts[("last", "elder")] = ts
                 elif monster == "BARON_NASHOR":
-                    self._timed.append((i, "baron", taker, ts + BARON_BUFF_S * 1000))
+                    self._buffs.append((i, "baron", taker, ts + BARON_BUFF_S * 1000, self._alive(taker, ts)))
                     counts[("last", "baron")] = ts
                 elif monster == "DRAGON":
                     counts[("last", "dragon")] = ts
@@ -267,6 +273,11 @@ class Replay:
             for team in (100, 200):
                 pids = range(1, 6) if team == 100 else range(6, 11)
                 self._comp[team] = catalog.comp([self.champions.get(p, 0) for p in pids])
+
+    def _alive(self, team: int, ts: float) -> frozenset[int]:
+        """The team's players alive at ``ts``, by the deaths read so far."""
+        dead = {v for _, v, back in self.deaths if back > ts}
+        return frozenset(p for p in (range(1, 6) if team == 100 else range(6, 11)) if p not in dead)
 
     # -- per-player numbers -----------------------------------------------------------------
     def _frame_value(self, pid: int, key: str, t: float) -> float:
@@ -335,10 +346,15 @@ class Replay:
         xp = {team: self._total("xp", team, t, True) for team in (100, 200)}
         cs = {team: self._total("cs", team, t, False) for team in (100, 200)}
         level = {team: self._total("level", team, t, False) / 5 for team in (100, 200)}
-        active = {(kind, team): 0 for kind in ("inhib", "elder", "baron") for team in (100, 200, OTHER)}
+        active = {("inhib", team): 0 for team in (100, 200, OTHER)}
         for i, kind, team, until in self._timed:
             if i < upto and t < until:
                 active[(kind, team)] += 1
+        held = {(kind, team): 0 for kind in ("elder", "baron") for team in (100, 200)}   # buffs still held
+        for i, kind, team, until, holders in self._buffs:
+            if i < upto and t < until:
+                gone = {v for j, v, _ in self.deaths if i < j < upto}
+                held[(kind, team)] += len(holders - gone)
         dead = {100: set(), 200: set()}
         dead_time = {100: 0.0, 200: 0.0}                       # minutes the dead are still out
         for i, v, back in self.deaths:
@@ -404,9 +420,9 @@ class Replay:
                 f[f"{key}_enemy"] = n(key, enemy) + n(key, OTHER)
             f["soul_own"] = float(n("soul", own) > 0)
             f["soul_enemy"] = float(n("soul", enemy) > 0 or n("soul", OTHER) > 0)
-            for buff in ("elder", "baron"):
-                f[f"{buff}_own"] = float(active[(buff, own)] > 0)
-                f[f"{buff}_enemy"] = float(active[(buff, enemy)] > 0 or active[(buff, OTHER)] > 0)
+            for buff in ("elder", "baron"):                     # players holding the buff, 0-5
+                f[f"{buff}_own"] = float(held[(buff, own)])
+                f[f"{buff}_enemy"] = float(held[(buff, enemy)])
             f["alive_own"] = float(5 - len(dead[own]))
             f["alive_enemy"] = float(5 - len(dead[enemy]))
             for _, tier in TOWER_TIERS:

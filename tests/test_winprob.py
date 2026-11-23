@@ -70,8 +70,10 @@ def test_state_counts_events_from_each_side():
     assert blue["towers_own"] == 1 and red["towers_enemy"] == 1
     assert blue["dragons_own"] == 1 and red["dragons_enemy"] == 1
     assert blue["gold_diff"] == pytest.approx(-red["gold_diff"])
-    # Baron at 20:00: the buff is up at 21:00 and gone by 24:00; the take still counts.
-    assert r.state(21 * 60_000, 100)["baron_own"] == 1
+    # Baron at 20:00: all five of blue are alive and get the buff; blue's 3 dies at 21:40 and
+    # loses it; it's gone for everyone by 24:00, and the take still counts.
+    assert r.state(21 * 60_000, 100)["baron_own"] == 5 and r.state(21 * 60_000, 200)["baron_enemy"] == 5
+    assert r.state(22 * 60_000, 100)["baron_own"] == 4
     late = r.state(24 * 60_000, 100)
     assert late["baron_own"] == 0 and late["barons_own"] == 1
 
@@ -320,6 +322,49 @@ def test_shares_add_up_exactly_and_are_zero_sum():
             assert sum(gains[p]) == pytest.approx(sum(credit[p].values()), abs=1e-9)
 
 
+def test_an_objectives_team_part_goes_to_the_wards_that_set_it_up():
+    wards = swing.ward_times([
+        {"type": "WARD_PLACED", "timestamp": 500_000, "creatorId": 5, "wardType": "YELLOW_TRINKET"},
+        {"type": "WARD_PLACED", "timestamp": 550_000, "creatorId": 5, "wardType": "CONTROL_WARD"},
+        {"type": "WARD_KILL", "timestamp": 560_000, "killerId": 4, "wardType": "YELLOW_TRINKET"},
+        {"type": "WARD_PLACED", "timestamp": 570_000, "creatorId": 5, "wardType": "UNDEFINED"},      # not a ward
+        {"type": "WARD_PLACED", "timestamp": 400_000, "creatorId": 3, "wardType": "YELLOW_TRINKET"},  # too early
+        {"type": "WARD_PLACED", "timestamp": 575_000, "creatorId": 7, "wardType": "YELLOW_TRINKET"}])  # the enemy's
+    assert swing.vision_before(wards, 600_000, 100) == {"4": 1, "5": 2}
+    assert swing.vision_before(wards, 600_000, 200) == {"7": 1}
+
+    facts = {"winner": 100, "times": [0, 60_000], "curve": [0.5, 0.6], "earned": {str(p): [0] for p in range(1, 11)},
+             "opponent": {}, "events": [{"t": 30_000, "d": 0.1, "side": 100, "kind": "objectives", "got": [2],
+                                         "dead": [], "vision": {"4": 1, "5": 3}}]}
+    seen, plays, _ = swing.credit_of(facts, swing.RULES)
+    even, _, _ = swing.credit_of(facts, replace(swing.RULES, objective_team="even"))
+    # half to the jungler who took it; the team's half by the wards, 3 : 1, and it's their play
+    assert seen[2]["objectives"] == pytest.approx(0.05) and seen[5]["objectives"] == pytest.approx(0.0375)
+    assert seen[4]["objectives"] == pytest.approx(0.0125) and seen[1]["objectives"] == 0.0
+    assert (pytest.approx(0.0375), 0) in plays[5]
+    assert even[5]["objectives"] == pytest.approx(0.01) and even[2]["objectives"] == pytest.approx(0.06)
+    for credit in (seen, even):                              # still exactly +50 and -50
+        assert sum(sum(credit[p].values()) for p in range(1, 6)) == pytest.approx(0.5, abs=1e-12)
+        assert sum(sum(credit[p].values()) for p in range(6, 11)) == pytest.approx(-0.5, abs=1e-12)
+    nobody = {**facts, "events": [{**facts["events"][0], "vision": {}}]}   # nobody warded: evenly
+    assert swing.credit_of(nobody, swing.RULES)[0][5]["objectives"] == pytest.approx(0.01)
+
+    # evaluate records who warded an objective up, from the taking team only
+    frames, events = game()
+    events = [e for e in events if e["type"] not in ("WARD_PLACED", "WARD_KILL")]
+    t = 9 * 60_000 + 30_000
+    events = sorted([*events,
+                     {"type": "WARD_PLACED", "timestamp": t - 30_000, "creatorId": 5, "wardType": "YELLOW_TRINKET"},
+                     {"type": "WARD_KILL", "timestamp": t - 10_000, "killerId": 4, "wardType": "YELLOW_TRINKET"},
+                     {"type": "WARD_PLACED", "timestamp": t - 5_000, "creatorId": 8, "wardType": "CONTROL_WARD"},
+                     {"type": "ELITE_MONSTER_KILL", "timestamp": t, "killerId": 2, "killerTeamId": 100,
+                      "monsterType": "DRAGON", "monsterSubType": "FIRE_DRAGON"}], key=lambda e: e.get("timestamp", 0))
+    data = swing.evaluate(LeadModel(), frames, events, NAMES)
+    fact = next(f for f in data["facts"]["events"] if f["kind"] == "objectives" and f["t"] == t)
+    assert fact["vision"] == {"4": 1, "5": 1}
+    assert next(m for m in data["moments"] if m["t"] == t and m["part"] == "objectives")["vision"] == {"4": 1, "5": 1}
+
+
 def test_kills_are_shared_by_damage_and_economy_by_the_lane():
     frames, events = game()
     first = next(e for e in events if e.get("type") == "CHAMPION_KILL")
@@ -405,3 +450,107 @@ def test_vision_and_objective_timers_are_read_from_each_side():
     # Swing ignores wards: the same moments, and the soul still comes with its dragon.
     d = swing.game_swing(LeadModel(), frames, [*events, *wards], NAMES)
     assert [m["text"] for m in d["moments"]] == [m["text"] for m in swing.game_swing(LeadModel(), frames, events, NAMES)["moments"]]
+
+
+def test_the_elder_is_read_from_its_dragon_subtype_and_buffs_go_to_the_living():
+    from tests.fixtures import kill, monster
+
+    frames, events = game()
+    # Red's 9 dies at 24:50, red takes the Elder at 25:00 (the timeline files it as a dragon
+    # with an ELDER_DRAGON subtype), red's 10 dies at 25:30.
+    extra = [kill(1_490_000, 1, 9), monster(1_500_000, 7, "DRAGON", "ELDER_DRAGON", assists=[8]),
+             kill(1_530_000, 2, 10)]
+    r = Replay(frames, [*events, *extra])
+    blue, red = r.pair(1_510_000)
+    assert red["elder_own"] == 4 and blue["elder_enemy"] == 4          # the dead 9 didn't get it
+    assert red["dragons_own"] == r.pair(1_480_000)[1]["dragons_own"]   # the Elder isn't one of the dragons
+    assert r.pair(1_540_000)[1]["elder_own"] == 3                      # 10 died and lost it
+    assert r.pair(1_500_000 + 151_000)[1]["elder_own"] == 0            # over after 150 seconds
+    d = swing.game_swing(LeadModel(), frames, [*events, *extra], NAMES)
+    assert any(m["text"] == "Red took Elder Dragon" for m in d["moments"])
+
+
+def test_the_richer_network_leaves_out_vision_and_atakhan():
+    feats = {name: f for name, f, _ in wp.VARIANTS}["state_plus"]
+    assert not set(feats) & {"wards_own", "control_wards_enemy", "wards_cleared_own", "atakhan_own", "atakhan_enemy"}
+    assert {"baron_own", "baron_in", "lane_gold_mid", "towers_outer_own"} <= set(feats)
+
+
+def _calibration_data(n=40_000, seed=0):
+    """A network whose output is right before 30 minutes and overconfident after."""
+    rng = np.random.default_rng(seed)
+    minute = rng.uniform(1, 40, n)
+    z = rng.normal(0, 2, n)
+    slope = np.where(minute < 30, 1.0, 0.6)
+    y = (rng.random(n) < 1 / (1 + np.exp(-slope * z))).astype(float)
+    return 1 / (1 + np.exp(-z)), y, minute
+
+
+def _loss(p, y):
+    p = np.clip(p, 1e-6, 1 - 1e-6)
+    return float(-(y * np.log(p) + (1 - y) * np.log(1 - p)).mean())
+
+
+def test_the_calibration_can_change_with_the_clock_and_always_increases():
+    raw, y, minute = _calibration_data()
+    tr, te = slice(0, 20_000), slice(20_000, None)
+    platt = wp.Platt().fit(raw[tr], y[tr])
+    phase = wp.PhasePlatt().fit(raw[tr], y[tr], minute[tr])
+    assert phase.fallback is None
+    assert _loss(phase.predict(raw[te], minute[te]), y[te]) < _loss(platt.predict(raw[te]), y[te]) - 0.002
+    grid = np.linspace(0.01, 0.99, 50)
+    for m in (5, 15, 25, 35, 60):
+        assert (np.diff(phase.predict(grid, np.full(50, m))) > 0).all()
+    beta = wp.Beta().fit(raw[tr], y[tr])
+    assert (np.diff(beta.predict(grid)) > 0).all()
+    # By group: one group's network is overconfident all game, the other's isn't.
+    group = np.where(np.arange(len(y)) % 2 == 0, "A", "B")
+    rng = np.random.default_rng(1)
+    z = np.log(raw / (1 - raw))
+    yg = (rng.random(len(y)) < 1 / (1 + np.exp(-np.where(group == "A", 1.0, 0.5) * z))).astype(float)
+    by_group = wp.GroupPhasePlatt().fit(raw[tr], yg[tr], minute[tr], group[tr])
+    plain = wp.PhasePlatt().fit(raw[tr], yg[tr], minute[tr])
+    assert (_loss(by_group.predict(raw[te], minute[te], group[te]), yg[te])
+            < _loss(plain.predict(raw[te], minute[te]), yg[te]) - 0.005)
+
+
+def test_a_model_calibrated_by_the_clock_reads_the_minute(tmp_path):
+    model, metrics = wp.train(tiny_dataset(), None, log=lambda *_: None, layers=(8,), calibrator=wp.PhasePlatt)
+    assert metrics["calibrator"] == "PhasePlatt"
+    wp.save(model, metrics, tmp_path)
+    loaded = wp.load(tmp_path)
+    even = dict.fromkeys(BASE_FEATURES, 0.0)
+    ahead, behind = dict(even, gold_diff=5.0, minute=20), dict(even, gold_diff=-5.0, minute=20)
+    assert float(loaded.blue([ahead], [behind])[0]) > 0.6
+    assert float(loaded.blue([dict(even, minute=10)], [dict(even, minute=10)])[0]) == pytest.approx(0.5)
+
+
+def test_cross_validation_tests_every_game_once_and_compares_calibrations():
+    data = tiny_dataset(games=240)
+    folds = wp._folds(data["games"], 3)
+    for g in np.unique(data["games"]):
+        assert len(set(folds[data["games"] == g].tolist())) == 1                  # a game stays together
+    out = wp.cross_validate(data, None, [("state", BASE_FEATURES, False)], folds=3,
+                            calibrations={"platt": wp.Platt, "phase": wp.PhasePlatt}, layers=(8,),
+                            log=lambda *_: None)
+    assert out["games"] == 240 and out["folds"] == 3 and out["first"] == ["state", "platt"]
+    assert [(r["version"], r["calibration"]) for r in out["results"]] == [("state", "platt"), ("state", "phase")]
+    assert out["results"][0]["auc"] > 0.6 and "vs_first" in out["results"][1]
+    assert set(out["results"][0]["ece_by_minute"]) == {"0-10", "10-20"}
+
+
+def test_the_sanity_check_counts_takes_that_lower_the_takers_chance():
+    from riftwatch.winprob import sanity
+
+    frames, events = game()
+    r = Replay(frames, events)
+    summary = sanity.summarise(sanity.game_jumps(LeadModel(), r))
+    assert {"kill", "tower", "Dragon", "Baron", "Voidgrubs"} <= set(summary)
+    assert summary["kill"]["wrong_way"] == 0 and summary["tower"]["wrong_way"] == 0 and summary["kill"]["mean"] > 0
+
+    class TowersHurt(LeadModel):
+        def blue(self, blue_states, red_states):
+            def flip(s):
+                return dict(s, towers_own=-s["towers_own"], towers_enemy=-s["towers_enemy"])
+            return super().blue([flip(s) for s in blue_states], [flip(s) for s in red_states])
+    assert sanity.check(TowersHurt(), [(frames, events, None, None, None)])["tower"]["wrong_way"] == 1.0

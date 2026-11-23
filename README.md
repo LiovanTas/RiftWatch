@@ -79,7 +79,9 @@ riftwatch coach "Name#TAG" --last --html last-game.html
 | `cache` | Cache size and hit rate |
 | `watchdog` | Arms the black-screen kill switch (Windows); `--record` also records each game |
 | `record` | Records games second by second from the game client; `--import` links recordings to matches |
-| `winprob train` | Trains four versions of the win-probability model behind Swing, keeps the best on held-out games and compares them with a gold-only baseline; `--reuse` skips re-reading the games |
+| `winprob train` | Trains six versions of the win-probability model behind Swing, keeps the best on held-out games and compares them with a gold-only baseline; `--reuse` skips re-reading the games |
+| `winprob cv` | 5-fold cross-validation grouped by game: versions, input sets and ways of calibrating, every game tested once (`cv.json`) |
+| `winprob sanity` | How often the model says a kill, structure or objective lowered the taker's chance, on its test games (`sanity.json`) |
 | `winprob backfill` | Works out Swing for every stored game that doesn't have it yet, then the choice values and norms |
 | `winprob choices` | Rebuilds what each item, skill, rune and spell choice did beyond the game state, and the moment norms |
 | `winprob validate` | Checks Swing repeats, predicts and doesn't hinge on its sharing rules or the model; fits the Swing rating (`validation.json`) |
@@ -684,8 +686,10 @@ situations, most players..." -- never "you should have".
 ## Win probability and Swing
 
 ```bash
-riftwatch winprob train       # reads every stored game, trains four versions, keeps the best
+riftwatch winprob train       # reads every stored game, trains six versions, keeps the best
 riftwatch winprob train --reuse   # the same from the games read last time (seconds, not minutes)
+riftwatch winprob cv --reuse  # 5-fold cross-validation: versions, input sets, ways of calibrating
+riftwatch winprob sanity      # how often a kill, structure or objective lowers the taker's chance
 riftwatch winprob backfill    # Swing for every stored game, then the choice values and norms
 riftwatch winprob choices     # rebuild only the choice values and norms
 ```
@@ -702,23 +706,29 @@ The state (`winprob/state.py`) is rebuilt from the timeline at any second:
 
 - **game state** (29 inputs): the minute; gold, XP, CS and level gaps (interpolated between
   minute frames); kills; towers; inhibitors currently down; dragons and soul; Baron and Elder
-  taken and whether the buff is still up; heralds, voidgrubs and Atakhan; and how many players
-  on each side are alive, from respawn timers
+  taken and how many players still hold the buff (only those alive at the kill get one, and a
+  death ends it); heralds, voidgrubs and Atakhan; and how many players on each side are alive,
+  from respawn timers
 - **items** (24): each team's finished items so far, from the timeline's purchases, counted by
   what they give (Data Dragon tags): armor, magic resist, health, attack damage, ability power,
   crit, attack speed, armor and magic penetration, lifesteal and omnivamp, anti-heal
 - **composition** (14): each team's champions by class and the share of its damage that's
   magic (from what those champions deal in stored games)
 - **champions**: which ten champions are playing
-- **the richer game state** (42 more): wards each team placed and cleared in the last 3
-  minutes and control wards in the last 5; minutes until the next dragon, Elder and Baron;
+- **the richer game state** (36 more; the richer network reads 63 inputs in all): minutes
+  until the next dragon, Elder and Baron;
   towers lost by tier (outer, inner, base, nexus) and
   turret plates; how many players on each side have reached levels 6, 11 and 16; gold held
   but not spent; how many minutes the dead are still out; whether dragon, Elder and Baron are
   up right now (spawn and respawn times measured from stored games: dragon at 5:00 and 5:00
   after each kill, Baron at 20:00 and 6:00 after, Elder 6:00 after a soul); and each lane's
   gold and XP gap against the player in the same position, so a fed carry isn't read as a
-  fed support with the same team totals
+  fed support with the same team totals. Wards each team placed and cleared (the last 3
+  minutes, control wards the last 5) are read too but left out of the network, and so is
+  Atakhan, gone since the 2026 season: see "What the model can't learn" below
+
+The timeline files the Elder as a dragon with an `ELDER_DRAGON` subtype, which the state read
+as a sixth ordinary dragon until wp3: no model before it ever saw an Elder buff.
 
 Six versions are trained on the same games (`winprob/model.py`), each network stopped on
 held-out training *games* (scikit-learn's own early stopping holds out random rows from the
@@ -738,59 +748,140 @@ same games, which hides the problem below), with its weight penalty chosen the s
 Inputs that stay the same all game let a network recognise each game by its line-up and
 memorise who won: versions 3 and 4 stop after a single epoch and do worse on new games than
 the stacked versions. A linear layer can't memorise games, so it keeps only what holds across them.
-Calibration is Platt scaling (a logistic curve on the log-odds), not isotonic: isotonic is a
-staircase, and a small change in the state (a finished item) that lands on a flat step moves
+Calibration is Platt scaling (a logistic curve on the log-odds) whose slope and offset change
+with the minute, piecewise linearly with bends at 10, 20 and 30 (`PhasePlatt`), and it falls
+back to one curve if the slope isn't positive at every minute. It's not isotonic: isotonic is
+a staircase, and a small change in the state (a finished item) that lands on a flat step moves
 the chance by exactly nothing, which Swing can't afford. The version kept is the best on every
 game none of them trained on, each half calibrated on the other half.
 
-Measured on 2,840 games none of them trained on (18,928 ranked games, 1,083,276 moments seen
+Measured on 3,480 games none of them trained on (23,199 ranked games, 1,336,888 moments seen
 from both sides; the last column is each version's log loss improvement over the game-state
-network on all 5,679 held-out games, with a 95% interval from resampling games):
+network on all 6,960 held-out games, with a 95% interval from resampling games):
 
 | Version | Log loss | Brier | AUC | Calibration error | vs the game-state network |
 |---|---|---|---|---|---|
-| Game-state network | 0.5147 | 0.1746 | 0.815 | 0.0081 | |
-| State plus | 0.5087 | 0.1728 | 0.819 | 0.0073 | +0.0047 (+0.0027 to +0.0066) |
-| Richer state, items and composition in the network | 0.5111 | 0.1736 | 0.817 | 0.0088 | +0.0029 (-0.0003 to +0.0061) |
-| + champions in the network | 0.5259 | 0.1791 | 0.806 | 0.0190 | -0.0077 (-0.0137 to -0.0013) |
-| Stacked | 0.5090 | 0.1724 | 0.820 | 0.0097 | +0.0103 (+0.0066 to +0.0139) |
-| **Stacked plus (used)** | **0.5038** | **0.1709** | **0.824** | **0.0108** | **+0.0142 (+0.0102 to +0.0183)** |
-| Gold lead and minute only | 0.5381 | 0.1835 | 0.796 | 0.0080 | |
+| Game-state network | 0.5160 | 0.1748 | 0.815 | 0.0042 | |
+| State plus | 0.5107 | 0.1732 | 0.819 | 0.0035 | +0.0047 (+0.0033 to +0.0061) |
+| Richer state, items and composition in the network | 0.5111 | 0.1732 | 0.819 | 0.0035 | +0.0053 (+0.0026 to +0.0079) |
+| + champions in the network | 0.5255 | 0.1793 | 0.804 | 0.0114 | -0.0068 (-0.0121 to -0.0020) |
+| Stacked | 0.5087 | 0.1723 | 0.821 | 0.0064 | +0.0106 (+0.0066 to +0.0145) |
+| **Stacked plus (used)** | **0.5047** | **0.1709** | **0.823** | **0.0069** | **+0.0142 (+0.0100 to +0.0183)** |
+| Gold lead and minute only | 0.5364 | 0.1828 | 0.798 | 0.0090 | |
 
-Stacked plus beats stacked by +0.0039 (+0.0020 to +0.0058) on the same held-out games, so
-the richer state is clearly outside noise. Vision and the objective timers barely moved it
-(0.4977 before them, 0.4976 after, on the same test games in the run that added them): at one frame a
-minute, ward counts say little that gold, kills and objectives don't already. It's better
-at every stage of a game:
+Stacked plus beats stacked by +0.0035 (+0.0023 to +0.0048) on the same held-out games, so
+the richer state is clearly outside noise. It's better than the gold lead at every stage of a
+game:
 
 | Minutes | 0-10 | 10-15 | 15-20 | 20-25 | 25-30 | 30+ |
 |---|---|---|---|---|---|---|
-| AUC, stacked plus | 0.683 | 0.808 | 0.857 | 0.896 | 0.915 | 0.896 |
-| AUC, stacked | 0.679 | 0.807 | 0.856 | 0.893 | 0.911 | 0.886 |
-| AUC, gold only | 0.670 | 0.783 | 0.831 | 0.867 | 0.888 | 0.845 |
+| AUC, stacked plus | 0.685 | 0.802 | 0.857 | 0.894 | 0.914 | 0.901 |
+| AUC, gold only | 0.670 | 0.776 | 0.834 | 0.870 | 0.892 | 0.852 |
 
-The champion terms are penalised harder than the rest (their columns scaled down before the
-layer's L2 penalty, the scale and penalty chosen together on validation games; 0.1 here): at
-full weight they overfit the draft. The stacked version's edge over the game-state network
-grew with the data (+0.0098 on 9,156 games, +0.0070 on 13,425, +0.0119 on 17,182, +0.0103 on 18,928, the
-last two clearly outside noise), and it reads the draft only a little (AUC 0.520 in the first two
-minutes for stacked plus, against 0.511 for the game-state network; 0.551 and 0.529 the run
-before), which is what the draft share of Swing rests on. Numbers aren't comparable between
+The champion terms can be penalised harder than the rest (their columns scaled down before
+the layer's L2 penalty, the scale and penalty chosen together on validation games). Earlier
+runs chose a tenth, since at full weight the champions overfit the draft; on 23,199 games this
+run chose full weight. The stacked version's edge over the game-state network grew with the
+data (+0.0098 on 9,156 games, +0.0070 on 13,425, +0.0119 on 17,182, +0.0103 on 18,928,
++0.0106 on 23,199, the last three clearly outside noise), and it reads the draft only a little
+(AUC 0.539 in the first two minutes for stacked plus, against 0.535 for the game-state
+network), which is what the draft share of Swing rests on. Numbers aren't comparable between
 runs: the test games differ, and each crawl changed the mix of ranks. The last crawl added
-1,777 games from every rank, and its test games are harder (the gold-only baseline went from
-0.5335 to 0.5381), so every number above is a little worse than the run before; calibration
-error went from 0.003 to 0.011, about one point. A fair check is the 227 new games in the test
-split, which the earlier model never saw either: the retrained model is better on them by
-+0.0022 log loss (-0.0061 to +0.0113), inside noise. At this size, more games help a little
-at most.
+4,271 games from every rank (373 Bronze to 855 Diamond). The cross-validation below tests
+every game once, so it's the comparison to trust.
 
-What the logistic layer learned (in the stacked version; current weights on `/swing`) reads
-like the game: armor is worth more the more of the
-enemy's damage is physical (+0.21 log-odds against an all-physical team), anti-heal is worth
-nothing on its own (-0.08) but pays against lifesteal (+0.04 per enemy lifesteal item), crit
-items are the best damage items (+0.06), marksmen start behind (-0.13) and scale hardest
-(+0.12 for every 30 minutes), supports and mages grow (+0.08, +0.02) while assassins, tanks
-and fighters fall off (-0.13, -0.05, -0.05). These are associations on top of the game state
+**Cross-validation.** One test split of 3,480 games is noisy, so `riftwatch winprob cv`
+splits the games into five groups and trains each version five times, each time tested on
+the group it didn't see: every game is tested once, by models that never saw it. Within each
+run, 15% of the training games calibrate. Intervals come from resampling games.
+
+On all 23,199 games ("after 30" is the calibration error on moments after 30 minutes):
+
+| Version | Calibration | Log loss | Brier | AUC | Calibration error | After 30 | vs the game-state network |
+|---|---|---|---|---|---|---|---|
+| Game-state network | Platt | 0.5127 | 0.1732 | 0.819 | 0.0008 | 0.0068 | |
+| Game-state network | by the minute | 0.5127 | 0.1732 | 0.819 | 0.0013 | 0.0052 | +0.0000 (-0.0000 to +0.0001) |
+| State plus | Platt | 0.5079 | 0.1716 | 0.822 | 0.0019 | 0.0050 | +0.0048 (+0.0040 to +0.0059) |
+| State plus | by the minute | 0.5080 | 0.1717 | 0.822 | 0.0021 | 0.0037 | +0.0047 (+0.0038 to +0.0057) |
+| Stacked plus | Platt | 0.4992 | 0.1684 | 0.829 | 0.0034 | 0.0122 | +0.0135 (+0.0114 to +0.0158) |
+| **Stacked plus (used)** | **by the minute** | **0.4993** | **0.1684** | **0.829** | **0.0040** | **0.0057** | **+0.0134 (+0.0113 to +0.0157)** |
+
+Over every game, stacked plus beats the game-state network by 0.0134, with an interval half
+as wide as the single split's. Calibrating it by the minute halves the error after 30 minutes
+(1.2 points to 0.6), where one curve for the whole game was furthest off. That costs 0.0001
+of log loss and a slightly larger error in the first ten minutes (0.7 points to 0.8).
+
+An earlier run on 19,333 games settled the inputs and the calibration (the last column is
+against the first row):
+
+| Version | Calibration | Log loss | Calibration error | After 30 | vs the first row |
+|---|---|---|---|---|---|
+| Richer network, wards and Atakhan in | Platt | 0.5053 | 0.0022 | 0.0065 | |
+| Richer network, wards and Atakhan out (used) | Platt | 0.5055 | 0.0022 | 0.0083 | -0.0002 (-0.0005 to +0.0001) |
+| The same, towers counted by tier only | Platt | 0.5056 | 0.0026 | 0.0072 | -0.0003 (-0.0005 to -0.0000) |
+| Stacked plus | Platt | 0.4965 | 0.0033 | 0.0104 | +0.0088 (+0.0069 to +0.0107) |
+| Stacked plus | beta | 0.4965 | 0.0033 | 0.0104 | +0.0088 (+0.0069 to +0.0107) |
+| **Stacked plus** | **by the minute (used)** | **0.4965** | **0.0037** | **0.0053** | **+0.0088 (+0.0069 to +0.0107)** |
+| Stacked plus | by the minute and rank | 0.4971 | 0.0028 | 0.0044 | +0.0082 (+0.0062 to +0.0101) |
+| Stacked plus | by the minute and region | 0.4965 | 0.0036 | 0.0051 | +0.0088 (+0.0069 to +0.0106) |
+
+Leaving wards and Atakhan out costs nothing measurable (see "What the model can't learn"
+below), and counting towers only by tier doesn't help. Calibrating by the minute halved the
+error after 30 minutes there too, at no cost in log loss. Beta calibration (Kull et al., 2017)
+is the same as Platt here. A curve for each rank fits each rank better but new games worse
+(0.0006 to 0.0008 log loss lost, for every network), so it isn't used, and a curve for each
+region changes nothing. The calibration error left by rank, for stacked plus by the minute, is
+under a point in every rank but Iron (1.5) and Emerald (1.3), with about 1,000 to 7,900 games
+a rank in that run.
+
+**Does every take move the chance the right way?** Swing credits a kill, structure or
+objective with the change it made in the taker's chance, so a take that lowers it shows a play
+that helped as one that hurt. `riftwatch winprob sanity` counts how often that happens, by kind
+of event, on 1,000 games the model never trained on (`sanity.json`; points of win chance):
+
+| Event | Events | Wrong way | By more than a point | Average gain | Worst |
+|---|---|---|---|---|---|
+| Kill | 62,010 | 0.0% | 0.00% | +4.19 | -0.1 |
+| Tower | 11,870 | 25.6% | 1.45% | +0.66 | -4.2 |
+| Inhibitor | 1,729 | 0.0% | 0.00% | +1.87 | 0.0 |
+| Dragon | 3,909 | 2.1% | 0.36% | +4.09 | -3.8 |
+| Elder | 79 | 8.9% | 0.00% | +8.75 | -0.3 |
+| Baron | 1,083 | 8.2% | 2.77% | +2.43 | -2.7 |
+| Herald | 845 | 8.1% | 0.12% | +1.38 | -1.4 |
+| Voidgrubs | 2,988 | 4.8% | 0.00% | +0.82 | -0.5 |
+
+Before wp3 (Swing stored for 19,000 games, mostly ones that model trained on), a Baron went
+the wrong way 9.9% of the time (3.3% by more than a point, the worst -6.6), a tower 27%, and
+all 8 Atakhans, by 20 points on average, while an Elder counted as a sixth dragon. Now the
+Elder is read and worth almost 9 points, Atakhan can't move the chance, and the worst Baron
+costs 2.7 points instead of 6.6. Towers still go the wrong way a quarter of the time, almost
+always by a fraction of a point: a tower is worth little on its own (two thirds of a point on
+average), so small errors flip its sign. Baron is better but not fixed. Across eight
+trainings from different random starts it went the wrong way between 0.7% and 8.2% of the
+time, and this one is the worst, so what's left is the network not learning it reliably rather
+than a wrong input. A network that can't lower a team's chance for taking something
+(monotonic constraints) would fix both, and is the next thing to try.
+
+**What the model can't learn.** Two things the state reads are left out of the network:
+
+- **Wards.** At one frame a minute, ward counts say little that gold, kills and objectives
+  don't already: adding them moved the test log loss from 0.4977 to 0.4976, and leaving them
+  out costs 0.0002 in cross-validation (-0.0005 to +0.0001), inside noise. Worse, the network
+  fitted their noise. In the model before wp3, three more wards lowered a team's chance 17.5%
+  of the time and one more control ward 30%, and Swing shared those moves out as if they were
+  real.
+- **Atakhan** is gone from the game since the 2026 season. The stored timelines hold 8
+  Atakhan kills, all from patch 15.24 games (the last patch of 2025) still in the crawl, and
+  none from any 2026 patch. Learning from 8 games, the model had every one of those takes
+  lowering the taker's chance, by 20 points on average. Left out, it can't do that again.
+
+What the logistic layer learned (in the version used; current weights on `/swing`) reads
+like the game: armor is worth more the more of the enemy's damage is physical (+0.32
+log-odds more against an all-physical team) and magic resist the more of it is magic (+0.50),
+anti-heal is worth nothing on its own (-0.15) but pays against lifesteal (+0.04 per enemy
+lifesteal item), crit items are the best damage items (+0.07), marksmen start behind (-0.15)
+and scale hardest (+0.15 for every 30 minutes), supports grow (+0.07) while tanks, fighters
+and assassins fall off (-0.08, -0.07, -0.08). These are associations on top of the game state
 (defensive items are often bought by the team that's behind), listed on `/swing`.
 
 ### The decomposition and sharing it out
@@ -822,8 +913,10 @@ allows:
 - **kills:** half by damage dealt to the victim (Riot's `victimDamageReceived`), half equally
   among the players credited (crowd control, shields and heals aren't in the damage record);
   the player who died takes the loss
-- **objectives and structures:** half to the players who took part, half to the team; a
-  loss lands half on players dead at that moment
+- **objectives:** half to the players who took part, half to the team, shared by the wards
+  each player placed and cleared in the two minutes before the take (evenly when nobody
+  warded); a loss lands half on players dead at that moment
+- **structures:** half to the players who took part, half to the team, and a loss the same way
 - **items:** the buyer
 - **drift:** half evenly, half by how far each player out-earned their lane opponent that
   minute (a loss: by how far each fell behind theirs). Measuring against the same role means
@@ -833,6 +926,27 @@ allows:
 Until November 2026 kills were split half to the killer and half to the assisters, and drift
 by gold earned (losses evenly). `riftwatch winprob validate` compares those fixed shares with
 the measured ones on every stored game (section 6.3 of the method page).
+
+**Vision.** A support's warding doesn't move the model's chance, so before sw8 it earned them
+no Swing directly. Putting wards back into the model doesn't fix that. On top of everything wp3
+reads, a fixed value for each ward placed, control ward and ward cleared made the test log loss
+slightly worse (0.5047 to 0.5050; the 95% interval runs from no change to 0.0006 worse), and the
+values flipped sign with the stage of the
+game (a ward worth +0.5 points before 15 minutes and -0.5 from 15 to 25). Crediting them anyway
+would have made up about 12 points a game for supports, against 4 to 5 for the other roles.
+Vision's effect shows up in what it leads to: the pick, the objective, the gold. Riot's ward
+events also have no map position, so a deep ward and one in a team's own jungle look the same.
+So since sw8, vision is credited through the objectives it sets up: the team's half of an
+objective goes to whoever placed and cleared wards in the two minutes before it, instead of
+evenly. Every team still sums to exactly ±50.
+
+On 232,200 player-games, a support's average Swing went from -4.2 to -3.0 a game, and the
+jungler's, the usual taker, from +6.3 to +6.0 (the laners' moved by about 0.3 each). A
+player-game moves by 0.67 points on average (correlation 0.9986 with sharing evenly). Swing
+repeats and predicts exactly as well as before (reliability 0.503 and +0.072 under both rules),
+so the rule is a fairer split, not a better measure of skill. Supports still average below
+zero: peel, crowd control and shields aren't in Riot's records, so they show only through the
+kills they're credited with.
 
 **Why a moment cost what it did.** Each jump is split exactly among what changed (a player
 down, the bounty gold, the kill score, the dragon, an item's armor) by Shapley values: the
@@ -849,36 +963,40 @@ also asked about the champion's other common items at that same moment.
 `riftwatch winprob validate` (`winprob/validate.py`, results in `validation.json` and on
 `/swing/method`) checks what a statistic about players should do. Every stat is measured
 against its role's average first, so none looks stable just because players keep to a role.
-On 189,440 player-games (1,044 players with 20+ games):
+On 232,200 player-games (1,089 players with 20+ games):
 
 | Stat | Reliability (split-half, Spearman-Brown) | Predicts later win rate (r) |
 |---|---|---|
-| **Swing** | 0.51 | +0.092 |
-| RiftWatch score (KDA, kill share, damage, gold, farm, vision) | 0.54 | +0.123 |
-| KDA | 0.51 | +0.033 |
+| **Swing** | 0.50 | +0.072 |
+| RiftWatch score (KDA, kill share, damage, gold, farm, vision) | 0.52 | +0.095 |
+| KDA | 0.49 | +0.019 |
 | Kill participation | 0.59 | +0.046 |
-| Damage per minute | 0.72 | +0.093 |
-| Gold per minute | 0.75 | +0.075 |
-| Win rate | 0.07 | +0.009 |
+| Damage per minute | 0.71 | +0.101 |
+| Gold per minute | 0.75 | +0.057 |
+| Win rate | 0.05 | -0.001 |
 
-(Swing on the retrained stacked-plus model with farm charged; before the last crawl it was 0.52 and +0.090.)
+(Swing on the wp3 model. On the model before it, with about 43,000 fewer player-games, it was
+0.51 and +0.092. Most stats predict less well on the larger set by similar amounts (the score
+went from +0.123 to +0.095), while damage went from +0.093 to +0.101. The intervals on these
+correlations are about ±0.06.)
 
 - **Prediction against its ceiling.** A later half's win rate is mostly luck: no stat could
-  correlate with it beyond 0.30 (the square root of its reliability). With past win rate
-  known, past Swing still adds a partial correlation of +0.10 (95% CI 0.04 to 0.16).
+  correlate with it beyond 0.28 (the square root of its reliability). With past win rate
+  known, past Swing still adds a partial correlation of +0.08 (95% CI 0.03 to 0.14).
 - **The sharing rules.** Every stored game was shared again under rule sets fixed in advance:
-  the old fixed shares (reliability 0.52, prediction 0.091), damage-shared kills only (0.50,
-  0.086), lane-relative economy only (0.52, 0.097) and both (0.51, 0.092, used). The
+  the old fixed shares (reliability 0.50, prediction 0.067), damage-shared kills only (0.48,
+  0.066), lane-relative economy only (0.51, 0.073), both (0.50, 0.072) and both with
+  objectives shared by vision (0.50, 0.072, used). The
   differences are well inside each other's intervals: the rules matter little. Moving each
   remaining choice far either side (a quarter or three quarters instead of half) moves a
-  player-game's Swing by 0.3 to 1.3 points on average (correlation 0.997 to 0.9997 with the
+  player-game's Swing by 0.3 to 1.2 points on average (correlation 0.9975 to 0.9997 with the
   rules used). The farm charge moves points between a player's own parts, so it leaves every
   total, and these checks, as they were.
-- **The model.** The same games scored with the first network instead: correlation 0.919
+- **The model.** The same games scored with the first network instead: correlation 0.914
   on 200 games.
 
-Swing repeats as well as KDA and the site's own score, and predicts as well as damage and
-gold, though not as well as the composite score: like win probability added in baseball, it
+Swing repeats as well as KDA and the site's own score, and predicts about as well as gold,
+though not as well as damage or the composite score: like win probability added in baseball, it
 credits context (the same kill is worth more at 35 minutes with Baron up), which is what makes
 it explain a game and also what makes it noisier as a skill measure.
 
@@ -887,8 +1005,8 @@ average in one game, x = theta + noise, Var(theta) = tau^2, Var(noise) = sigma^2
 estimate from n games is the average times n tau^2 / (n tau^2 + sigma^2), with a margin of
 sqrt(tau^2 sigma^2 / (n tau^2 + sigma^2)). tau^2 is the covariance of players' averages over two
 halves of their games (the noise in each is independent), sigma^2 the average spread of a
-player's own games: tau = 3.76, sigma = 19.1, so a rating is pulled towards average as if 26
-average games were added (3.92, 19.8 and 26 before the last crawl). A test checks the estimators on simulated players with known levels.
+player's own games: tau = 3.45, sigma = 17.9, so a rating is pulled towards average as if 27
+average games were added (3.76, 19.1 and 26 on the model before). A test checks the estimators on simulated players with known levels.
 It's on the profile ("Swing rating +x +- y"), and `/swing` has a **Swing ladder** of the players
 RiftWatch has seen with 10+ games, by rating in their main role.
 
@@ -903,14 +1021,14 @@ Bayes (the spread of true values is estimated from how much the averages vary be
 their sample sizes explain), items are measured against the enemy team too (mostly magic,
 mostly physical, two or more tanks), and a split-half check says how much is signal:
 
-Over 1,012,460 choices in about 18,900 games:
+Over 1,242,557 choices in about 23,800 games:
 
 | Choice | True spread | Split-half reliability | Choices in both halves |
 |---|---|---|---|
-| Items | ±1.2 pts | 0.10 | 1323 |
-| First ability maxed | ±1.7 pts | 0.09 | 231 |
-| Keystone | ±2.5 pts | 0.02 | 391 |
-| Summoner spells | ±1.1 pts | 0.05 | 421 |
+| Items | ±0.4 pts | 0.05 | 1533 |
+| First ability maxed | ±1.0 pts | 0.07 | 242 |
+| Keystone | ±2.6 pts | 0.11 | 416 |
+| Summoner spells | ±2.6 pts | 0.12 | 464 |
 
 The honest result: with the game state taken out, which item, keystone or spell a player picks
 on a champion barely changes the result beyond chance at this sample size (a split-half
@@ -959,7 +1077,7 @@ economy part, where the extra lost farm would otherwise show minutes later. Tota
 change: every team still sums to exactly ±50.
 
 The typical is weighted by what a CS was worth at the end of each window, by the model
-(`farm.json`, from 2,934 games). The charge is about worth-per-CS × (CS − typical), so this
+(`farm.json`, from 2,931 games). The charge is about worth-per-CS × (CS − typical), so this
 weighting makes it average zero over stored games, as an expected cost should. A plain mean
 didn't: windows late in decided games, with long death timers and little a CS can change,
 pulled the typical up and credited the average death 0.3 points. Weighted, the typical window
@@ -968,12 +1086,12 @@ per play by kind is close to zero, except where it shouldn't be:
 
 | Average charge per play (points) | Roams and ganks | Other fights | Objectives | Towers | Deaths |
 |---|---|---|---|---|---|
-| Top | +0.14 | +0.02 | +0.07 | 0.00 | -0.07 |
-| Jungle | +0.02 | +0.04 | -0.01 | +0.02 | -0.11 |
-| Mid | +0.17 | +0.01 | +0.09 | +0.01 | -0.10 |
-| Bot | +0.10 | +0.02 | +0.04 | +0.01 | -0.08 |
+| Top | +0.12 | +0.02 | +0.06 | 0.00 | -0.07 |
+| Jungle | +0.03 | +0.04 | -0.01 | +0.02 | -0.11 |
+| Mid | +0.20 | +0.01 | +0.09 | +0.01 | -0.12 |
+| Bot | +0.09 | +0.02 | +0.05 | +0.01 | -0.08 |
 
-A laner's roam costs more farm than a typical play (+0.10 to +0.17 a roam): a jungler's gank
+A laner's roam costs more farm than a typical play (+0.09 to +0.20 a roam): a jungler's gank
 doesn't, since camps wait. Each moment on the match page says what it cost whom ("this play cost about 12 CS of farm (260 gold, 790 XP; 9:00-12:00), worth 1.1
 points of win chance; a typical play like it costs 3 CS…"). The profile's **Were your plays
 worth the farm?** table (`winprob/trades.py`) adds this up by kind of play: roams and ganks,
@@ -1325,21 +1443,21 @@ The live-game tab and the multi-search lobby show each team's chance before the 
 
 Backtest (`python -m riftwatch.web.pregame`, saved to `out/ml/models/winprob/pregame.json`):
 every stored game is predicted from ratings built only from each player's *earlier* games.
-On 11,631 games with at least one known player (4.1 a game on average):
+On 13,234 games with at least one known player (3.9 a game on average):
 
 | Prediction | Log loss | AUC | Leans 5+ points: says / right |
 |---|---|---|---|
 | Coin flip | 0.6931 | 0.500 | |
-| Players' ratings, raw | 0.6925 | 0.529 | |
-| Players and draft, raw | 0.6914 | 0.549 | 57.8% / 54.3% |
-| **Calibrated (used)** | **0.6895** | **0.547** | **57.6% / 56.2%** |
+| Players' ratings, raw | 0.6921 | 0.530 | |
+| Players and draft, raw | 0.6924 | 0.553 | 57.4% / 54.3% |
+| **Calibrated (used)** | **0.6890** | **0.552** | **57.6% / 57.1%** |
 
 Added raw, the parts are overconfident: when the prediction leaned 5 points or more it said
-57.8% and was right 54.3% of the time. So the backtest also fits how much each part is really
+57.4% and was right 54.3% of the time. So the backtest also fits how much each part is really
 worth by logistic regression (the ratings, the draft and blue side), and scores that on the
 half of the games it wasn't fitted on (each half in turn). The ratings turn out to be worth
-0.55 of the raw slope and the draft 0.57, and blue side is worth nothing to speak of (-0.04
-log-odds). Calibrated, it says 57.6% and is right 56.2%, on 3,119 games. The live and lobby
+0.65 of the raw slope and the draft 0.49, and blue side is worth nothing to speak of (-0.02
+log-odds). Calibrated, it says 57.6% and is right 57.1%, on 3,832 games. The live and lobby
 predictions use the fitted weights (`fit` in `pregame.json`). The page shows the backtest and
 says that most of a solo-queue game is still decided in the game. Matchmaking is built to make games close to a
 coin flip before they start, so a small edge is about what you'd expect.

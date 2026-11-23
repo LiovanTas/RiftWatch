@@ -100,7 +100,8 @@ _lock = threading.Lock()
 MONSTER = {"DRAGON": "Dragon", "ELDER_DRAGON": "Elder Dragon", "BARON_NASHOR": "Baron",
            "RIFTHERALD": "Rift Herald", "HORDE": "a Voidgrub", "ATAKHAN": "Atakhan"}
 DRAKE = {"FIRE_DRAGON": "Infernal", "WATER_DRAGON": "Ocean", "EARTH_DRAGON": "Mountain",
-         "AIR_DRAGON": "Cloud", "HEXTECH_DRAGON": "Hextech", "CHEMTECH_DRAGON": "Chemtech"}
+         "AIR_DRAGON": "Cloud", "HEXTECH_DRAGON": "Hextech", "CHEMTECH_DRAGON": "Chemtech",
+         "ELDER_DRAGON": "Elder"}          # the timeline files the Elder as a dragon with this subtype
 LANE_NAME = {"TOP_LANE": "top", "MID_LANE": "mid", "BOT_LANE": "bot"}
 NEAR = 2500                               # map units: "near you" for allies and enemies
 PLATES_FALL = 14                          # turret plates drop at 14:00

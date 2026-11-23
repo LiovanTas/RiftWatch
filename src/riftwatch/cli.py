@@ -198,18 +198,20 @@ def cmd_ml_train(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_winprob_train(settings: Settings, args: argparse.Namespace) -> int:
-    """Train the win-probability network that Swing is built on: three versions (game state;
-    + items and composition; + champions) on the same games, keeping the best."""
+def _winprob_dataset(settings: Settings, args: argparse.Namespace):
+    """Every stored game's states and the item and champion catalog, read from the database or
+    (with --reuse) from the copy saved last time."""
     import joblib
     import numpy as np
 
     from riftwatch.web.gamedata import shared
     from riftwatch.winprob import model as wp
 
-    cache = Path(settings.models_dir).parent / "winprob_dataset_v4.npz"     # v4: vision and objective timers
+    # v5: Baron and Elder buffs counted by holder (and the Elder read at all), match ids kept
+    cache = Path(settings.models_dir).parent / "winprob_dataset_v5.npz"
     catalog_file = cache.with_suffix(".catalog.joblib")
-    if args.reuse and cache.exists() and catalog_file.exists() and not args.limit:
+    limit = getattr(args, "limit", None)
+    if args.reuse and cache.exists() and catalog_file.exists() and not limit:
         print(f"reusing the games read last time ({cache})")
         with np.load(cache) as f:
             data = {k: f[k] for k in f.files}
@@ -220,12 +222,99 @@ def cmd_winprob_train(settings: Settings, args: argparse.Namespace) -> int:
             catalog = wp.build_catalog(conn, shared())
             print(f"  {len(catalog.items):,} finished items, {len(catalog.champions):,} champions")
             print("reading games...")
-            data = wp.load_dataset(conn, catalog, limit=args.limit)
-        if not args.limit:
+            data = wp.load_dataset(conn, catalog, limit=limit)
+        if not limit:
             cache.parent.mkdir(parents=True, exist_ok=True)
             np.savez_compressed(cache, **data)
             joblib.dump(catalog, catalog_file)
     print(f"{len(set(data['games'].tolist())):,} games, {len(data['y']):,} minute snapshots (both sides)")
+    return data, catalog
+
+
+def cmd_winprob_cv(settings: Settings, args: argparse.Namespace) -> int:
+    """Grouped cross-validation: every game tested once. Compares versions, input sets for the
+    richer network and ways of calibrating, and saves the results next to the model."""
+    import json
+
+    import numpy as np
+
+    from riftwatch.winprob import model as wp
+
+    data, catalog = _winprob_dataset(settings, args)
+    by_name = {name: (name, feats, ident) for name, feats, ident in wp.VARIANTS}
+    # The richer network on other inputs first (so the first named is what the rest are measured
+    # against), then the versions as they're trained.
+    variants = [(f"state_plus:{key}", wp.INPUT_SETS[key], False) for key in (args.inputs.split(",") if args.inputs else [])]
+    variants += [by_name[n] for n in args.only.split(",")]
+    calibrations = {k: {**wp.CALIBRATIONS, **wp.GROUP_CALIBRATIONS}[k] for k in args.calibration.split(",")}
+    groups = {}
+    mids = data.get("match_ids")
+    if mids is not None and "phase_region" in calibrations:
+        groups["phase_region"] = np.char.partition(mids.astype(str), "_")[:, 0][data["games"]]
+    if mids is not None and "phase_rank" in calibrations:
+        with connect(settings.database_url) as conn:
+            tier = dict(conn.execute("SELECT match_id, tier_bucket FROM match_samples WHERE match_id = ANY(%s)",
+                                     (mids.tolist(),)).fetchall())
+        groups["phase_rank"] = np.asarray([tier.get(m, "UNKNOWN") for m in mids.tolist()])[data["games"]]
+    for name in list(calibrations):
+        if name in wp.GROUP_CALIBRATIONS and name not in groups:
+            print(f"skipping {name}: the saved games have no match ids (read them again without --reuse)")
+            del calibrations[name]
+    print(f"{args.folds}-fold cross-validation of {', '.join(v[0] for v in variants)}; "
+          f"calibrated by {', '.join(calibrations)}")
+    out = wp.cross_validate(data, catalog, variants, folds=args.folds, calibrations=calibrations, groups=groups)
+    path = Path(settings.models_dir) / wp.DIRNAME / wp.CV_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out, indent=2), encoding="utf-8")
+    print(f"{'version':<26} {'calibration':<13} {'log loss':>8} {'AUC':>6} {'ECE':>7} {'ECE 30+':>8}  vs first")
+    for r in out["results"]:
+        vs = r.get("vs_first")
+        vs_text = f"{vs['improvement']:+.4f} ({vs['low']:+.4f} to {vs['high']:+.4f})" if vs else ""
+        print(f"{r['version']:<26} {r['calibration']:<13} {r['log_loss']:>8.4f} {r['auc']:>6.3f} {r['ece']:>7.4f} "
+              f"{r['ece_by_minute'].get('30-', float('nan')):>8.4f}  {vs_text}")
+    print(f"on {out['games']:,} games, each tested once; saved to {path}")
+    return 0
+
+
+def cmd_winprob_sanity(settings: Settings, args: argparse.Namespace) -> int:
+    """How often a kill, structure or objective lowers the taker's chance, on test games."""
+    import json
+
+    import numpy as np
+
+    from riftwatch.winprob import model as wp
+    from riftwatch.winprob import sanity
+
+    model = wp.load(settings.models_dir)
+    if model is None:
+        print("no win-probability model yet: run `riftwatch winprob train` first")
+        return 1
+    cache = Path(settings.models_dir).parent / "winprob_dataset_v5.npz"
+    if not cache.exists():
+        print(f"no saved games at {cache}: run `riftwatch winprob train` first")
+        return 1
+    with np.load(cache) as f:
+        games, mids = f["games"], f["match_ids"]
+    _, _, test_m = wp._split(games)                       # the games the model was tested on
+    test = mids[np.unique(games[test_m])].tolist()[: args.games]
+    with connect(settings.database_url) as conn:
+        result = sanity.check(model, sanity.load_games(conn, test))
+    print(f"{'kind':<11} {'events':>8} {'wrong way':>10} {'by >1 pt':>9} {'mean':>7} {'worst':>7}")
+    for kind, r in result.items():
+        print(f"{kind:<11} {r['events']:>8,} {r['wrong_way']:>10.1%} {r['wrong_by_1pt']:>9.2%} {r['mean']:>+7.2f} "
+              f"{r['worst']:>+7.1f}")
+    out = Path(settings.models_dir) / wp.DIRNAME / sanity.FILE
+    out.write_text(json.dumps({"games": len(test), "kinds": result}, indent=2), encoding="utf-8")
+    print(f"on {len(test):,} test games; saved to {out}")
+    return 0
+
+
+def cmd_winprob_train(settings: Settings, args: argparse.Namespace) -> int:
+    """Train the win-probability network that Swing is built on: three versions (game state;
+    + items and composition; + champions) on the same games, keeping the best."""
+    from riftwatch.winprob import model as wp
+
+    data, catalog = _winprob_dataset(settings, args)
     layers = tuple(int(n) for n in args.layers.split(",")) if args.layers else wp.LAYERS
     variants = [v for v in wp.VARIANTS if not args.only or v[0] in args.only.split(",")]
     trained, metrics = wp.train(data, catalog, layers=layers, variants=variants)
@@ -1183,6 +1272,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--layers", help="hidden layer sizes, e.g. 128,64 (default 64,32)")
     p.add_argument("--only", help="train only these versions, e.g. state,items (default all three)")
     p.set_defaults(func=cmd_winprob_train)
+    p = wpcmd.add_parser("cv", help="cross-validate versions, inputs and calibrations (every game tested once)")
+    p.add_argument("--reuse", action="store_true", help="reuse the games read last time instead of the database")
+    p.add_argument("--folds", type=int, default=5, help="folds (default 5)")
+    p.add_argument("--only", default="state_plus,stacked_plus", help="versions (default state_plus,stacked_plus)")
+    p.add_argument("--inputs", help="also the richer network on these input sets, e.g. rich,plus_tower_tiers")
+    p.add_argument("--calibration", default="platt,beta,phase",
+                   help="ways of calibrating: platt, beta, phase, phase_rank, phase_region (default platt,beta,phase)")
+    p.set_defaults(func=cmd_winprob_cv)
+    p = wpcmd.add_parser("sanity", help="how often a take lowers the taker's chance, on the model's test games")
+    p.add_argument("--games", type=int, default=1000, help="test games to read (default 1000)")
+    p.set_defaults(func=cmd_winprob_sanity)
     p = wpcmd.add_parser("backfill", help="work out Swing for every stored game that doesn't have it")
     p.add_argument("--limit", type=int, help="only this many games")
     p.add_argument("--shard", help="i/n: only this process's share of the games, to run n processes at once "

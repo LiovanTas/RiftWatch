@@ -5,10 +5,11 @@ same moment seen from the other side is the same game with the label flipped, wh
 the network that the game is symmetric). Label: whether that team won.
 
 Model: a small multilayer perceptron (scikit-learn MLPClassifier, two hidden layers, ReLU,
-stopped on held-out games) on standardised inputs, then Platt calibration (a logistic curve on
-its log-odds, smooth so small changes still count) on other held-out games, so a "70%" means
-70%. Games, not rows, are split into train / calibration / test, so no minute of a
-test game was seen in training.
+stopped on held-out games) on standardised inputs, then calibration (a logistic curve on its
+log-odds whose slope and offset change smoothly with the minute, so small changes still count
+and the late game gets its own curve) on other held-out games, so a "70%" means 70%. Games, not
+rows, are split into train / calibration / test, so no minute of a test game was seen in
+training. ``cross_validate`` tests every game once instead, for comparing versions.
 
 Four versions are trained on the same split; each network is stopped on held-out training
 games, and the version kept is the best on every game none of them trained on (calibration and
@@ -41,12 +42,14 @@ from typing import Any
 
 import numpy as np
 
-from riftwatch.winprob.state import BASE_FEATURES, CLASSES, FULL_FEATURES, ITEM_FLAGS, RICH_FEATURES, Catalog, Replay
+from riftwatch.winprob.state import (BASE_FEATURES, CLASSES, FULL_FEATURES, ITEM_FLAGS, RICH_FEATURES,
+                                     VISION_FEATURES, Catalog, Replay)
 
 DIRNAME = "winprob"
 MODEL_FILE = "model.joblib"
 METRICS_FILE = "metrics.json"
-VERSION = "wp2"
+CV_FILE = "cv.json"
+VERSION = "wp3"
 LAYERS = (64, 32)
 ALPHAS = (1e-4, 1e-3, 1e-2)         # weight penalties tried for each version
 MAX_EPOCHS, PATIENCE = 40, 4
@@ -111,15 +114,17 @@ def build_catalog(conn, gd, log=print) -> Catalog:
 
 def load_dataset(conn, catalog: Catalog, limit: int | None = None, log=print) -> dict[str, np.ndarray]:
     """Every stored game with a timeline at every minute from both sides: inputs (all of
-    FULL_FEATURES), labels, game index, minute and each side's champions."""
+    FULL_FEATURES), labels, game index, minute and each side's champions; ``match_ids[g]`` is
+    game ``g``'s match."""
     sql = GAME_SQL + """ JOIN matches m USING (match_id)
          WHERE m.queue_id IN (420, 440) ORDER BY match_id""" + (f" LIMIT {int(limit)}" if limit else "")
-    xs, ys, games, minutes, own, enemy = [], [], [], [], [], []
+    xs, ys, games, minutes, own, enemy, match_ids = [], [], [], [], [], [], []
     started = time.monotonic()
     with conn.transaction(), conn.cursor(name="winprob_dataset") as cur:   # server-side, streamed
         cur.itersize = 200
         cur.execute(sql)
-        for g, (_, frames, events, rows) in enumerate(cur):
+        for g, (match_id, frames, events, rows) in enumerate(cur):
+            match_ids.append(match_id)                    # game index g -> its match
             champions, purchases = players(rows)
             replay = Replay(frames, events, champions, purchases, catalog, positions(rows))
             if replay.winner not in (100, 200) or len(frames) < 6:
@@ -136,7 +141,8 @@ def load_dataset(conn, catalog: Catalog, limit: int | None = None, log=print) ->
                 log(f"  {g:,} games read ({time.monotonic() - started:.0f}s)")
     return {"X": np.asarray(xs, dtype=np.float32), "y": np.asarray(ys, dtype=np.float32),
             "games": np.asarray(games), "minutes": np.asarray(minutes, dtype=np.float32),
-            "own": np.asarray(own, dtype=np.int16), "enemy": np.asarray(enemy, dtype=np.int16)}
+            "own": np.asarray(own, dtype=np.int16), "enemy": np.asarray(enemy, dtype=np.int16),
+            "match_ids": np.asarray(match_ids, dtype=str)}
 
 
 def _fit(design_train, y_train, design_val, y_val, layers, alpha, log=print, seed: int = 7):
@@ -168,27 +174,127 @@ class Platt:
     """Calibration by a logistic curve on the network's log-odds: smooth and always
     increasing. Isotonic regression calibrates as well on average but is a staircase, so a
     small change in the state (a finished item, a ward of gold) can land on a flat step and
-    move the chance by exactly nothing -- and Swing is made of small changes."""
+    move the chance by exactly nothing -- and Swing is made of small changes.
 
-    def fit(self, raw: np.ndarray, y: np.ndarray) -> Platt:
+    Every calibration here takes the minute and a group (rank, region) and ignores what it
+    doesn't use, so they can be swapped and compared."""
+
+    reads_minute = False
+
+    def fit(self, raw: np.ndarray, y: np.ndarray, minute=None, group=None) -> Platt:
         from sklearn.linear_model import LogisticRegression
 
         self.lr = LogisticRegression(C=1e6, max_iter=1000).fit(_logit(raw).reshape(-1, 1), y)
         return self
 
-    def predict(self, raw: np.ndarray) -> np.ndarray:
+    def predict(self, raw: np.ndarray, minute=None, group=None) -> np.ndarray:
         return self.lr.predict_proba(_logit(np.asarray(raw)).reshape(-1, 1))[:, 1]
 
 
-def _held_out_losses(raw: np.ndarray, y: np.ndarray, games: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+KNOTS = (10.0, 20.0, 30.0)      # minutes where the calibration's slope and offset may bend
+LAST_MINUTE = 45.0              # beyond it the curve stays as it is at 45 (few games last longer)
+
+
+def _phase(minute) -> np.ndarray:
+    m = np.clip(np.asarray(minute, dtype=np.float64), 0.0, LAST_MINUTE)
+    return np.column_stack([np.maximum(0.0, m - k) / 10 for k in KNOTS])
+
+
+class PhasePlatt(Platt):
+    """Platt scaling whose slope and offset change with the minute, piecewise linearly with
+    bends at 10, 20 and 30 minutes, so the curve moves smoothly with the clock and Swing's
+    drift stays continuous. One curve for the whole game overrated leads late (calibration
+    error 0.025 after 30 minutes against 0.011 overall). If the fitted slope isn't positive at
+    every minute (a higher network output must always mean a higher chance), it falls back to
+    one curve."""
+
+    reads_minute = True
+
+    def _design(self, raw, minute, group=None):
+        z = _logit(np.asarray(raw))
+        h = _phase(minute)
+        return np.column_stack([z, z[:, None] * h, h])
+
+    def _slopes_positive(self) -> bool:
+        w = self.lr.coef_[0]
+        grid = _phase(np.arange(0.0, LAST_MINUTE + 1))
+        return bool((w[0] + grid @ w[1:1 + len(KNOTS)] > 0).all())
+
+    def fit(self, raw, y, minute=None, group=None) -> PhasePlatt:
+        from sklearn.linear_model import LogisticRegression
+
+        self.lr = LogisticRegression(C=1e4, max_iter=2000).fit(self._design(raw, minute, group), y)
+        self.fallback = None if self._slopes_positive() else Platt().fit(raw, y)
+        return self
+
+    def predict(self, raw, minute=None, group=None) -> np.ndarray:
+        if self.fallback is not None:
+            return self.fallback.predict(raw)
+        return self.lr.predict_proba(self._design(raw, minute, group))[:, 1]
+
+
+class GroupPhasePlatt(PhasePlatt):
+    """PhasePlatt with its own offset and slope for each group (rank or region), to test
+    whether calibration should depend on them. Groups seen only once in a while (under 500
+    rows) share the reference curve."""
+
+    def _design(self, raw, minute, group=None):
+        base = super()._design(raw, minute)
+        g = (np.asarray(group)[:, None] == self.groups_[None, :]).astype(np.float64)
+        return np.column_stack([base, g, g * base[:, :1]])
+
+    def fit(self, raw, y, minute=None, group=None) -> GroupPhasePlatt:
+        names, counts = np.unique(np.asarray(group), return_counts=True)
+        common = names[counts >= 500]
+        self.groups_ = common[1:] if len(common) else common            # the first is the reference
+        return super().fit(raw, y, minute, group)
+
+
+class Beta(Platt):
+    """Beta calibration (Kull, Silva Filho and Flach, 2017): a logistic curve on log p and
+    log(1 - p) separately, so the two tails can be stretched differently; it's Platt when the
+    two weights are equal. Falls back to Platt if a weight comes out negative (the curve would
+    stop increasing)."""
+
+    def _design(self, raw):
+        p = np.clip(np.asarray(raw, dtype=np.float64), 1e-6, 1 - 1e-6)
+        return np.column_stack([np.log(p), -np.log(1 - p)])
+
+    def fit(self, raw, y, minute=None, group=None) -> Beta:
+        from sklearn.linear_model import LogisticRegression
+
+        self.lr = LogisticRegression(C=1e6, max_iter=1000).fit(self._design(raw), y)
+        self.fallback = None if (self.lr.coef_[0] >= 0).all() else Platt().fit(raw, y)
+        return self
+
+    def predict(self, raw, minute=None, group=None) -> np.ndarray:
+        if self.fallback is not None:
+            return self.fallback.predict(raw)
+        return self.lr.predict_proba(self._design(raw))[:, 1]
+
+
+# Calibrations compared by cross-validation (``cross_validate``); the ones that need a group
+# can't be used live (the model isn't told a game's rank), only tested. On 19,333 games, each
+# tested once, the clock-aware one halved the error after 30 minutes (0.0104 to 0.0053) at the
+# same log loss; beta changed nothing; one curve per rank lost 0.0006 log loss (outside noise:
+# with ~250 calibration games a rank it fits noise), one per region gained nothing.
+CALIBRATIONS = {"platt": Platt, "beta": Beta, "phase": PhasePlatt}
+GROUP_CALIBRATIONS = {"phase_rank": GroupPhasePlatt, "phase_region": GroupPhasePlatt}
+CALIBRATOR = PhasePlatt         # the one train() fits
+
+
+def _held_out_losses(raw: np.ndarray, y: np.ndarray, games: np.ndarray, minute: np.ndarray | None = None,
+                     calibrator=None) -> tuple[np.ndarray, np.ndarray]:
     """Per-game log loss (summed over its moments) and moment counts on the held-out games,
     with each half of the games calibrated on the other half: how good a version is once
     calibrated, on games neither its training nor its calibration saw."""
+    make = calibrator or CALIBRATOR
     ids, inv = np.unique(games, return_inverse=True)
     fold = (inv % 2).astype(bool)
     out = np.empty_like(raw)
     for a, b in ((fold, ~fold), (~fold, fold)):
-        out[b] = Platt().fit(raw[a], y[a]).predict(raw[b])
+        cal = make().fit(raw[a], y[a], None if minute is None else minute[a])
+        out[b] = cal.predict(raw[b], None if minute is None else minute[b])
     p = np.clip(out, 0.001, 0.999)
     loss = -(y * np.log(p) + (1 - y) * np.log(1 - p))
     return np.bincount(inv, loss), np.bincount(inv)
@@ -368,7 +474,10 @@ class WinModel:
         return layer.predict_proba(Z)[:, 1]
 
     def predict(self, X: np.ndarray, own=None, enemy=None) -> np.ndarray:
-        return np.clip(self.calibrator.predict(self.raw(X, own, enemy)), 0.001, 0.999)
+        raw = self.raw(X, own, enemy)
+        if getattr(self.calibrator, "reads_minute", False):        # a calibration that changes with the clock
+            return np.clip(self.calibrator.predict(raw, X[:, self._features().index("minute")]), 0.001, 0.999)
+        return np.clip(self.calibrator.predict(raw), 0.001, 0.999)
 
     def _arrays(self, states: list[dict]):
         feats = self._features()
@@ -386,12 +495,23 @@ class WinModel:
         return (self.predict(*self._arrays(blue_states)) + 1 - self.predict(*self._arrays(red_states))) / 2
 
 
-VARIANTS = (("state", BASE_FEATURES, False), ("state_plus", RICH_FEATURES, False),
+# The richer network's inputs: the richer state without vision and Atakhan. Vision added
+# nothing measurable (0.4977 log loss before it, 0.4976 after) and the network fitted its noise:
+# three more wards lowered a team's chance 17.5% of the time, a control ward 30%. Atakhan is
+# gone since the 2026 season: its only 8 kills in the stored games are from patch 15.24, and
+# every one lowered the taker's chance (by 20 points on average). Other input sets, for
+# cross-validation.
+DROPPED = VISION_FEATURES + ("atakhan_own", "atakhan_enemy")
+PLUS_FEATURES = tuple(f for f in RICH_FEATURES if f not in DROPPED)
+INPUT_SETS = {"rich": RICH_FEATURES, "plus": PLUS_FEATURES,
+              "plus_tower_tiers": tuple(f for f in PLUS_FEATURES if f not in ("towers_own", "towers_enemy"))}
+
+VARIANTS = (("state", BASE_FEATURES, False), ("state_plus", PLUS_FEATURES, False),
             ("items", FULL_FEATURES, False), ("champions", FULL_FEATURES, True),
             ("stacked", FULL_FEATURES, True), ("stacked_plus", FULL_FEATURES, True))
 VARIANT_NAMES = {"state": "Game state (gold, kills, objectives, who's alive)",
                  "state_plus": "Richer game state (tower tiers, plates, power spikes, unspent gold, death timers, "
-                               "objectives up), 5 networks averaged",
+                               "objectives up, lane gaps), 5 networks averaged",
                  "items": "+ items and team composition, in the network",
                  "champions": "+ which champions are playing, in the network",
                  "stacked": "Game state network + a logistic layer for items, composition and champions",
@@ -401,9 +521,14 @@ ENSEMBLE = {"state_plus": 5}            # networks averaged for these versions
 
 
 def train(data: dict[str, np.ndarray], catalog: Catalog | None = None, log=print,
-          layers: tuple[int, ...] = LAYERS, variants=VARIANTS) -> tuple[WinModel, dict]:
+          layers: tuple[int, ...] = LAYERS, variants=VARIANTS, split=None, calibrator=None,
+          keep_models: bool = False, seed: int = 7):
     """Train each version on the same split, keep the best on the calibration games, and
-    report every version and the baseline on the test games."""
+    report every version and the baseline on the test games. ``split`` gives the (train,
+    calibration, test) row masks (games split 70/15/15 by default); ``calibrator`` the
+    calibration class (``CALIBRATOR`` by default). With ``keep_models`` it also returns every
+    version it trained, by name. ``seed`` starts the networks' random draws (another seed
+    shows how much a result is down to one training)."""
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
     from sklearn.preprocessing import StandardScaler
@@ -411,7 +536,8 @@ def train(data: dict[str, np.ndarray], catalog: Catalog | None = None, log=print
     X_all, y, games, minutes = data["X"], data["y"], data["games"], data["minutes"]
     own, enemy = data.get("own"), data.get("enemy")
     full = X_all.shape[1] == len(FULL_FEATURES)
-    train_m, cal_m, test_m = _split(games)
+    make_cal = calibrator or CALIBRATOR
+    train_m, cal_m, test_m = split if split is not None else _split(games)
     # A tenth of the training games, held out to stop each network and pick its penalty.
     rng = np.random.default_rng(11)
     train_ids = np.unique(games[train_m])
@@ -441,12 +567,13 @@ def train(data: dict[str, np.ndarray], catalog: Catalog | None = None, log=print
             started = time.monotonic()
             model, layer_c, val_loss = _stack(models[STACK_ON[name]][0], X_all, own, enemy, y, fit_m, val_m, catalog, log)
             raw_cal = model.raw(X_all[cal_m], own[cal_m], enemy[cal_m])
-            model.calibrator = Platt().fit(raw_cal, y[cal_m])
-            held[name] = _held_out_losses(model.raw(X_all[held_m], own[held_m], enemy[held_m]), y[held_m], games[held_m])
+            model.calibrator = make_cal().fit(raw_cal, y[cal_m], minutes[cal_m])
+            held[name] = _held_out_losses(model.raw(X_all[held_m], own[held_m], enemy[held_m]), y[held_m],
+                                          games[held_m], minutes[held_m], make_cal)
             p_cal = model.predict(X_all[cal_m], own[cal_m], enemy[cal_m])
             p_test = model.predict(X_all[test_m], own[test_m], enemy[test_m])
             fit_s = time.monotonic() - started
-            res = {"name": name, "label": VARIANT_NAMES[name],
+            res = {"name": name, "label": VARIANT_NAMES.get(name, name),
                    "inputs": len(model.state_features) + model.context.coef_.shape[1] - 1,
                    **scores(p_test), "ece": round(_ece(p_test, yt), 4),
                    "calibration_games_log_loss": round(float(log_loss(y[cal_m], p_cal, labels=[0, 1])), 4),
@@ -469,13 +596,14 @@ def train(data: dict[str, np.ndarray], catalog: Catalog | None = None, log=print
         d_fit, d_val = model.design(*sub(fit_m)), model.design(*sub(val_m))
         tried = []
         for alpha in ALPHAS:
-            net, val_loss, epochs = _fit(d_fit, y[fit_m], d_val, y[val_m], layers, alpha)
+            net, val_loss, epochs = _fit(d_fit, y[fit_m], d_val, y[val_m], layers, alpha, seed=seed)
             tried.append((val_loss, alpha, epochs, net))
             log(f"    {name}: penalty {alpha:g} -> {val_loss:.4f} on validation games ({epochs} epochs)")
         val_loss, alpha, epochs, network = min(tried, key=lambda t: t[0])
-        if ENSEMBLE.get(name, 1) > 1:                 # more networks at the chosen penalty, averaged
-            members = [network] + [_fit(d_fit, y[fit_m], d_val, y[val_m], layers, alpha, seed=seed)[0]
-                                   for seed in range(8, 7 + ENSEMBLE[name])]
+        copies = ENSEMBLE.get(name.split(":")[0], 1)      # "state_plus:rich" is state_plus on other inputs
+        if copies > 1:                                    # more networks at the chosen penalty, averaged
+            members = [network] + [_fit(d_fit, y[fit_m], d_val, y[val_m], layers, alpha, seed=s)[0]
+                                   for s in range(seed + 1, seed + copies)]
             network = EnsembleNet(members)
             from sklearn.metrics import log_loss as _ll
 
@@ -484,10 +612,10 @@ def train(data: dict[str, np.ndarray], catalog: Catalog | None = None, log=print
         model.network = network
         fit_s = time.monotonic() - started
         raw_cal = model.raw(*sub(cal_m))
-        model.calibrator = Platt().fit(raw_cal, y[cal_m])
-        held[name] = _held_out_losses(model.raw(*sub(held_m)), y[held_m], games[held_m])
+        model.calibrator = make_cal().fit(raw_cal, y[cal_m], minutes[cal_m])
+        held[name] = _held_out_losses(model.raw(*sub(held_m)), y[held_m], games[held_m], minutes[held_m], make_cal)
         p_cal, p_test = model.predict(*sub(cal_m)), model.predict(*sub(test_m))
-        res = {"name": name, "label": VARIANT_NAMES[name],
+        res = {"name": name, "label": VARIANT_NAMES.get(name, name),
                "inputs": len(feats) + (2 * len(catalog.index) if identity else 0),
                **scores(p_test), "ece": round(_ece(p_test, yt), 4),
                "calibration_games_log_loss": round(float(log_loss(y[cal_m], p_cal, labels=[0, 1])), 4),
@@ -535,10 +663,99 @@ def train(data: dict[str, np.ndarray], catalog: Catalog | None = None, log=print
             "rows": int(span_mask(lo, hi).sum()), "network": scores(p_net, span_mask(lo, hi))["auc"],
             "baseline": scores(p_base, span_mask(lo, hi))["auc"]}
             for lo, hi in spans[1:] if span_mask(lo, hi).sum() > 200},
-        "calibration": _calibration(p_net, yt),
+        "calibration": _calibration(p_net, yt), "calibrator": type(model.calibrator).__name__,
         "trained_at": time.strftime("%Y-%m-%d"),
     }
+    if keep_models:
+        return model, metrics, {name: m for name, (m, _, _) in models.items()}
     return model, metrics
+
+
+def _inputs(model: WinModel, X_all: np.ndarray) -> np.ndarray:
+    """The columns of a dataset's inputs that ``model`` reads."""
+    feats = tuple(model._features())
+    if X_all.shape[1] != len(FULL_FEATURES) or feats == FULL_FEATURES:
+        return X_all
+    return X_all[:, [FULL_FEATURES.index(f) for f in feats]]
+
+
+def _folds(games: np.ndarray, k: int, seed: int = 7) -> np.ndarray:
+    """Each row's fold (0 .. k-1), the same for every row of a game."""
+    ids = np.unique(games)
+    fold_of = np.random.default_rng(seed).permutation(len(ids)) % k
+    return fold_of[np.searchsorted(ids, games)]
+
+
+def cross_validate(data: dict[str, np.ndarray], catalog: Catalog | None = None, variants=VARIANTS,
+                   folds: int = 5, calibrations: dict | None = None, groups: dict[str, np.ndarray] | None = None,
+                   layers: tuple[int, ...] = LAYERS, log=print) -> dict:
+    """Grouped k-fold cross-validation: the games are cut into ``folds`` parts and each part is
+    tested by versions trained on the others (with 15% of all games held out of training for
+    calibration and a tenth of the rest for stopping), so every game is tested exactly once.
+    One test split of 15% can't tell versions apart by less than about 0.004 in log loss; this
+    tests on all of them. Each version is calibrated every way in ``calibrations`` (name ->
+    class) on the same calibration games, so ways of calibrating are compared on the same
+    networks. ``groups`` maps a grouped calibration's name to each row's group (rank,
+    region). Returns pooled scores for every (version, calibration) and each one's log loss
+    improvement over the first, with a 95% interval from resampling games."""
+    from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
+
+    calibrations = calibrations or {"platt": Platt}
+    groups = groups or {}
+    X_all, y, games, minutes = data["X"], data["y"], data["games"], data["minutes"]
+    own, enemy = data.get("own"), data.get("enemy")
+    fold = _folds(games, folds)
+    rng = np.random.default_rng(13)
+    preds: dict[tuple[str, str], np.ndarray] = {}
+    trained_in = {}
+    for k in range(folds):
+        started = time.monotonic()
+        test_m = fold == k
+        rest = np.unique(games[~test_m])
+        cal_ids = rng.choice(rest, max(1, round(len(rest) * 0.15 / (1 - 1 / folds))), replace=False)
+        cal_m = ~test_m & np.isin(games, cal_ids)
+        train_m = ~(test_m | cal_m)
+        _, _, models = train(data, catalog, log=lambda *_: None, layers=layers, variants=variants,
+                             split=(train_m, cal_m, test_m), keep_models=True)
+
+        def side(a, m):
+            return a[m] if a is not None else None
+        for name, model in models.items():
+            X = _inputs(model, X_all)
+            raw_cal = model.raw(X[cal_m], side(own, cal_m), side(enemy, cal_m))
+            raw_test = model.raw(X[test_m], side(own, test_m), side(enemy, test_m))
+            for cname, make in calibrations.items():
+                g = groups.get(cname)
+                cal = make().fit(raw_cal, y[cal_m], minutes[cal_m], None if g is None else g[cal_m])
+                out = preds.setdefault((name, cname), np.full(len(y), np.nan))
+                out[test_m] = cal.predict(raw_test, minutes[test_m], None if g is None else g[test_m])
+        trained_in[k] = round(time.monotonic() - started)
+        log(f"  fold {k + 1}/{folds}: {len(models)} versions, {int(test_m.sum()):,} test moments "
+            f"({trained_in[k]}s)")
+
+    ids, inv = np.unique(games, return_inverse=True)
+    spans = ((0, 10), (10, 20), (20, 30), (30, 99))
+    results, per_game = [], {}
+    for (name, cname), p in preds.items():
+        p = np.clip(p, 0.001, 0.999)
+        loss = -(y * np.log(p) + (1 - y) * np.log(1 - p))
+        per_game[(name, cname)] = (np.bincount(inv, loss), np.bincount(inv))
+        r = {"version": name, "calibration": cname,
+             "log_loss": round(float(log_loss(y, p, labels=[0, 1])), 4),
+             "brier": round(float(brier_score_loss(y, p)), 4), "auc": round(float(roc_auc_score(y, p)), 4),
+             "ece": round(_ece(p, y), 4),
+             "ece_by_minute": {f"{lo}-{hi if hi < 99 else ''}": round(_ece(p[m], y[m]), 4)
+                               for lo, hi in spans for m in [(minutes >= lo) & (minutes < hi)] if m.sum() > 500}}
+        for gname, g in groups.items():
+            r[f"ece_by_{gname}"] = {str(v): round(_ece(p[g == v], y[g == v]), 4)
+                                    for v in np.unique(g) if (g == v).sum() > 2000}
+        results.append(r)
+    reference = next(iter(preds))
+    for r in results:
+        if (r["version"], r["calibration"]) != reference:
+            r["vs_first"] = _paired(per_game[reference], per_game[(r["version"], r["calibration"])])
+    return {"folds": folds, "games": int(len(ids)), "rows": int(len(y)), "first": list(reference),
+            "fold_seconds": trained_in, "results": results, "made_at": time.strftime("%Y-%m-%d")}
 
 
 def _stack(state: WinModel, X_all, own, enemy, y, fit_m, val_m, catalog: Catalog, log=print):

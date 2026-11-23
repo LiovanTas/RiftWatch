@@ -185,11 +185,14 @@ def rating(mean_adj: float, games: int, model: dict[str, float]) -> dict[str, fl
 # -- the sharing rules ------------------------------------------------------------------------
 
 # Rule sets compared on every stored game (fixed in advance, not tuned): the fixed shares
-# Swing started with, each measured share on its own, and both.
+# Swing started with, each measured share on its own, both, and both with each objective's
+# team part shared by the vision that set it up (sw8).
 RULE_SETS = (("fixed", swing_calc.FIXED_RULES, "Fixed shares: killer half, assisters half; economy gains by gold earned, losses evenly"),
-             ("kills", swing_calc.Rules(economy_split="earned"), "Kills shared by damage dealt to the victim"),
-             ("economy", swing_calc.Rules(kill_split="half"), "Economy shared by gold and XP against the lane opponent"),
-             ("measured", swing_calc.RULES, "Both measured (used)"))
+             ("kills", swing_calc.Rules(economy_split="earned", objective_team="even"), "Kills shared by damage dealt to the victim"),
+             ("economy", swing_calc.Rules(kill_split="half", objective_team="even"),
+              "Economy shared by gold and XP against the lane opponent"),
+             ("even", swing_calc.Rules(objective_team="even"), "Both, objectives' team part evenly (until sw8)"),
+             ("measured", swing_calc.RULES, "Both, objectives' team part by the wards that set them up (used)"))
 # Each remaining choice moved a long way either side of the value used.
 SENSITIVITY = (("team_share", 0.25, "objectives: a quarter to the whole team (used: half)"),
                ("team_share", 0.75, "objectives: three quarters to the whole team"),
@@ -238,10 +241,14 @@ def rules_and_sensitivity(conn: psycopg.Connection, model, log=print) -> dict[st
         _role_adjust_one(rows, "swing")
         check = reliability_and_prediction(rows, (("swing", label),))
         m = check["metrics"][0]
+        by_role: dict[str, list[float]] = defaultdict(list)
+        for b, v in zip(base, totals[key], strict=True):
+            by_role[b["role"]].append(v)
         out["rule_sets"].append({"key": key, "label": label, "reliability": m["reliability"],
                                  "reliability_ci": m["reliability_ci"], "predicts_later_wins": m["predicts_later_wins"],
                                  "predicts_ci": m["predicts_ci"], "players": check["players"],
-                                 "sd_per_game": round(float(np.std(totals[key])), 1)})
+                                 "sd_per_game": round(float(np.std(totals[key])), 1),
+                                 "role_means": {r: round(fmean(v), 2) for r, v in sorted(by_role.items()) if r}})
         log(f"    {key:<9} reliability {m['reliability']:.2f}  predicts later wins r {m['predicts_later_wins']:.3f}")
     used = np.asarray(totals["measured"])
     for field, value, label in SENSITIVITY:
@@ -250,6 +257,8 @@ def rules_and_sensitivity(conn: psycopg.Connection, model, log=print) -> dict[st
                                    "moved": round(float(np.mean(np.abs(used - alt))), 2)})
     fixed = np.asarray(totals["fixed"])
     out["measured_vs_fixed"] = {"r": round(_corr(used, fixed), 4), "moved": round(float(np.mean(np.abs(used - fixed))), 2)}
+    even = np.asarray(totals["even"])                 # what crediting vision moved
+    out["vision_vs_even"] = {"r": round(_corr(used, even), 4), "moved": round(float(np.mean(np.abs(used - even))), 2)}
     return out
 
 

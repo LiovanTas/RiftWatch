@@ -611,7 +611,8 @@ def test_swing_on_match_history_the_game_and_its_page(web, tmp_path):
     with connect(TEST_DB, autocommit=True) as conn:
         result = validate.build(conn, model, tmp_path / "models", log=lambda *_: None)
     assert result["rating"]["k"] > 0 and result["rules"]["rule_sets"] and result["role_means"]
-    assert [r["key"] for r in result["rules"]["rule_sets"]] == ["fixed", "kills", "economy", "measured"]
+    assert [r["key"] for r in result["rules"]["rule_sets"]] == ["fixed", "kills", "economy", "even", "measured"]
+    assert result["rules"]["vision_vs_even"]["r"] is not None and result["rules"]["rule_sets"][-1]["role_means"]
     method = client.get("/swing/method").text
     assert "Proposition 1" in method and "Spearman" in method and "6.3 Do the sharing rules matter?" in method
     profile = client.get("/players/na/Me-NA1").text

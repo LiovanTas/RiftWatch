@@ -10,8 +10,12 @@ change in that chance over a game is handed to the players responsible:
     when nobody helped).
   * deaths -- the player who died carries the other team's gain, and half of every objective
     or structure their team loses while they're dead (the other half is shared by the team).
-  * objectives -- dragons, Baron, Elder, heralds, voidgrubs, Atakhan: half the gain to the
-    players who took part, half to the whole team; the other team shares the loss.
+  * objectives -- dragons, Baron, Elder, heralds, voidgrubs: half the gain to the players who
+    took part, half to the whole team, shared by the wards each player placed and cleared in
+    the two minutes before the take (evenly when nobody warded); the other team shares the
+    loss. The win-probability model can't value a ward (it adds nothing measurable to the
+    chance, and Riot's ward events have no map position), so vision is credited here, through
+    the objectives it sets up, rather than as a jump of its own.
   * structures -- towers and inhibitors, the same way.
   * items -- with a network that reads items, finishing an item moves the chance (more armor
     against a team doing physical damage counts for more); the buyer gets it, and the other
@@ -55,13 +59,14 @@ from riftwatch.winprob.state import (
     ITEM_FLAG_NAMES,
     KEPT_EVENTS,
     LANE_FEATURES,
+    WARD_TYPES,
     Replay,
     compact,
     respawn_seconds,
     team_of,
 )
 
-VERSION = "sw6"
+VERSION = "sw8"
 PARTS = ("draft", "kills", "deaths", "objectives", "structures", "items", "economy")
 PART_NAMES = {"draft": "Draft", "kills": "Kills", "deaths": "Deaths", "objectives": "Objectives",
               "structures": "Structures", "items": "Items", "economy": "Economy"}
@@ -69,7 +74,8 @@ SCORED = ("CHAMPION_KILL", "ELITE_MONSTER_KILL", "BUILDING_KILL")
 MONSTER = {"DRAGON": "Dragon", "ELDER_DRAGON": "Elder Dragon", "BARON_NASHOR": "Baron",
            "RIFTHERALD": "Rift Herald", "HORDE": "a voidgrub", "ATAKHAN": "Atakhan"}
 DRAGON = {"FIRE_DRAGON": "Infernal", "WATER_DRAGON": "Ocean", "EARTH_DRAGON": "Mountain",
-          "AIR_DRAGON": "Cloud", "HEXTECH_DRAGON": "Hextech", "CHEMTECH_DRAGON": "Chemtech"}
+          "AIR_DRAGON": "Cloud", "HEXTECH_DRAGON": "Hextech", "CHEMTECH_DRAGON": "Chemtech",
+          "ELDER_DRAGON": "Elder"}         # the timeline files the Elder as a dragon with this subtype
 LANE = {"TOP_LANE": "top", "MID_LANE": "mid", "BOT_LANE": "bot"}
 PLAYS = 3                       # biggest plays and costliest moments kept per player
 # Share of an objective's or structure's gain that goes to the whole team rather than only the
@@ -79,6 +85,7 @@ PLAYS = 3                       # biggest plays and costliest moments kept per p
 TEAM_SHARE = 0.5
 EVEN_ECONOMY = 0.5
 DEAD_SHARE = 0.5                # share of a loss while players are dead that the dead carry
+VISION_WINDOW_S = 120           # wards placed and cleared this long before an objective set it up
 ALTERNATIVES = 4                # other items the network is asked about for each finished item
 # Which change each input belongs to, for the "why" of a moment.
 GROUP = {"alive_own": "alive", "alive_enemy": "alive", "gold_diff": "gold", "kills_own": "kills",
@@ -184,17 +191,67 @@ class Rules:
     first. ``farm_cost``: charge each play the farm its players gave up to make it beyond what
     a typical play like it gives up (farm.py), taken out of their economy, where it would
     otherwise land minutes later; a player's total doesn't change, only which of their plays
-    it's put down to."""
+    it's put down to. ``objective_team``: "vision" shares the whole team's part of an
+    objective by the wards each player placed and cleared in the two minutes before it
+    (evenly when nobody warded), "even" shares it evenly."""
     team_share: float = TEAM_SHARE
     even_economy: float = EVEN_ECONOMY
     dead_share: float = DEAD_SHARE
     kill_split: str = "damage"
     economy_split: str = "lane"
     farm_cost: bool = True
+    objective_team: str = "vision"
 
 
 RULES = Rules()
-FIXED_RULES = Rules(kill_split="half", economy_split="earned")   # the fixed shares before sw5
+FIXED_RULES = Rules(kill_split="half", economy_split="earned", objective_team="even")   # the shares before sw5
+
+
+def ward_times(events: list[dict]) -> list[tuple[int, int]]:
+    """(timestamp, player) of every ward a player placed or cleared, in time order."""
+    out = []
+    for e in events:
+        if e.get("type") == "WARD_PLACED" and 1 <= (e.get("creatorId") or 0) <= 10 and e.get("wardType") in WARD_TYPES:
+            out.append((e.get("timestamp", 0), e["creatorId"]))
+        elif e.get("type") == "WARD_KILL" and 1 <= (e.get("killerId") or 0) <= 10:
+            out.append((e.get("timestamp", 0), e["killerId"]))
+    return sorted(out)
+
+
+def vision_before(wards: list[tuple[int, int]], t: float, side: int, window_s: float = VISION_WINDOW_S) -> dict[str, int]:
+    """Wards each of ``side``'s players placed or cleared in the ``window_s`` before ``t``
+    (keyed by str(pid), as JSON stores it; players with none left out)."""
+    count: Counter = Counter(pid for ts, pid in wards if t - 1000 * window_s < ts <= t and team_of(pid) == side)
+    return {str(pid): n for pid, n in sorted(count.items())}
+
+
+def _vision_weights(f: dict[str, Any], side: int) -> dict[int, float] | None:
+    """Each teammate's share of an objective's team part by the wards that set it up, or None
+    (shared evenly) when nobody on the team warded in the window."""
+    seen = f.get("vision") or {}
+    team = _team(side)
+    total = sum(seen.get(str(p), 0) for p in team)
+    return {p: seen.get(str(p), 0) / total for p in team} if total else None
+
+
+def event_states(replay: Replay, i: int) -> tuple[tuple[dict, dict], tuple[dict, dict]]:
+    """The state just before the replay's ``i``-th event and just after it, as Swing scores
+    it: a kill brings its bounty at once (the minute frames show it only later), and the soul
+    comes with the dragon that gave it (wards placed in between change nothing)."""
+    e = replay.events[i]
+    t = e.get("timestamp", 0)
+    bonus, by_player = {}, {}
+    if e["type"] == "CHAMPION_KILL":
+        amount = float(e.get("bounty", 300)) + float(e.get("shutdownBounty", 0))
+        bonus = {300 - team_of(e.get("victimId", 1)): amount}
+        if 1 <= (e.get("killerId") or 0) <= 10 and team_of(e["killerId"]) != team_of(e.get("victimId", 1)):
+            by_player = {e["killerId"]: amount}
+    upto = i + 1
+    while (upto < len(replay.events)
+           and replay.events[upto].get("type") in ("DRAGON_SOUL_GIVEN", "WARD_PLACED", "WARD_KILL")
+           and abs(replay.events[upto].get("timestamp", 0) - t) <= 2000):
+        upto += 1
+    return replay.pair(t, i), replay.pair(t, upto, bonus, player_bonus=by_player)
 
 
 def evaluate(model, frames: list[dict], events: list[dict], names: dict[int, str] | None = None,
@@ -232,18 +289,7 @@ def evaluate(model, frames: list[dict], events: list[dict], names: dict[int, str
                 or (e["type"] == "BUILDING_KILL" and e.get("teamId") not in (100, 200))):
             continue                       # no team took it (a herald expiring is team 300)
         t = e.get("timestamp", 0)
-        bonus, by_player = {}, {}
-        if e["type"] == "CHAMPION_KILL":
-            amount = float(e.get("bounty", 300)) + float(e.get("shutdownBounty", 0))
-            bonus = {300 - team_of(e.get("victimId", 1)): amount}
-            if 1 <= (e.get("killerId") or 0) <= 10 and team_of(e["killerId"]) != team_of(e.get("victimId", 1)):
-                by_player = {e["killerId"]: amount}
-        upto = i + 1
-        while (upto < len(replay.events)
-               and replay.events[upto].get("type") in ("DRAGON_SOUL_GIVEN", "WARD_PLACED", "WARD_KILL")
-               and abs(replay.events[upto].get("timestamp", 0) - t) <= 2000):
-            upto += 1                                       # the soul comes with the dragon (wards between change nothing)
-        before, after = replay.pair(t, i), replay.pair(t, upto, bonus, player_bonus=by_player)
+        before, after = event_states(replay, i)
         groups = _changed(before, after)
         subsets = subsets_of(before, after, groups)
         scored.append(("event", t, i, subsets[frozenset()], subsets[frozenset(groups)], subsets, groups))
@@ -266,6 +312,7 @@ def evaluate(model, frames: list[dict], events: list[dict], names: dict[int, str
     curve = p[: len(frames)]
 
     moments, facts = [], []
+    wards = ward_times(replay.events)
     scored.sort(key=lambda s: s[1])
     for kind, t, payload, b, a, subsets, groups in scored:
         d = p[a] - p[b]                                       # change in blue's chance
@@ -324,6 +371,8 @@ def evaluate(model, frames: list[dict], events: list[dict], names: dict[int, str
                 m.update(part=part, team=side, players=sorted(set(got)), dead=dead, text=text,
                          by=e.get("killerId") if 1 <= (e.get("killerId") or 0) <= 10 else None)
                 f.update(kind=part, side=side, got=sorted(set(got)), dead=dead)
+                if part == "objectives":                   # who warded it up (shares the team's part)
+                    f["vision"] = m["vision"] = vision_before(wards, t, side)
         moments.append(m)
         facts.append(f)
 
@@ -490,9 +539,13 @@ def credit_of(facts: dict[str, Any], rules: Rules = RULES):
             give([f["victim"]], -gain, "deaths", t, n)
         else:
             got, dead = f["got"], f["dead"]
+            seen = _vision_weights(f, side) if kind == "objectives" and rules.objective_team == "vision" else None
             if got:
                 give(got, gain * (1 - rules.team_share), kind, t, n)
-                give(_team(side), gain * rules.team_share, kind, t)       # not anyone's own play
+                if seen:                                   # the wards that set it up: their placers' play
+                    give(_team(side), gain * rules.team_share, kind, t, n, seen)
+                else:
+                    give(_team(side), gain * rules.team_share, kind, t)   # not anyone's own play
             else:
                 give(_team(side), gain, kind, t)
             if dead:                                       # lost while players were dead
