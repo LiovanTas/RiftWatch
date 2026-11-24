@@ -72,6 +72,7 @@ h1, h2, h3, h4 { font-family: var(--display); letter-spacing: -0.015em; }
 .site-header .container { display: flex; align-items: center; gap: 28px; height: 60px; }
 .logo { display: flex; align-items: center; gap: 9px; font-family: var(--display); font-weight: 700; font-size: 19px; letter-spacing: -0.01em; }
 .logo svg { width: 28px; height: 28px; color: var(--accent); flex: none; }
+.logo img.mark { width: 28px; height: 28px; border-radius: 7px; flex: none; }
 .logo span b { color: var(--accent); font-weight: 700; }
 .logo:hover { color: var(--text); }
 .site-nav { display: flex; gap: 24px; align-self: stretch; }
@@ -1938,7 +1939,7 @@ table.data td.l, table.data td .champ-cell b, table.data td.l b { font-family: v
 .panel .rt { background: none; border: 0; padding: 4px 0; text-align: right; }
 .page-title p + p { margin-top: 8px; }
 .turning .k, .turning > span:first-child { color: var(--muted); }
-:root[data-theme="light"] .dp-bar .mag { color: #fff; }
+:root[data-theme="light"] .dp-bar .mag, :root[data-theme="light"] .dp-bar .phys { color: #fff; }
 
 /* deeper pages, round 2 */
 .team-head.win .res, .team-head.loss .res { color: var(--text); }
@@ -1947,7 +1948,9 @@ table.data td.l, table.data td .champ-cell b, table.data td.l b { font-family: v
 .team-head.side-b .res::before { background: var(--win); } .team-head.side-r .res::before { background: var(--loss); }
 .team-head.side-b { background: color-mix(in srgb, var(--win) 7%, var(--panel)); }
 .team-head.side-r { background: color-mix(in srgb, var(--loss) 7%, var(--panel)); }
-.dp-bar .phys { background: #3fb8a9; color: #04201c; }
+/* damage types in League's own colours: physical (AD) orange, magic (AP) blue, true white */
+.dp-bar .phys { background: var(--orange); color: #1f0e03; }
+.dp-bar .mag { background: var(--sky); color: #04121f; }
 .prog.narrow { display: none; }
 @media (max-width: 600px) { .prog.wide { display: none; } .prog.narrow { display: block; } }
 table.score tr.area td.num { text-align: right; }
