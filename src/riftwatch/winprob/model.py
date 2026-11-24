@@ -23,9 +23,15 @@ network and a 95% interval from resampling games:
     network's first layer acting as a learned embedding), so it can learn that some
     champions win early and others late
   * stacked -- the game-state network with a regularised logistic layer on top for items,
-    item-against-team matchups, classes and each champion's strength and scaling. Inputs that
-    stay the same all game let a network recognise each game and memorise who won (it does
-    worse on new games); a linear layer can't, so it keeps only what holds across games.
+    item-against-team matchups, classes and each champion's strength and scaling, and (from
+    wp4) late-game momentum: how far the gold, XP, kill and tower gaps moved in the last few
+    minutes, weighed in from minute 20 to 30. Inputs that stay the same all game let a network
+    recognise each game and memorise who won (it does worse on new games); a linear layer
+    can't, so it keeps only what holds across games.
+
+The richer network is ten networks averaged (from wp4, each trained on a resample of the
+training games, so they differ as models trained on other games would). How far they disagree
+about a moment is its uncertainty (``WinModel.blue_members``), shown as a ± on big moments.
 
 All of them are measured against a baseline that only knows the gold lead and the minute
 (logistic regression). At prediction time both teams' sides are asked and averaged, so the
@@ -42,14 +48,14 @@ from typing import Any
 
 import numpy as np
 
-from riftwatch.winprob.state import (BASE_FEATURES, CLASSES, FULL_FEATURES, ITEM_FLAGS, RICH_FEATURES,
-                                     VISION_FEATURES, Catalog, Replay)
+from riftwatch.winprob.state import (BASE_FEATURES, CLASSES, FULL_FEATURES, ITEM_FLAGS, MOMENTUM_FEATURES,
+                                     RICH_FEATURES, VISION_FEATURES, Catalog, Replay)
 
 DIRNAME = "winprob"
 MODEL_FILE = "model.joblib"
 METRICS_FILE = "metrics.json"
 CV_FILE = "cv.json"
-VERSION = "wp3"
+VERSION = "wp4"
 LAYERS = (64, 32)
 ALPHAS = (1e-4, 1e-3, 1e-2)         # weight penalties tried for each version
 MAX_EPOCHS, PATIENCE = 40, 4
@@ -191,38 +197,49 @@ class Platt:
         return self.lr.predict_proba(_logit(np.asarray(raw)).reshape(-1, 1))[:, 1]
 
 
-KNOTS = (10.0, 20.0, 30.0)      # minutes where the calibration's slope and offset may bend
-LAST_MINUTE = 45.0              # beyond it the curve stays as it is at 45 (few games last longer)
+# Minutes where the calibration's slope and offset may bend. The bends at 2 and 5 (from wp4)
+# let the opening minutes have their own curve: with the first bend at 10, the model's read
+# of the draft at minute 1 was overconfident enough to score worse than a coin flip there
+# (log loss 0.6957 against 0.6931); with them, 0.6916, at no cost later.
+KNOTS = (2.0, 5.0, 10.0, 20.0, 30.0)
+WP3_KNOTS = (10.0, 20.0, 30.0)      # what calibrators saved before wp4 were fitted with
+LAST_MINUTE = 45.0                  # beyond it the curve stays as it is at 45 (few games last longer)
 
 
-def _phase(minute) -> np.ndarray:
+def _phase(minute, knots=KNOTS) -> np.ndarray:
     m = np.clip(np.asarray(minute, dtype=np.float64), 0.0, LAST_MINUTE)
-    return np.column_stack([np.maximum(0.0, m - k) / 10 for k in KNOTS])
+    return np.column_stack([np.maximum(0.0, m - k) / 10 for k in knots])
 
 
 class PhasePlatt(Platt):
     """Platt scaling whose slope and offset change with the minute, piecewise linearly with
-    bends at 10, 20 and 30 minutes, so the curve moves smoothly with the clock and Swing's
-    drift stays continuous. One curve for the whole game overrated leads late (calibration
-    error 0.025 after 30 minutes against 0.011 overall). If the fitted slope isn't positive at
-    every minute (a higher network output must always mean a higher chance), it falls back to
-    one curve."""
+    bends at ``KNOTS`` (2, 5, 10, 20 and 30 minutes), so the curve moves smoothly with the
+    clock and Swing's drift stays continuous. One curve for the whole game overrated leads
+    late (calibration error 0.025 after 30 minutes against 0.011 overall), and the draft at
+    the start. If the fitted slope isn't positive at every minute (a higher network output
+    must always mean a higher chance), it falls back to one curve. Each calibrator keeps the
+    bends it was fitted with, so a saved model reads the same after ``KNOTS`` changes."""
 
     reads_minute = True
 
+    @property
+    def _knots(self) -> tuple[float, ...]:
+        return getattr(self, "knots", WP3_KNOTS)
+
     def _design(self, raw, minute, group=None):
         z = _logit(np.asarray(raw))
-        h = _phase(minute)
+        h = _phase(minute, self._knots)
         return np.column_stack([z, z[:, None] * h, h])
 
     def _slopes_positive(self) -> bool:
         w = self.lr.coef_[0]
-        grid = _phase(np.arange(0.0, LAST_MINUTE + 1))
-        return bool((w[0] + grid @ w[1:1 + len(KNOTS)] > 0).all())
+        grid = _phase(np.arange(0.0, LAST_MINUTE + 1), self._knots)
+        return bool((w[0] + grid @ w[1:1 + len(self._knots)] > 0).all())
 
     def fit(self, raw, y, minute=None, group=None) -> PhasePlatt:
         from sklearn.linear_model import LogisticRegression
 
+        self.knots = tuple(KNOTS)
         self.lr = LogisticRegression(C=1e4, max_iter=2000).fit(self._design(raw, minute, group), y)
         self.fallback = None if self._slopes_positive() else Platt().fit(raw, y)
         return self
@@ -370,12 +387,17 @@ CONTEXT_C = (0.003, 0.03, 0.3)
 CHAMPION_SCALES = (0.1, 0.3, 1.0)
 
 
-def context_names(index: dict[int, int]) -> list[str]:
+MOMENTUM_FROM, MOMENTUM_FULL = 20.0, 30.0   # momentum weighs in from 0 at minute 20 to fully at 30
+
+
+def context_names(index: dict[int, int], momentum: bool = False) -> list[str]:
     """Names of the context layer's inputs, for reading its weights."""
     names = [f"{f}_diff" for f in ITEM_FLAGS]
     names += ["armor vs physical", "magic resist vs magic", "armor pen vs armor", "magic pen vs magic resist",
               "anti-heal vs lifesteal"]
     names += [f"{c.lower()}s_diff" for c in CLASSES] + [f"{c.lower()}s_diff x minute" for c in CLASSES]
+    if momentum:
+        names += [f"{m} (late)" for m in MOMENTUM_FEATURES]
     by_col = {col: cid for cid, col in index.items()}
     names += [f"champion {by_col[i]}" for i in range(len(index))]
     names += [f"champion {by_col[i]} x minute" for i in range(len(index))]
@@ -405,6 +427,9 @@ def context_matrix(X: np.ndarray, own: np.ndarray, enemy: np.ndarray, features: 
               f("anti_heal_own") * f("sustain_enemy") - f("anti_heal_enemy") * f("sustain_own")]
     classes = [f(f"{c.lower()}s_own") - f(f"{c.lower()}s_enemy") for c in CLASSES]
     parts += classes + [c * minute for c in classes]
+    if "gold_moved" in col:                 # late-game momentum (models from wp4 on)
+        late = np.clip((f("minute") - MOMENTUM_FROM) / (MOMENTUM_FULL - MOMENTUM_FROM), 0.0, 1.0)
+        parts += [f(m) * late for m in MOMENTUM_FEATURES]
     dense = sparse.csr_matrix(np.column_stack([CONTEXT_SCALE * logit, *parts]))
     hot = _one_hot(own, enemy, index)
     k = len(index)
@@ -418,10 +443,12 @@ def _logit(p: np.ndarray) -> np.ndarray:
 
 
 class EnsembleNet:
-    """Several networks trained alike from different random starts, their chances averaged.
-    Each one alone is stopped after an epoch or two (later epochs start memorising games), so
-    their individual quirks differ; the average is smoother and a little better calibrated,
-    which matters for Swing, built as it is from small differences between states."""
+    """Several networks trained alike from different random starts (from wp4, all but the first
+    on a resample of the training games), their chances averaged. Each one alone is stopped
+    after an epoch or two (later epochs start memorising games), so their individual quirks
+    differ; the average is smoother and a little better calibrated, which matters for Swing,
+    built as it is from small differences between states. Their spread is the model's
+    uncertainty about a moment."""
 
     def __init__(self, members: list) -> None:
         self.members = members
@@ -494,6 +521,38 @@ class WinModel:
             return np.zeros(0)
         return (self.predict(*self._arrays(blue_states)) + 1 - self.predict(*self._arrays(red_states))) / 2
 
+    def raw_members(self, X: np.ndarray, own=None, enemy=None) -> np.ndarray:
+        """``raw`` from each of the averaged networks on its own (one row each), through the
+        same context layer; a single network gives one row."""
+        members = getattr(self.network, "members", None)
+        if not members:
+            return self.raw(X, own, enemy)[None, :]
+        layer = getattr(self, "context", None)
+        if layer is None:
+            design = self.design(X, own, enemy)
+            return np.array([m.predict_proba(design)[:, 1] for m in members])
+        base = [self.features.index(f) for f in getattr(self, "state_features", BASE_FEATURES)]
+        Z = self.scaler.transform(X[:, base])
+        return np.array([layer.predict_proba(context_matrix(X, own, enemy, self.features, self.catalog.index,
+                                                            _logit(m.predict_proba(Z)[:, 1]),
+                                                            getattr(self, "champion_scale", 1.0)))[:, 1]
+                         for m in members])
+
+    def blue_members(self, blue_states: list[dict], red_states: list[dict]) -> np.ndarray:
+        """Blue's win probability by each averaged network (members x states), calibrated the
+        same way: how far they disagree is how uncertain the model is about a moment."""
+        if not blue_states:
+            return np.zeros((1, 0))
+
+        def calibrated(states):
+            X, own, enemy = self._arrays(states)
+            raws = self.raw_members(X, own, enemy)
+            if getattr(self.calibrator, "reads_minute", False):
+                minute = X[:, self._features().index("minute")]
+                return np.clip([self.calibrator.predict(r, minute) for r in raws], 0.001, 0.999)
+            return np.clip([self.calibrator.predict(r) for r in raws], 0.001, 0.999)
+        return (calibrated(blue_states) + 1 - calibrated(red_states)) / 2
+
 
 # The richer network's inputs: the richer state without vision and Atakhan. Vision added
 # nothing measurable (0.4977 log loss before it, 0.4976 after) and the network fitted its noise:
@@ -511,13 +570,22 @@ VARIANTS = (("state", BASE_FEATURES, False), ("state_plus", PLUS_FEATURES, False
             ("stacked", FULL_FEATURES, True), ("stacked_plus", FULL_FEATURES, True))
 VARIANT_NAMES = {"state": "Game state (gold, kills, objectives, who's alive)",
                  "state_plus": "Richer game state (tower tiers, plates, power spikes, unspent gold, death timers, "
-                               "objectives up, lane gaps), 5 networks averaged",
+                               "objectives up, lane gaps), 10 networks on resampled games averaged",
                  "items": "+ items and team composition, in the network",
                  "champions": "+ which champions are playing, in the network",
                  "stacked": "Game state network + a logistic layer for items, composition and champions",
                  "stacked_plus": "Richer game state networks + the logistic layer"}
 STACK_ON = {"stacked": "state", "stacked_plus": "state_plus"}
-ENSEMBLE = {"state_plus": 5}            # networks averaged for these versions
+ENSEMBLE = {"state_plus": 10}           # networks averaged for these versions
+BAGGED = True                           # all but the first trained on a resample of the training games
+
+
+def _resample(games: np.ndarray, seed: int) -> np.ndarray:
+    """Row indices of a bootstrap resample of ``games``' games (whole games, drawn with
+    replacement), so a network trained on them sees what one trained on other games would."""
+    ids, pos = np.unique(games, return_inverse=True)
+    counts = np.bincount(np.random.default_rng(seed).integers(0, len(ids), len(ids)), minlength=len(ids))
+    return np.repeat(np.arange(len(games)), counts[pos])
 
 
 def train(data: dict[str, np.ndarray], catalog: Catalog | None = None, log=print,
@@ -602,8 +670,10 @@ def train(data: dict[str, np.ndarray], catalog: Catalog | None = None, log=print
         val_loss, alpha, epochs, network = min(tried, key=lambda t: t[0])
         copies = ENSEMBLE.get(name.split(":")[0], 1)      # "state_plus:rich" is state_plus on other inputs
         if copies > 1:                                    # more networks at the chosen penalty, averaged
-            members = [network] + [_fit(d_fit, y[fit_m], d_val, y[val_m], layers, alpha, seed=s)[0]
-                                   for s in range(seed + 1, seed + copies)]
+            members = [network]
+            for s in range(seed + 1, seed + copies):
+                rows = _resample(games[fit_m], s) if BAGGED else np.arange(int(fit_m.sum()))
+                members.append(_fit(d_fit[rows], y[fit_m][rows], d_val, y[val_m], layers, alpha, seed=s)[0])
             network = EnsembleNet(members)
             from sklearn.metrics import log_loss as _ll
 
@@ -645,7 +715,8 @@ def train(data: dict[str, np.ndarray], catalog: Catalog | None = None, log=print
     best = min(results, key=lambda r: r["selection_log_loss"])
     model, p_net, _ = models[best["name"]]
     if getattr(model, "context", None) is not None:
-        weights = dict(zip(["network logit"] + context_names(catalog.index), model.context.coef_[0], strict=False))
+        names = ["network logit"] + context_names(catalog.index, momentum="gold_moved" in model.features)
+        weights = dict(zip(names, model.context.coef_[0], strict=False))
         metrics_context = {k: round(float(v), 4) for k, v in weights.items() if not k.startswith("champion ")}
     else:
         metrics_context = None

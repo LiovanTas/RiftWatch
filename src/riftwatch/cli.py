@@ -198,6 +198,9 @@ def cmd_ml_train(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+DATASET_FILE = "winprob_dataset_v6.npz"     # the games read for the win-probability model, saved
+
+
 def _winprob_dataset(settings: Settings, args: argparse.Namespace):
     """Every stored game's states and the item and champion catalog, read from the database or
     (with --reuse) from the copy saved last time."""
@@ -207,8 +210,9 @@ def _winprob_dataset(settings: Settings, args: argparse.Namespace):
     from riftwatch.web.gamedata import shared
     from riftwatch.winprob import model as wp
 
-    # v5: Baron and Elder buffs counted by holder (and the Elder read at all), match ids kept
-    cache = Path(settings.models_dir).parent / "winprob_dataset_v5.npz"
+    # v5: Baron and Elder buffs counted by holder (and the Elder read at all), match ids kept;
+    # v6: momentum inputs
+    cache = Path(settings.models_dir).parent / DATASET_FILE
     catalog_file = cache.with_suffix(".catalog.joblib")
     limit = getattr(args, "limit", None)
     if args.reuse and cache.exists() and catalog_file.exists() and not limit:
@@ -289,7 +293,7 @@ def cmd_winprob_sanity(settings: Settings, args: argparse.Namespace) -> int:
     if model is None:
         print("no win-probability model yet: run `riftwatch winprob train` first")
         return 1
-    cache = Path(settings.models_dir).parent / "winprob_dataset_v5.npz"
+    cache = Path(settings.models_dir).parent / DATASET_FILE
     if not cache.exists():
         print(f"no saved games at {cache}: run `riftwatch winprob train` first")
         return 1

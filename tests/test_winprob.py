@@ -365,6 +365,78 @@ def test_an_objectives_team_part_goes_to_the_wards_that_set_it_up():
     assert next(m for m in data["moments"] if m["t"] == t and m["part"] == "objectives")["vision"] == {"4": 1, "5": 1}
 
 
+def test_a_calibrator_keeps_the_bends_it_was_fitted_with(monkeypatch):
+    rng = np.random.default_rng(0)
+    raw, minute = rng.uniform(0.05, 0.95, 4000), rng.uniform(0, 40, 4000)
+    y = (rng.random(4000) < raw).astype(float)
+    new = wp.PhasePlatt().fit(raw, y, minute)
+    assert new.knots == wp.KNOTS and 2.0 in new.knots      # the opening minutes get their own curve
+    monkeypatch.setattr(wp, "KNOTS", wp.WP3_KNOTS)
+    old = wp.PhasePlatt().fit(raw, y, minute)
+    del old.knots                                          # as a calibrator saved before wp4 is
+    monkeypatch.undo()
+    p = old.predict(raw[:50], minute[:50])                 # still reads with the bends it was fitted with
+    assert p.shape == (50,) and np.all((p > 0) & (p < 1))
+
+
+def test_momentum_is_how_far_the_gaps_moved_lately():
+    frames, events = game()
+    r = Replay(frames, events)
+    t = 12 * 60_000 + 30_000
+    blue, red = r.pair(t)
+    three_ago, _ = r.pair(t - 180_000)
+    two_ago, _ = r.pair(t - 120_000)
+    assert blue["kills_moved"] == ((blue["kills_own"] - blue["kills_enemy"])
+                                   - (three_ago["kills_own"] - three_ago["kills_enemy"]))
+    assert blue["towers_moved"] == ((blue["towers_own"] - blue["towers_enemy"])
+                                    - (three_ago["towers_own"] - three_ago["towers_enemy"]))
+    assert blue["gold_moved"] == pytest.approx(blue["gold_diff"] - two_ago["gold_diff"])
+    assert blue["xp_moved"] == pytest.approx(blue["xp_diff"] - two_ago["xp_diff"])
+    for key in ("gold_moved", "xp_moved", "kills_moved", "towers_moved"):     # the same seen from red
+        assert red[key] == pytest.approx(-blue[key])
+    early, _ = r.pair(60_000)                                   # nothing to look back on yet
+    assert early["gold_moved"] == pytest.approx(early["gold_diff"] - r.pair(0)[0]["gold_diff"])
+
+
+def test_the_swing_page_lists_momentum_only_for_models_that_read_it():
+    from riftwatch.web import swingview
+
+    weights = {"items_diff": 0.03, "armor vs physical": 0.12, "tanks_diff": 0.08}
+    before = swingview.context_view(weights)
+    assert not any(g["title"].startswith("Momentum") for g in before)
+    after = swingview.context_view({**weights, "gold_moved (late)": 0.1033, "towers_moved (late)": -0.0183})
+    rows = next(g for g in after if g["title"].startswith("Momentum"))["rows"]
+    assert [(r["value"], r["pts"]) for r in rows] == [(0.103, 2.6), (-0.018, -0.5)]
+
+
+def test_resampled_networks_draw_whole_games_and_their_spread_is_a_moments_uncertainty():
+    games_ = np.array([0, 0, 1, 1, 1, 2, 3, 3])
+    rows = wp._resample(games_, 4)
+    drawn = Counter(games_[rows].tolist())
+    for g, size in Counter(games_.tolist()).items():
+        assert drawn.get(g, 0) % size == 0                     # a game is drawn whole or not at all
+    assert wp._resample(games_, 4).tolist() == rows.tolist() and len(rows) > 0     # the same seed, the same draw
+
+    class TwoNetworks(LeadModel):
+        """Two networks that agree on towers and gold but not on what a kill is worth."""
+
+        def blue_members(self, blue_states, red_states):
+            def side(s, k):
+                z = 0.4 * s["gold_diff"] + k * (s["kills_own"] - s["kills_enemy"]) + 0.5 * (s["towers_own"] - s["towers_enemy"])
+                return 1 / (1 + math.exp(-z))
+            return np.array([[(side(b, k) + 1 - side(r, k)) / 2 for b, r in zip(blue_states, red_states, strict=True)]
+                             for k in (0.2, 0.4)])
+
+    frames, events = game()
+    with_spread = swing.evaluate(TwoNetworks(), frames, events, NAMES)
+    kills = [m for m in with_spread["moments"] if m["part"] == "kills"]
+    towers = [m for m in with_spread["moments"] if m["part"] == "structures"]
+    # they disagree about kills, and about towers only through where the game already stood
+    assert kills and towers and all(m["spread"] > 0 for m in kills)
+    assert np.mean([m["spread"] for m in kills]) > 2 * np.mean([m["spread"] for m in towers])
+    assert all("spread" not in m for m in swing.evaluate(LeadModel(), frames, events, NAMES)["moments"])
+
+
 def test_kills_are_shared_by_damage_and_economy_by_the_lane():
     frames, events = game()
     first = next(e for e in events if e.get("type") == "CHAMPION_KILL")

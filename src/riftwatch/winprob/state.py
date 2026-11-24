@@ -78,7 +78,12 @@ CLASSES = ("Tank", "Fighter", "Mage", "Marksman", "Assassin", "Support")
 ITEM_FEATURES = tuple(f"{f}_{side}" for f in ITEM_FLAGS for side in ("own", "enemy"))
 COMP_FEATURES = (tuple(f"{c.lower()}s_{side}" for c in CLASSES for side in ("own", "enemy"))
                  + ("magic_share_own", "magic_share_enemy"))
-FULL_FEATURES = RICH_FEATURES + ITEM_FEATURES + COMP_FEATURES
+# Momentum: how far the gold and XP gaps moved over the last two minutes and the kill and tower
+# gaps over the last three. Late in a game, the team that just swung them wins more often than
+# the state alone says (+0.0023 log loss after 30 minutes, 5-fold over 6,960 held-out games).
+MOMENTUM_GOLD_S, MOMENTUM_EVENTS_S = 120, 180
+MOMENTUM_FEATURES = ("gold_moved", "xp_moved", "kills_moved", "towers_moved")
+FULL_FEATURES = RICH_FEATURES + ITEM_FEATURES + COMP_FEATURES + MOMENTUM_FEATURES
 KEPT_EVENTS = ("CHAMPION_KILL", "ELITE_MONSTER_KILL", "BUILDING_KILL", "DRAGON_SOUL_GIVEN",
                "TURRET_PLATE_DESTROYED", "WARD_PLACED", "WARD_KILL", "GAME_END")
 BARON_BUFF_S, ELDER_BUFF_S, INHIB_RESPAWN_S = 180, 150, 300
@@ -344,6 +349,15 @@ class Replay:
 
         gold = {team: self._total("gold", team, t, True) + (gold_bonus or {}).get(team, 0.0) for team in (100, 200)}
         xp = {team: self._total("xp", team, t, True) for team in (100, 200)}
+        # The same a little earlier, for momentum (events up to then, gold and XP from the frames).
+        then_ms = max(0.0, t - MOMENTUM_GOLD_S * 1000)
+        gold_then = {team: self._total("gold", team, then_ms, True) for team in (100, 200)}
+        xp_then = {team: self._total("xp", team, then_ms, True) for team in (100, 200)}
+        past = self._prefix[bisect_right(self.times, t - MOMENTUM_EVENTS_S * 1000)] if t >= MOMENTUM_EVENTS_S * 1000 \
+            else self._prefix[0]
+
+        def then(key: str, team: int) -> float:
+            return float(past.get((key, team), 0))
         cs = {team: self._total("cs", team, t, False) for team in (100, 200)}
         level = {team: self._total("level", team, t, False) / 5 for team in (100, 200)}
         active = {("inhib", team): 0 for team in (100, 200, OTHER)}
@@ -443,6 +457,12 @@ class Replay:
                 f[f"wards_{side}"] = recent("wards", team, WARD_WINDOW_S)
                 f[f"control_wards_{side}"] = recent("control", team, CONTROL_WINDOW_S)
                 f[f"wards_cleared_{side}"] = recent("cleared", team, WARD_WINDOW_S)
+            f["gold_moved"] = f["gold_diff"] - (gold_then[own] - gold_then[enemy]) / 1000
+            f["xp_moved"] = f["xp_diff"] - (xp_then[own] - xp_then[enemy]) / 1000
+            f["kills_moved"] = (f["kills_own"] - f["kills_enemy"]
+                                - then("kills_by_victim_team", enemy) + then("kills_by_victim_team", own))
+            f["towers_moved"] = (f["towers_own"] - f["towers_enemy"] - then("towers_lost", enemy)
+                                 + then("towers_lost", own) + then("towers_lost", OTHER))
             sign = 1.0 if own == 100 else -1.0
             for _, lane in LANES:
                 gold_gap, xp_gap = lane_gap.get(lane, (0.0, 0.0))

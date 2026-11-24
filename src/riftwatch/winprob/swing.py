@@ -50,6 +50,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 from itertools import combinations
 from math import factorial
+from statistics import stdev
 from typing import Any
 
 import psycopg
@@ -66,7 +67,7 @@ from riftwatch.winprob.state import (
     team_of,
 )
 
-VERSION = "sw8"
+VERSION = "sw9"
 PARTS = ("draft", "kills", "deaths", "objectives", "structures", "items", "economy")
 PART_NAMES = {"draft": "Draft", "kills": "Kills", "deaths": "Deaths", "objectives": "Objectives",
               "structures": "Structures", "items": "Items", "economy": "Economy"}
@@ -103,7 +104,9 @@ GROUP = {"alive_own": "alive", "alive_enemy": "alive", "gold_diff": "gold", "kil
          **{f"towers_{tier}_{side}": "towers" for tier in ("outer", "inner", "base", "nexus")
             for side in ("own", "enemy")},
          # a lane's gap only moves at an event by the killer's bounty
-         **{key: "gold" for key in LANE_FEATURES}}
+         **{key: "gold" for key in LANE_FEATURES},
+         # late-game momentum moves with what the event moved (wp4)
+         "gold_moved": "gold", "xp_moved": "gold", "kills_moved": "kills", "towers_moved": "towers"}
 GROUP_NAMES = {"alive": "a player down", "gold": "bounty gold", "kills": "the kill score", "dragons": "the dragon",
                "soul": "dragon soul", "elder": "the Elder buff", "baron": "the Baron buff", "herald": "the herald",
                "grubs": "the voidgrubs", "atakhan": "Atakhan", "towers": "the tower", "inhibitors": "the open inhibitor",
@@ -310,6 +313,16 @@ def evaluate(model, frames: list[dict], events: list[dict], names: dict[int, str
                        subsets[frozenset(groups)], subsets, groups))
     p = [float(x) for x in model.blue([a for a, _ in pairs], [b for _, b in pairs])]
     curve = p[: len(frames)]
+    # Each averaged network's chance just before and after every event: how far they disagree
+    # about a jump is its uncertainty (a single network has none to show).
+    spread_of: dict[tuple[int, int], float] = {}
+    if hasattr(model, "blue_members") and scored:
+        slots = sorted({s for *_, b, a, _, _ in scored for s in (b, a)})
+        members = model.blue_members([pairs[s][0] for s in slots], [pairs[s][1] for s in slots])
+        if len(members) > 1:
+            col = {s: i for i, s in enumerate(slots)}
+            for *_, b, a, _, _ in scored:
+                spread_of[(b, a)] = stdev(float(row[col[a]] - row[col[b]]) for row in members)
 
     moments, facts = [], []
     wards = ward_times(replay.events)
@@ -321,6 +334,8 @@ def evaluate(model, frames: list[dict], events: list[dict], names: dict[int, str
         m: dict[str, Any] = {"t": t, "clock": _clock(t), "swing": round(100 * abs(d), 1),
                              "before": round(100 * p[b], 1), "after": round(100 * p[a], 1),
                              "why": why, "by": None, "lost": [], "dead": []}
+        if (b, a) in spread_of:
+            m["spread"] = round(100 * spread_of[(b, a)], 1)
         f: dict[str, Any] = {"t": t, "d": round(d, 6)}
         if kind == "item":
             pid, item, slot, alts = payload

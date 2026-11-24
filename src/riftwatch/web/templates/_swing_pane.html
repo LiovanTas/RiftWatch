@@ -115,8 +115,8 @@
         {% for m in sw.moments %}
         <li class="t{{ m.team }}{{ ' good' if m.good == true }}{{ ' bad' if m.good == false }}">
           <details>
-            <summary><span class="n">{{ m.n }}</span><span class="clock">{{ m.clock }}</span><span class="t">{{ m.text }}</span><b data-tip="Blue's chance {{ m.before|round|int }}% &rarr; {{ m.after|round|int }}%">{{ m.swing }} pts</b></summary>
-            <p class="muted small">Blue's chance {{ m.before|round|int }}% &rarr; {{ m.after|round|int }}%</p>
+            <summary><span class="n">{{ m.n }}</span><span class="clock">{{ m.clock }}</span><span class="t">{{ m.text }}</span><b data-tip="Blue's chance {{ m.before|round|int }}% &rarr; {{ m.after|round|int }}%{% if m.spread %}&#10;&plusmn;{{ m.spread }}: how far ten networks, each trained on different games, disagree about it{% endif %}">{{ m.swing }} pts{% if m.spread and m.swing >= 5 %} <small class="muted">&plusmn;{{ m.spread }}</small>{% endif %}</b></summary>
+            <p class="muted small">Blue's chance {{ m.before|round|int }}% &rarr; {{ m.after|round|int }}%{% if m.spread %} &middot; give or take {{ m.spread }} points: ten networks, each trained on a different resample of games, disagree about this moment by that much{% endif %}</p>
             {{ why_block(m) }}
           </details>
         </li>

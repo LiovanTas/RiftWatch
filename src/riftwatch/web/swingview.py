@@ -174,6 +174,7 @@ def swing_view(conn: psycopg.Connection, sw: dict, players: list[dict], gd: Game
         return {"n": numbered.get((m["t"], m["text"])), "clock": m["clock"], "text": m["text"], "how": how(m),
                 "part": m["part"], "swing": m["swing"], "team": m["team"], "before": m["before"],
                 "after": m["after"], "good": (m["team"] == my_team) if my_team else None, "amount": amount,
+                "spread": m.get("spread"),
                 **explain(m, moments, side, names, norms, my_pid)}
 
     peak = max([abs(v["total"]) for v in sw["players"].values()] + [1])
@@ -595,8 +596,13 @@ def context_view(weights: dict[str, float] | None) -> list[dict] | None:
     early = [row(f"{c.lower()}s_diff", f"One more {c.lower()} than the enemy, at the start") for c in CLASSES]
     late = [row(f"{c.lower()}s_diff x minute", f"...for every 30 minutes the game goes on ({names.get(c, c.lower() + 's')})")
             for c in CLASSES]
+    momentum = [row("gold_moved (late)", "Gold lead gained in the last 2 minutes, per 1,000"),
+                row("xp_moved (late)", "XP lead gained in the last 2 minutes, per 1,000"),
+                row("kills_moved (late)", "Kill lead gained in the last 3 minutes, per kill"),
+                row("towers_moved (late)", "Towers gained in the last 3 minutes, per tower")]
     groups = [("Items", items), ("Items against the enemy team", matchups),
-              ("Team classes", early), ("How classes scale", late)]
+              ("Team classes", early), ("How classes scale", late),
+              ("Momentum, from minute 20 (fully from 30)", momentum)]
     return [{"title": t, "rows": [r for r in rows if r]} for t, rows in groups if any(rows)]
 
 
